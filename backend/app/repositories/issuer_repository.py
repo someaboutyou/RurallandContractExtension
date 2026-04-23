@@ -1,0 +1,44 @@
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.models.fbf import Fbf
+
+
+class IssuerRepository:
+    def list_issuers(
+        self,
+        db: Session,
+        page: int,
+        page_size: int,
+        *,
+        extra_filters: list | None = None,
+    ) -> tuple[list[Fbf], int]:
+        total_stmt = select(func.count(Fbf.fbfbm))
+        stmt = select(Fbf).order_by(Fbf.fbfbm.desc()).offset((page - 1) * page_size).limit(page_size)
+        if extra_filters:
+            total_stmt = total_stmt.where(*extra_filters)
+            stmt = stmt.where(*extra_filters)
+        total = db.scalar(total_stmt) or 0
+        return list(db.scalars(stmt).all()), total
+
+    def get_issuer(self, db: Session, issuer_code: str) -> Fbf | None:
+        return db.get(Fbf, issuer_code)
+
+    def create_issuer(self, db: Session, issuer: Fbf) -> Fbf:
+        db.add(issuer)
+        db.commit()
+        db.refresh(issuer)
+        return issuer
+
+    def update_issuer(self, db: Session, issuer: Fbf) -> Fbf:
+        db.add(issuer)
+        db.commit()
+        db.refresh(issuer)
+        return issuer
+
+    def delete_issuer(self, db: Session, issuer: Fbf) -> None:
+        db.delete(issuer)
+        db.commit()
+
+
+issuer_repository = IssuerRepository()

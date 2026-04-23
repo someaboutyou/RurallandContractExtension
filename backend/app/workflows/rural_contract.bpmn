@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:rural="http://ruralland.cn/schema/bpmn" id="Definitions_RuralContract" targetNamespace="http://ruralland.local/workflows">
+  <bpmn:process id="rural_contract" name="农村承包经营权审核流程" isExecutable="true">
+    <bpmn:startEvent id="start_event" name="开始">
+      <bpmn:outgoing>flow_start_submit</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:userTask id="applicant_submit" name="申请提交">
+      <bpmn:incoming>flow_start_submit</bpmn:incoming>
+      <bpmn:outgoing>flow_submit_village</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:userTask id="village_review" name="村级审核" rural:permissionCode="requests.review.village" rural:dataScope="village" rural:requireComment="true" rural:candidateRoleCodes="village_auditor,platform_admin" rural:candidateUserMode="permission_scope">
+      <bpmn:incoming>flow_submit_village</bpmn:incoming>
+      <bpmn:outgoing>flow_village_gateway</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:exclusiveGateway id="gateway_village" name="村级判断">
+      <bpmn:incoming>flow_village_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_village_approved</bpmn:outgoing>
+      <bpmn:outgoing>flow_village_rejected</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:userTask id="town_review" name="镇级审核" rural:permissionCode="requests.review.town" rural:dataScope="town" rural:requireComment="true" rural:candidateRoleCodes="town_auditor,platform_admin" rural:candidateUserMode="permission_scope">
+      <bpmn:incoming>flow_village_approved</bpmn:incoming>
+      <bpmn:outgoing>flow_town_gateway</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:exclusiveGateway id="gateway_town" name="镇级判断">
+      <bpmn:incoming>flow_town_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_town_approved</bpmn:outgoing>
+      <bpmn:outgoing>flow_town_rejected</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:userTask id="county_review" name="县级审核" rural:permissionCode="requests.review.county" rural:dataScope="county" rural:requireComment="true" rural:candidateRoleCodes="county_auditor,platform_admin" rural:candidateUserMode="permission_scope">
+      <bpmn:incoming>flow_town_approved</bpmn:incoming>
+      <bpmn:outgoing>flow_county_gateway</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:exclusiveGateway id="gateway_county" name="县级判断">
+      <bpmn:incoming>flow_county_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_county_approved</bpmn:outgoing>
+      <bpmn:outgoing>flow_county_rejected</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:userTask id="applicant_revision" name="申请修改">
+      <bpmn:incoming>flow_village_rejected</bpmn:incoming>
+      <bpmn:incoming>flow_town_rejected</bpmn:incoming>
+      <bpmn:incoming>flow_county_rejected</bpmn:incoming>
+      <bpmn:outgoing>flow_revision_submit</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:endEvent id="end_approved" name="办结">
+      <bpmn:incoming>flow_county_approved</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="flow_start_submit" sourceRef="start_event" targetRef="applicant_submit" />
+    <bpmn:sequenceFlow id="flow_submit_village" sourceRef="applicant_submit" targetRef="village_review" />
+    <bpmn:sequenceFlow id="flow_village_gateway" sourceRef="village_review" targetRef="gateway_village" />
+    <bpmn:sequenceFlow id="flow_village_approved" sourceRef="gateway_village" targetRef="town_review">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">approval_result == 'approved'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_village_rejected" sourceRef="gateway_village" targetRef="applicant_revision">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">approval_result != 'approved'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_town_gateway" sourceRef="town_review" targetRef="gateway_town" />
+    <bpmn:sequenceFlow id="flow_town_approved" sourceRef="gateway_town" targetRef="county_review">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">approval_result == 'approved'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_town_rejected" sourceRef="gateway_town" targetRef="applicant_revision">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">approval_result != 'approved'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_county_gateway" sourceRef="county_review" targetRef="gateway_county" />
+    <bpmn:sequenceFlow id="flow_county_approved" sourceRef="gateway_county" targetRef="end_approved">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">approval_result == 'approved'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_county_rejected" sourceRef="gateway_county" targetRef="applicant_revision">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">approval_result != 'approved'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_revision_submit" sourceRef="applicant_revision" targetRef="village_review" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_rural_contract">
+    <bpmndi:BPMNPlane id="BPMNPlane_rural_contract" bpmnElement="rural_contract">
+      <bpmndi:BPMNShape id="start_event_di" bpmnElement="start_event">
+        <dc:Bounds x="120" y="182" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="applicant_submit_di" bpmnElement="applicant_submit">
+        <dc:Bounds x="210" y="160" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="village_review_di" bpmnElement="village_review">
+        <dc:Bounds x="390" y="160" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="gateway_village_di" bpmnElement="gateway_village" isMarkerVisible="true">
+        <dc:Bounds x="565" y="175" width="50" height="50" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="town_review_di" bpmnElement="town_review">
+        <dc:Bounds x="690" y="160" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="gateway_town_di" bpmnElement="gateway_town" isMarkerVisible="true">
+        <dc:Bounds x="865" y="175" width="50" height="50" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="county_review_di" bpmnElement="county_review">
+        <dc:Bounds x="990" y="160" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="gateway_county_di" bpmnElement="gateway_county" isMarkerVisible="true">
+        <dc:Bounds x="1165" y="175" width="50" height="50" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="applicant_revision_di" bpmnElement="applicant_revision">
+        <dc:Bounds x="690" y="340" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="end_approved_di" bpmnElement="end_approved">
+        <dc:Bounds x="1280" y="182" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="flow_start_submit_di" bpmnElement="flow_start_submit">
+        <di:waypoint x="156" y="200" />
+        <di:waypoint x="210" y="200" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_submit_village_di" bpmnElement="flow_submit_village">
+        <di:waypoint x="330" y="200" />
+        <di:waypoint x="390" y="200" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_village_gateway_di" bpmnElement="flow_village_gateway">
+        <di:waypoint x="510" y="200" />
+        <di:waypoint x="565" y="200" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_village_approved_di" bpmnElement="flow_village_approved">
+        <di:waypoint x="615" y="200" />
+        <di:waypoint x="690" y="200" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_village_rejected_di" bpmnElement="flow_village_rejected">
+        <di:waypoint x="590" y="225" />
+        <di:waypoint x="590" y="380" />
+        <di:waypoint x="690" y="380" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_town_gateway_di" bpmnElement="flow_town_gateway">
+        <di:waypoint x="810" y="200" />
+        <di:waypoint x="865" y="200" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_town_approved_di" bpmnElement="flow_town_approved">
+        <di:waypoint x="915" y="200" />
+        <di:waypoint x="990" y="200" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_town_rejected_di" bpmnElement="flow_town_rejected">
+        <di:waypoint x="890" y="225" />
+        <di:waypoint x="890" y="380" />
+        <di:waypoint x="810" y="380" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_county_gateway_di" bpmnElement="flow_county_gateway">
+        <di:waypoint x="1110" y="200" />
+        <di:waypoint x="1165" y="200" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_county_approved_di" bpmnElement="flow_county_approved">
+        <di:waypoint x="1215" y="200" />
+        <di:waypoint x="1280" y="200" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_county_rejected_di" bpmnElement="flow_county_rejected">
+        <di:waypoint x="1190" y="225" />
+        <di:waypoint x="1190" y="460" />
+        <di:waypoint x="750" y="460" />
+        <di:waypoint x="750" y="420" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_revision_submit_di" bpmnElement="flow_revision_submit">
+        <di:waypoint x="690" y="380" />
+        <di:waypoint x="450" y="380" />
+        <di:waypoint x="450" y="240" />
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

@@ -1,0 +1,53 @@
+{
+  "name": "Rural",
+  "uri": "http://ruralland.cn/schema/bpmn",
+  "prefix": "rural",
+  "xml": {
+    "tagAlias": "lowerCase"
+  },
+  "types": [
+    {
+      "name": "RuralUserTask",
+      "extends": [
+        "bpmn:UserTask"
+      ],
+      "properties": [
+        {
+          "name": "permissionCode",
+          "isAttr": true,
+          "type": "String"
+        },
+        {
+          "name": "dataScope",
+          "isAttr": true,
+          "type": "String"
+        },
+        {
+          "name": "requireComment",
+          "isAttr": true,
+          "type": "Boolean"
+        },
+        {
+          "name": "requireAttachment",
+          "isAttr": true,
+          "type": "Boolean"
+        },
+        {
+          "name": "attachmentTypes",
+          "isAttr": true,
+          "type": "String"
+        },
+        {
+          "name": "candidateRoleCodes",
+          "isAttr": true,
+          "type": "String"
+        },
+        {
+          "name": "candidateUserMode",
+          "isAttr": true,
+          "type": "String"
+        }
+      ]
+    }
+  ]
+}

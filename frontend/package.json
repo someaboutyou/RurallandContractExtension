@@ -1,0 +1,25 @@
+{
+  "name": "rural-land-contract-extension-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@bpmn-io/properties-panel": "^3.41.0",
+    "axios": "^1.7.7",
+    "bpmn-js": "^18.15.0",
+    "bpmn-js-properties-panel": "^5.54.0",
+    "element-plus": "^2.8.6",
+    "pinia": "^2.2.4",
+    "vue": "^3.5.12",
+    "vue-router": "^4.4.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.1.4",
+    "vite": "^5.4.8"
+  }
+}
