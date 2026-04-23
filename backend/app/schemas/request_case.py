@@ -97,6 +97,19 @@ class RequestCaseAttachmentRead(BaseModel):
     createdAt: str
 
 
+class RequestCaseAttachmentTemplateRead(BaseModel):
+    key: str
+    category: str
+    name: str
+    required: bool = True
+    stageCode: str | None = None
+    stageName: str | None = None
+    description: str | None = None
+    exampleFileName: str | None = None
+    uploadedCount: int = 0
+    satisfied: bool = False
+
+
 class RequestCaseRead(BaseModel):
     id: int
     serialNo: str
@@ -131,6 +144,7 @@ class RequestCaseRead(BaseModel):
     candidateHandlers: list[RequestCaseCandidateRead] = []
     participants: list[RequestCaseParticipantRead] = []
     attachments: list[RequestCaseAttachmentRead] = []
+    attachmentTemplates: list[RequestCaseAttachmentTemplateRead] = []
     submittedAt: str | None = None
     completedAt: str | None = None
     createdAt: str

@@ -7,6 +7,7 @@ def upgrade_schema(engine: Engine) -> None:
     _upgrade_regions(engine)
     _upgrade_users(engine)
     _upgrade_request_cases(engine)
+    _upgrade_request_attachment_templates(engine)
     _upgrade_request_case_attachments(engine)
     _upgrade_request_case_participants(engine)
     _upgrade_workflow_definition_versions(engine)
@@ -348,4 +349,39 @@ def _upgrade_workflow_definition_versions(engine: Engine) -> None:
         )
         connection.exec_driver_sql(
             "CREATE INDEX ix_workflow_definition_versions_published_by_id ON workflow_definition_versions(published_by_id)"
+        )
+def _upgrade_request_attachment_templates(engine: Engine) -> None:
+    inspector = inspect(engine)
+    if inspector.has_table("request_attachment_templates"):
+        return
+
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            """
+            CREATE TABLE request_attachment_templates (
+                id SERIAL PRIMARY KEY,
+                tenant_code VARCHAR(12) REFERENCES tenants(code),
+                request_type VARCHAR(32) NOT NULL,
+                stage_code VARCHAR(64) NOT NULL,
+                stage_name VARCHAR(100),
+                category VARCHAR(64) NOT NULL,
+                name VARCHAR(120) NOT NULL,
+                required BOOLEAN NOT NULL DEFAULT TRUE,
+                description TEXT,
+                example_file_name VARCHAR(255),
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+            )
+            """
+        )
+        connection.exec_driver_sql(
+            "CREATE INDEX ix_request_attachment_templates_tenant_code ON request_attachment_templates(tenant_code)"
+        )
+        connection.exec_driver_sql(
+            "CREATE INDEX ix_request_attachment_templates_request_type ON request_attachment_templates(request_type)"
+        )
+        connection.exec_driver_sql(
+            "CREATE INDEX ix_request_attachment_templates_stage_code ON request_attachment_templates(stage_code)"
         )

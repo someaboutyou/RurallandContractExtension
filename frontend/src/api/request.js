@@ -34,6 +34,12 @@ export function downloadRequestAttachment(id, attachmentId) {
   });
 }
 
+export function downloadRequestAttachmentsBundle(id) {
+  return http.get(`/requests/${id}/attachments/download-all`, {
+    responseType: "blob",
+  });
+}
+
 export function createRequest(payload) {
   return http.post("/requests", payload);
 }

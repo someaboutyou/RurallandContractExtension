@@ -56,6 +56,7 @@ const navItems = [
   { to: "/issuers", label: "发包方管理", permissions: ["issuers.view"] },
   { to: "/contractors", label: "承包方管理", permissions: ["contractors.view"] },
   { to: "/requests", label: "业务申请", permissions: ["requests.view"] },
+  { to: "/request-attachment-templates", label: "材料模板", permissions: ["requests.manage"] },
   { to: "/workflows", label: "流程设计", permissions: ["roles.manage"] },
 ];
 

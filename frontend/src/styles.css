@@ -593,9 +593,22 @@ a {
   margin-top: 8px;
 }
 
+.request-detail-drawer .el-drawer__header {
+  margin-bottom: 0;
+  padding: 18px 24px 10px;
+}
+
+.request-detail-drawer .el-drawer__body {
+  padding: 0 24px 24px;
+  overflow: hidden;
+}
+
 .request-detail {
   display: grid;
-  gap: 18px;
+  gap: 14px;
+  height: calc(100vh - 110px);
+  overflow: auto;
+  padding-right: 6px;
 }
 
 .request-detail-head {
@@ -643,7 +656,7 @@ a {
 .request-summary-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
 .request-summary-card {
@@ -667,6 +680,12 @@ a {
 
 .request-descriptions .el-descriptions__label {
   width: 112px;
+}
+
+.request-descriptions .el-descriptions__body td,
+.request-descriptions .el-descriptions__body th {
+  padding-top: 10px;
+  padding-bottom: 10px;
 }
 
 .request-timeline {
@@ -709,11 +728,18 @@ a {
 
 .request-attachments {
   display: grid;
-  gap: 16px;
+  gap: 14px;
 }
 
 .request-attachment-input {
   display: none;
+}
+
+.attachment-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .attachment-list {
@@ -721,9 +747,106 @@ a {
   gap: 12px;
 }
 
-.attachment-card {
+.attachment-template-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid rgba(55, 67, 46, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.attachment-template-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.attachment-template-card {
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(55, 67, 46, 0.12);
+  background: rgba(250, 251, 247, 0.92);
+  display: grid;
+  gap: 10px;
+}
+
+.attachment-template-card.is-satisfied {
+  border-color: rgba(103, 194, 58, 0.25);
+  background: rgba(240, 249, 235, 0.92);
+}
+
+.attachment-template-card.is-pending {
+  border-color: rgba(230, 162, 60, 0.24);
+  background: rgba(253, 246, 236, 0.92);
+}
+
+.attachment-template-head {
   display: flex;
   justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.attachment-template-title {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.attachment-template-meta,
+.attachment-template-desc,
+.attachment-template-foot {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.attachment-template-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.attachment-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.attachment-stat-card {
+  padding: 14px 16px;
+  border: 1px solid rgba(55, 67, 46, 0.12);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.attachment-stat-label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.attachment-stat-value {
+  margin-top: 8px;
+  color: var(--text);
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.attachment-list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.attachment-list-summary {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.attachment-card {
+  display: flex;
   gap: 16px;
   align-items: center;
   padding: 14px 16px;
@@ -732,8 +855,44 @@ a {
   background: rgba(255, 255, 255, 0.74);
 }
 
+.attachment-card-thumb {
+  width: 84px;
+  height: 84px;
+  border-radius: 16px;
+  border: 1px solid rgba(55, 67, 46, 0.1);
+  background: linear-gradient(135deg, rgba(240, 244, 232, 0.92), rgba(250, 251, 246, 0.98));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+  cursor: default;
+}
+
+.attachment-card-thumb.is-image {
+  cursor: pointer;
+}
+
+.attachment-card-thumb-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.attachment-card-thumb-text {
+  padding: 0 10px;
+  text-align: center;
+  color: var(--accent-deep);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  word-break: break-word;
+}
+
 .attachment-card-main {
   min-width: 0;
+  flex: 1;
 }
 
 .attachment-card-name {
@@ -753,6 +912,41 @@ a {
   flex-shrink: 0;
   display: flex;
   gap: 8px;
+}
+
+@media (max-width: 900px) {
+  .attachment-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .attachment-template-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.attachment-preview-shell {
+  min-height: 420px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(55, 67, 46, 0.12);
+  border-radius: 18px;
+  background: rgba(248, 249, 243, 0.88);
+  overflow: hidden;
+}
+
+.attachment-preview-image {
+  display: block;
+  max-width: 100%;
+  max-height: 72vh;
+  object-fit: contain;
+}
+
+.attachment-preview-pdf {
+  width: 100%;
+  height: 72vh;
+  border: 0;
+  background: #fff;
 }
 
 .workflow-overview {

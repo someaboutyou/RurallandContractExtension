@@ -7,6 +7,7 @@ from app.api.v1.endpoints import (
     issuer,
     permission,
     region,
+    request_attachment_template,
     request_case,
     request_workflow_mapping,
     role,
@@ -25,6 +26,7 @@ api_router.include_router(role.router, prefix="/roles", tags=["Roles"])
 api_router.include_router(tenant.router, prefix="/tenants", tags=["Tenants"])
 api_router.include_router(user.router, prefix="/users", tags=["Users"])
 api_router.include_router(issuer.router, prefix="/issuers", tags=["Issuers"])
+api_router.include_router(request_attachment_template.router, prefix="/request-attachment-templates", tags=["RequestAttachmentTemplates"])
 api_router.include_router(request_case.router, prefix="/requests", tags=["Requests"])
 api_router.include_router(request_workflow_mapping.router, prefix="/request-workflow-mappings", tags=["RequestWorkflowMappings"])
 api_router.include_router(workflow_definition.router, prefix="/workflow-definitions", tags=["WorkflowDefinitions"])

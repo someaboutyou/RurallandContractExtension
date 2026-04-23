@@ -5,10 +5,12 @@ from app.core.security import hash_password
 from app.models.fbf import Fbf
 from app.models.permission import Permission
 from app.models.region import Region
+from app.models.request_attachment_template import RequestAttachmentTemplate
 from app.models.request_workflow_mapping import RequestWorkflowMapping
 from app.models.role import Role
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.services.request_case_service import RequestCaseService
 
 DEFAULT_ROLES = [
     {"name": "平台管理员", "code": "platform_admin", "data_scope": "all", "description": "系统平台管理员，拥有全局管理权限。"},
@@ -103,6 +105,35 @@ def seed_initial_data(db: Session) -> None:
     ensure_default_role_permissions(db)
     ensure_default_users(db)
     ensure_default_request_workflow_mappings(db)
+    ensure_default_request_attachment_templates(db)
+
+
+def ensure_default_request_attachment_templates(db: Session) -> None:
+    if db.scalar(select(func.count()).select_from(RequestAttachmentTemplate)) > 0:
+        return
+
+    presets = RequestCaseService.attachment_template_presets
+    rows: list[RequestAttachmentTemplate] = []
+    for request_type, stage_map in presets.items():
+        for stage_code, items in stage_map.items():
+            for index, (category, name, description, example_file_name) in enumerate(items, start=1):
+                rows.append(
+                    RequestAttachmentTemplate(
+                        tenant_code=None,
+                        request_type=request_type,
+                        stage_code=stage_code,
+                        stage_name=stage_code,
+                        category=category,
+                        name=name,
+                        required=True,
+                        description=description,
+                        example_file_name=example_file_name,
+                        sort_order=index,
+                        enabled=True,
+                    )
+                )
+    db.add_all(rows)
+    db.commit()
 
 
 def ensure_default_regions(db: Session) -> None:

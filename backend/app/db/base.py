@@ -6,6 +6,7 @@ from app.models.fbf import Fbf
 from app.models.issuer import Issuer
 from app.models.permission import Permission
 from app.models.region import Region
+from app.models.request_attachment_template import RequestAttachmentTemplate
 from app.models.request_case import RequestCase
 from app.models.request_case_attachment import RequestCaseAttachment
 from app.models.request_case_participant import RequestCaseParticipant
@@ -19,6 +20,7 @@ __all__ = [
     "Base",
     "Tenant",
     "Region",
+    "RequestAttachmentTemplate",
     "Role",
     "Permission",
     "User",

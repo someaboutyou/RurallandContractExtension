@@ -1,7 +1,11 @@
 from pathlib import Path
 
+from io import BytesIO
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db, require_permission
@@ -92,6 +96,17 @@ def download_request_case_attachment(
         media_type=attachment.content_type or "application/octet-stream",
         filename=attachment.original_name,
     )
+
+
+@router.get("/{case_id}/attachments/download-all")
+def download_request_case_attachments_bundle(
+    case_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("requests.view")),
+):
+    filename, content = request_case_service.build_attachment_archive(db, case_id, current_user)
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(BytesIO(content), media_type="application/zip", headers=headers)
 
 
 @router.delete("/{case_id}/attachments/{attachment_id}", status_code=status.HTTP_204_NO_CONTENT)
