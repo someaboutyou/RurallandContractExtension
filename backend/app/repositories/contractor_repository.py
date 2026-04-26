@@ -1,4 +1,4 @@
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.cbf import Cbf
@@ -13,12 +13,28 @@ class ContractorRepository:
         page_size: int,
         *,
         extra_filters: list | None = None,
+        keyword: str | None = None,
+        type_code: str | None = None,
     ) -> tuple[list[Cbf], int]:
         total_stmt = select(func.count(Cbf.cbfbm))
         stmt = select(Cbf).order_by(Cbf.cbfbm.desc()).offset((page - 1) * page_size).limit(page_size)
         if extra_filters:
             total_stmt = total_stmt.where(*extra_filters)
             stmt = stmt.where(*extra_filters)
+        if keyword:
+            pattern = f"%{keyword}%"
+            keyword_filter = or_(
+                Cbf.cbfbm.ilike(pattern),
+                Cbf.cbfmc.ilike(pattern),
+                Cbf.cbfzjhm.ilike(pattern),
+                Cbf.lxdh.ilike(pattern),
+                Cbf.cbfdz.ilike(pattern),
+            )
+            total_stmt = total_stmt.where(keyword_filter)
+            stmt = stmt.where(keyword_filter)
+        if type_code:
+            total_stmt = total_stmt.where(Cbf.cbflx == type_code)
+            stmt = stmt.where(Cbf.cbflx == type_code)
         total = db.scalar(total_stmt) or 0
         return list(db.scalars(stmt).all()), total
 

@@ -15,10 +15,21 @@ router = APIRouter()
 def list_contractors(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
+    keyword: str | None = Query(default=None),
+    type_code: str | None = Query(default=None, alias="typeCode"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contractors.view")),
 ):
-    return {"data": contractor_service.list_contractors(db, page=page, page_size=page_size, current_user=current_user)}
+    return {
+        "data": contractor_service.list_contractors(
+            db,
+            page=page,
+            page_size=page_size,
+            current_user=current_user,
+            keyword=keyword,
+            type_code=type_code,
+        )
+    }
 
 
 @router.get("/{contractor_code}", response_model=ApiResponse[ContractorRead])

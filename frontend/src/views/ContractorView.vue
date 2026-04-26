@@ -252,6 +252,8 @@ const rows = ref([]);
 const total = ref(0);
 const page = ref(1);
 const pageSize = ref(20);
+const keyword = ref("");
+const typeFilter = ref("");
 const formRef = ref();
 const activeMainTab = ref("base");
 const activeMemberTab = ref("member-1");
@@ -387,12 +389,28 @@ function removeFamilyMemberByKey(targetKey) {
 async function loadData() {
   loading.value = true;
   try {
-    const { data } = await fetchContractors({ page: page.value, page_size: pageSize.value });
+    const { data } = await fetchContractors({
+      page: page.value,
+      page_size: pageSize.value,
+      keyword: keyword.value.trim() || undefined,
+      typeCode: typeFilter.value || undefined,
+    });
     rows.value = data.data.items;
     total.value = data.data.total;
   } finally {
     loading.value = false;
   }
+}
+
+function handleSearch() {
+  page.value = 1;
+  loadData();
+}
+
+function resetFilters() {
+  keyword.value = "";
+  typeFilter.value = "";
+  handleSearch();
 }
 
 function handlePageChange(value) {

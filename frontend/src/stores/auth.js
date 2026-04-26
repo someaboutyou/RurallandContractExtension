@@ -59,9 +59,6 @@ export const useAuthStore = defineStore("auth", {
       if (!this.token) {
         return;
       }
-      if (this.user?.roleCode && Array.isArray(this.user?.permissions)) {
-        return;
-      }
       try {
         await this.fetchCurrentUser();
       } catch {

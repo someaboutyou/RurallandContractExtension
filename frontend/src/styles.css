@@ -1,13 +1,19 @@
 :root {
   color-scheme: light;
   font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --bg: #f4f1e8;
-  --panel: rgba(255, 255, 255, 0.82);
-  --line: rgba(55, 67, 46, 0.14);
-  --text: #23301d;
-  --muted: #66735b;
-  --accent: #56733a;
-  --accent-2: #c88c3a;
+  --bg: #f6f9fd;
+  --bg-2: #eef4fb;
+  --panel: rgba(255, 255, 255, 0.92);
+  --panel-strong: rgba(248, 251, 255, 0.98);
+  --line: rgba(56, 122, 196, 0.16);
+  --text: #17324d;
+  --muted: #6f88a3;
+  --accent: #2f8fff;
+  --accent-2: #49d4ff;
+  --success: #37b26c;
+  --warning: #ef9b2d;
+  --danger: #ea5a69;
+  --shadow: 0 18px 40px rgba(25, 74, 128, 0.08);
 }
 
 html,
@@ -25,9 +31,9 @@ body {
   overflow: hidden;
   color: var(--text);
   background:
-    radial-gradient(circle at top left, rgba(200, 140, 58, 0.18), transparent 24%),
-    radial-gradient(circle at right center, rgba(86, 115, 58, 0.14), transparent 26%),
-    linear-gradient(180deg, #f8f3e7 0%, #eef2e6 100%);
+    radial-gradient(circle at top left, rgba(73, 212, 255, 0.12), transparent 24%),
+    radial-gradient(circle at right center, rgba(47, 143, 255, 0.1), transparent 26%),
+    linear-gradient(180deg, #fbfdff 0%, #f3f8fd 46%, #edf4fb 100%);
 }
 
 a {
@@ -38,23 +44,26 @@ a {
 .shell {
   height: 100vh;
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: 232px minmax(0, 1fr);
   overflow: hidden;
 }
 
 .sidebar {
   overflow: auto;
-  padding: 28px 20px;
+  padding: 18px 14px;
   border-right: 1px solid var(--line);
-  background: rgba(255, 252, 246, 0.72);
-  backdrop-filter: blur(14px);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(246, 250, 255, 0.94)),
+    linear-gradient(90deg, rgba(73, 212, 255, 0.04), transparent);
+  backdrop-filter: blur(18px);
+  box-shadow: inset -1px 0 0 rgba(73, 212, 255, 0.08);
 }
 
 .brand {
   display: flex;
-  gap: 14px;
+  gap: 12px;
   align-items: center;
-  margin-bottom: 28px;
+  margin-bottom: 20px;
 }
 
 .brand-mark {
@@ -63,9 +72,10 @@ a {
   display: grid;
   place-items: center;
   border-radius: 14px;
-  background: linear-gradient(135deg, var(--accent), #7b8f58);
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
   color: white;
   font-weight: 700;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 12px 28px rgba(47, 143, 255, 0.35);
 }
 
 .brand-title {
@@ -80,20 +90,115 @@ a {
 
 .nav {
   display: grid;
+  gap: 8px;
+}
+
+.nav-tree {
   gap: 10px;
 }
 
-.nav-link {
-  padding: 12px 14px;
-  border-radius: 12px;
+.nav-tree-group {
+  display: grid;
+  gap: 6px;
+}
+
+.nav-tree-parent {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.72);
   color: var(--muted);
+  cursor: pointer;
   transition: 0.2s ease;
 }
 
+.nav-tree-parent:hover {
+  border-color: rgba(73, 212, 255, 0.24);
+  color: var(--text);
+  background: rgba(73, 212, 255, 0.08);
+}
+
+.nav-tree-parent.is-active,
+.nav-tree-parent.is-expanded {
+  color: #0f4f8b;
+  border-color: rgba(73, 212, 255, 0.36);
+  background: linear-gradient(135deg, rgba(47, 143, 255, 0.16), rgba(73, 212, 255, 0.12));
+  box-shadow: 0 10px 24px rgba(47, 143, 255, 0.1);
+}
+
+.nav-tree-parent-main {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.nav-tree-parent-arrow {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.nav-tree-children {
+  display: grid;
+  gap: 6px;
+}
+
+.nav-link {
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: var(--muted);
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.72);
+  transition: 0.2s ease;
+}
+
+.nav-link:hover {
+  border-color: rgba(73, 212, 255, 0.24);
+  color: var(--text);
+  background: rgba(73, 212, 255, 0.08);
+}
+
 .nav-link.router-link-active {
-  color: white;
-  background: linear-gradient(135deg, #5f7b42, #839c60);
-  box-shadow: 0 10px 24px rgba(86, 115, 58, 0.22);
+  color: #0f4f8b;
+  border-color: rgba(73, 212, 255, 0.36);
+  background: linear-gradient(135deg, rgba(47, 143, 255, 0.16), rgba(73, 212, 255, 0.12));
+  box-shadow: 0 10px 24px rgba(47, 143, 255, 0.1);
+}
+
+.nav-link-child {
+  padding: 9px 12px 9px 16px;
+}
+
+.nav-link.is-active {
+  color: #0f4f8b;
+  border-color: rgba(73, 212, 255, 0.36);
+  background: linear-gradient(135deg, rgba(47, 143, 255, 0.16), rgba(73, 212, 255, 0.12));
+  box-shadow: 0 10px 24px rgba(47, 143, 255, 0.1);
+}
+
+.nav-tree-leaf,
+.nav-tree-child {
+  display: inline-flex;
+  align-items: center;
+}
+
+.nav-tree-leaf {
+  font-weight: 700;
+}
+
+.nav-tree-child {
+  margin-left: 12px;
+  padding-left: 18px;
+  font-size: 14px;
+}
+
+.nav-link-text {
+  letter-spacing: 0.02em;
 }
 
 .main {
@@ -101,9 +206,9 @@ a {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 12px;
   overflow: hidden;
-  padding: 28px;
+  padding: 14px 16px 16px;
 }
 
 .header {
@@ -115,26 +220,28 @@ a {
   justify-content: space-between;
   gap: 16px;
   align-items: center;
+  padding: 12px 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(247, 251, 255, 0.92));
+  box-shadow: var(--shadow);
 }
 
 .page-title {
-  font-size: 28px;
+  font-size: 22px;
   font-weight: 700;
-}
-
-.page-subtitle {
-  margin-top: 6px;
-  color: var(--muted);
+  line-height: 1.2;
+  letter-spacing: 0.02em;
 }
 
 .user-panel {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   align-items: center;
-  padding: 10px 14px;
-  border-radius: 16px;
+  padding: 8px 12px;
+  border-radius: 14px;
   border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.72);
+  background: rgba(247, 251, 255, 0.92);
 }
 
 .user-meta {
@@ -143,11 +250,13 @@ a {
 
 .user-name {
   font-weight: 700;
+  line-height: 1.2;
 }
 
 .user-role {
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.1;
 }
 
 .content {
@@ -155,58 +264,60 @@ a {
   min-height: 0;
   flex: 1 1 auto;
   display: grid;
-  gap: 20px;
+  gap: 12px;
   overflow: hidden;
 }
 
 .page-grid {
   display: grid;
-  gap: 20px;
+  gap: 12px;
 }
 
 .hero-card,
 .panel,
 .stat-card {
   border: 1px solid var(--line);
-  border-radius: 20px;
+  border-radius: 16px;
   background: var(--panel);
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow);
 }
 
 .hero-card {
-  padding: 28px;
+  padding: 20px 22px;
 }
 
 .hero-card h1 {
-  margin: 10px 0;
-  font-size: 32px;
+  margin: 8px 0;
+  font-size: 28px;
   line-height: 1.2;
 }
 
 .hero-card p {
   max-width: 760px;
   color: var(--muted);
-  line-height: 1.7;
+  line-height: 1.6;
+  margin: 0;
 }
 
 .eyebrow {
   display: inline-block;
-  padding: 6px 10px;
+  padding: 4px 8px;
   border-radius: 999px;
-  background: rgba(200, 140, 58, 0.14);
-  color: #9b6420;
+  background: rgba(73, 212, 255, 0.12);
+  color: var(--accent-2);
   font-size: 12px;
   font-weight: 700;
 }
 
 .stat-grid {
   display: grid;
-  gap: 16px;
+  gap: 12px;
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .stat-card {
-  padding: 22px;
+  padding: 18px 20px;
 }
 
 .stat-label {
@@ -215,13 +326,13 @@ a {
 }
 
 .stat-value {
-  margin-top: 10px;
-  font-size: 34px;
+  margin-top: 6px;
+  font-size: 30px;
   font-weight: 700;
 }
 
 .panel {
-  padding: 20px;
+  padding: 16px 18px;
 }
 
 .table-page {
@@ -236,21 +347,21 @@ a {
 .toolbar {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
+  gap: 10px;
   align-items: center;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
   flex: 0 0 auto;
 }
 
 .toolbar-actions {
   display: flex;
-  gap: 12px;
+  gap: 8px;
   align-items: center;
 }
 
 .panel-title {
-  margin-bottom: 16px;
-  font-size: 20px;
+  margin-bottom: 12px;
+  font-size: 18px;
   font-weight: 700;
 }
 
@@ -271,7 +382,438 @@ a {
   margin: 0;
   padding-left: 18px;
   color: var(--muted);
-  line-height: 1.9;
+  line-height: 1.7;
+}
+
+.compact-hero h1 {
+  font-size: 24px;
+}
+
+.compact-hero p {
+  max-width: 880px;
+}
+
+.quick-link-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.quick-link-card {
+  display: grid;
+  gap: 6px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.78);
+  transition: 0.2s ease;
+}
+
+.quick-link-card:hover {
+  border-color: rgba(73, 212, 255, 0.3);
+  box-shadow: 0 12px 24px rgba(47, 143, 255, 0.08);
+  transform: translateY(-1px);
+}
+
+.quick-link-title {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.quick-link-desc {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.gis-map-shell {
+  min-height: 0;
+  height: 100%;
+  border: 1px solid rgba(73, 212, 255, 0.14);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.28);
+  box-shadow: 0 16px 36px rgba(18, 53, 99, 0.08);
+  overflow: hidden;
+}
+
+.gis-map-surface {
+  position: relative;
+  height: 100%;
+  min-height: 680px;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, rgba(18, 57, 104, 0.18), rgba(12, 36, 66, 0.08)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0));
+}
+
+.gis-ol-map {
+  position: absolute;
+  inset: 0;
+}
+
+.gis-scene-title {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  z-index: 3;
+  transform: translateX(-50%);
+  padding: 10px 22px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(14, 39, 66, 0.28);
+  backdrop-filter: blur(18px);
+  color: #eef7ff;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.gis-map-surface.is-basemap-image {
+  background:
+    radial-gradient(circle at 25% 22%, rgba(212, 189, 128, 0.22), transparent 18%),
+    radial-gradient(circle at 74% 68%, rgba(116, 164, 198, 0.18), transparent 20%),
+    linear-gradient(160deg, #335841 0%, #274837 32%, #3b6547 54%, #27413f 76%, #203444 100%);
+}
+
+.gis-map-surface.is-basemap-vector {
+  background:
+    radial-gradient(circle at 20% 18%, rgba(99, 197, 255, 0.2), transparent 16%),
+    linear-gradient(145deg, #edf5ff 0%, #ddeafd 35%, #d4e4fb 58%, #eaf3ff 100%);
+}
+
+.gis-map-surface.is-basemap-terrain {
+  background:
+    radial-gradient(circle at 22% 18%, rgba(221, 188, 132, 0.18), transparent 18%),
+    linear-gradient(160deg, #6e6a4e 0%, #5a6245 32%, #7f7a57 54%, #53604f 76%, #42515d 100%);
+}
+
+.gis-map-overlay,
+.gis-map-grid,
+.gis-map-vignette {
+  position: absolute;
+  inset: 0;
+}
+
+.gis-map-overlay {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.12) 1px, transparent 1px);
+  background-size: 96px 96px;
+  opacity: 0.18;
+}
+
+.gis-map-grid {
+  background:
+    linear-gradient(rgba(73, 212, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(73, 212, 255, 0.08) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.gis-map-vignette {
+  background: radial-gradient(circle at center, transparent 55%, rgba(13, 35, 63, 0.24) 100%);
+}
+
+.gis-map-vignette,
+.gis-map-crosshair,
+.gis-scene-title {
+  pointer-events: none;
+}
+
+.gis-floating-toolbar {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  z-index: 3;
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+  background: rgba(10, 33, 58, 0.32);
+  backdrop-filter: blur(20px);
+  box-shadow: var(--shadow);
+}
+
+.gis-floating-tool {
+  min-width: 76px;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #e9f4ff;
+  cursor: pointer;
+  transition: 0.2s ease;
+  font-size: 14px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.gis-floating-tool.is-active,
+.gis-floating-tool:hover {
+  color: #ffffff;
+  border-color: rgba(73, 212, 255, 0.32);
+  background: linear-gradient(135deg, rgba(47, 143, 255, 0.28), rgba(73, 212, 255, 0.18));
+}
+
+.gis-floating-tool--ghost {
+  min-width: auto;
+  padding-inline: 12px;
+}
+
+.gis-tool-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.gis-floating-panel {
+  position: absolute;
+  z-index: 3;
+  width: 280px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 18px;
+  background: rgba(11, 34, 58, 0.34);
+  backdrop-filter: blur(20px);
+  box-shadow: var(--shadow);
+}
+
+.gis-floating-panel--left {
+  top: 84px;
+  left: 18px;
+}
+
+.gis-floating-panel.secondary {
+  left: 312px;
+}
+
+.gis-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.gis-floating-panel-title,
+.gis-property-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #eef7ff;
+}
+
+.gis-panel-toggle {
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #e9f4ff;
+  cursor: pointer;
+}
+
+.gis-layer-tree,
+.gis-measure-actions,
+.gis-query-result {
+  display: grid;
+  gap: 10px;
+}
+
+.gis-query-business-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.gis-query-sections {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.gis-query-section {
+  display: grid;
+  gap: 8px;
+}
+
+.gis-query-section-title {
+  color: rgba(232, 245, 255, 0.72);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.gis-query-business-item {
+  width: 100%;
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #eef7ff;
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+
+.gis-query-business-item:hover {
+  border-color: rgba(73, 212, 255, 0.28);
+  background: rgba(73, 212, 255, 0.12);
+}
+
+.gis-query-business-title {
+  font-weight: 700;
+}
+
+.gis-query-business-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: rgba(232, 245, 255, 0.72);
+  font-size: 12px;
+}
+
+.gis-layer-group {
+  display: grid;
+  gap: 8px;
+}
+
+.gis-layer-group-name {
+  color: rgba(232, 245, 255, 0.78);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.gis-layer-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #eef7ff;
+}
+
+.gis-measure-result,
+.gis-hint,
+.gis-query-item {
+  color: rgba(232, 245, 255, 0.82);
+  line-height: 1.6;
+}
+
+.gis-property-panel {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  bottom: 74px;
+  z-index: 2;
+  width: 270px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 18px;
+  background: rgba(11, 34, 58, 0.28);
+  backdrop-filter: blur(20px);
+  box-shadow: var(--shadow);
+  overflow: auto;
+}
+
+.gis-attr-card {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.gis-attr-card + .gis-attr-card {
+  margin-top: 10px;
+}
+
+.gis-attr-card-label {
+  color: rgba(232, 245, 255, 0.72);
+  font-size: 12px;
+}
+
+.gis-attr-card-value {
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.gis-map-crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 2;
+  width: 26px;
+  height: 26px;
+  border: 2px solid rgba(73, 212, 255, 0.9);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 24px rgba(73, 212, 255, 0.32);
+}
+
+.gis-bottom-bar {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 18px;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: 220px 260px minmax(280px, 360px);
+  justify-content: center;
+  gap: 12px;
+}
+
+.gis-bottom-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  background: rgba(11, 34, 58, 0.32);
+  backdrop-filter: blur(18px);
+  color: #eef7ff;
+  box-shadow: var(--shadow);
+}
+
+.gis-bottom-item--scale {
+  justify-content: flex-start;
+}
+
+.gis-bottom-item--scale .ol-scale-line {
+  position: static;
+  background: transparent;
+  padding: 0;
+  border: 0;
+}
+
+.gis-bottom-item--scale .ol-scale-line-inner {
+  border-color: rgba(255, 255, 255, 0.8);
+  color: #eef7ff;
+  font-size: 14px;
+}
+
+.gis-bottom-basemap {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.layer-config-tabs .el-tabs__content {
+  min-height: 0;
+}
+
+@media (max-width: 1200px) {
+  .gis-property-panel {
+    width: 236px;
+  }
+
+  .gis-bottom-bar {
+    grid-template-columns: 1fr;
+  }
 }
 
 .pagination-wrap {
@@ -431,6 +973,66 @@ a {
 
 .el-dialog__body {
   padding-top: 18px;
+}
+
+.request-form-dialog .el-dialog__body {
+  max-height: 74vh;
+  overflow: auto;
+  padding-bottom: 8px;
+}
+
+.request-form-tabs {
+  min-height: 0;
+}
+
+.request-form-attachments {
+  display: grid;
+  gap: 14px;
+}
+
+.request-form-attachment-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.request-form-attachment-stats {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.request-form-missing-tags {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.request-form-attachment-groups {
+  display: grid;
+  gap: 14px;
+}
+
+.request-form-attachment-group {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid rgba(55, 67, 46, 0.12);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.request-form-attachment-group-title,
+.attachment-category-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.request-form-attachment-list {
+  display: grid;
+  gap: 10px;
 }
 
 .compact-dialog-tabs .el-tabs__header {
@@ -605,7 +1207,7 @@ a {
 
 .request-detail {
   display: grid;
-  gap: 14px;
+  gap: 8px;
   height: calc(100vh - 110px);
   overflow: auto;
   padding-right: 6px;
@@ -615,19 +1217,20 @@ a {
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  align-items: flex-start;
+  align-items: center;
 }
 
 .request-detail-side {
-  display: grid;
-  gap: 10px;
-  justify-items: end;
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .request-detail-actions {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
+  align-items: center;
   gap: 10px;
 }
 
@@ -643,39 +1246,8 @@ a {
   font-size: 13px;
 }
 
-.request-detail-status {
-  display: grid;
-  gap: 8px;
-  justify-items: end;
-}
-
 .request-detail-dot {
   margin: 0 8px;
-}
-
-.request-summary-grid {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-}
-
-.request-summary-card {
-  padding: 14px 16px;
-  border: 1px solid rgba(55, 67, 46, 0.12);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.72);
-}
-
-.request-summary-label {
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.request-summary-value {
-  margin-top: 8px;
-  font-size: 16px;
-  font-weight: 700;
-  word-break: break-all;
 }
 
 .request-descriptions .el-descriptions__label {
@@ -731,6 +1303,57 @@ a {
   gap: 14px;
 }
 
+.request-attachments--workspace {
+  gap: 12px;
+}
+
+.attachment-workspace {
+  display: grid;
+  grid-template-columns: 380px minmax(0, 1fr);
+  gap: 16px;
+  min-height: 70vh;
+  align-items: start;
+}
+
+.attachment-sidebar {
+  display: grid;
+  gap: 14px;
+  min-height: 0;
+  align-content: start;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.attachment-sidebar .workflow-handler-card {
+  grid-column: auto;
+  width: 100%;
+}
+
+.attachment-requirement-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(245, 250, 255, 0.92));
+  box-shadow: var(--shadow);
+}
+
+.attachment-requirement-card .workflow-handler-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+}
+
+.attachment-requirement-card .workflow-handler-title {
+  line-height: 1.25;
+}
+
+.attachment-requirement-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .request-attachment-input {
   display: none;
 }
@@ -740,11 +1363,53 @@ a {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.attachment-toolbar--stack {
+  width: 100%;
+  display: grid;
+  gap: 10px;
+}
+
+.attachment-toolbar-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.attachment-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.attachment-panel-head--compact {
+  margin-bottom: 4px;
+}
+
+.attachment-filter-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .attachment-list {
   display: grid;
   gap: 12px;
+}
+
+.attachment-list--compact {
+  gap: 10px;
+  max-height: 420px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.attachment-category-group {
+  display: grid;
+  gap: 10px;
 }
 
 .attachment-template-panel {
@@ -754,6 +1419,36 @@ a {
   border: 1px solid rgba(55, 67, 46, 0.12);
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.74);
+}
+
+.attachment-template-panel--compact {
+  padding: 12px 14px;
+}
+
+.attachment-template-list {
+  display: grid;
+  gap: 10px;
+}
+
+.attachment-template-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid rgba(55, 67, 46, 0.1);
+  border-radius: 14px;
+  background: rgba(250, 251, 247, 0.92);
+}
+
+.attachment-template-row.is-satisfied {
+  border-color: rgba(103, 194, 58, 0.24);
+  background: rgba(240, 249, 235, 0.92);
+}
+
+.attachment-template-row.is-pending {
+  border-color: rgba(230, 162, 60, 0.2);
+  background: rgba(253, 246, 236, 0.92);
 }
 
 .attachment-template-grid {
@@ -815,9 +1510,15 @@ a {
 
 .attachment-stat-card {
   padding: 14px 16px;
-  border: 1px solid rgba(55, 67, 46, 0.12);
+  border: 1px solid var(--line);
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.78);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(245, 250, 255, 0.92));
+}
+
+.attachment-template-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .attachment-stat-label {
@@ -845,6 +1546,152 @@ a {
   font-size: 13px;
 }
 
+.attachment-list-panel {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(245, 250, 255, 0.92));
+  align-content: start;
+  box-shadow: var(--shadow);
+}
+
+.attachment-tree-shell {
+  min-height: 360px;
+  max-height: 480px;
+  overflow: auto;
+  padding: 10px 4px 2px;
+  border: 1px solid rgba(73, 212, 255, 0.14);
+  border-radius: 18px;
+  background: rgba(244, 249, 255, 0.92);
+}
+
+.attachment-tree-shell .el-tree {
+  --el-tree-node-hover-bg-color: rgba(47, 143, 255, 0.12);
+  background: transparent;
+}
+
+.attachment-tree-node {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 4px;
+}
+
+.attachment-tree-node.is-group {
+  font-weight: 700;
+}
+
+.attachment-tree-node.is-attachment {
+  font-weight: 500;
+}
+
+.attachment-tree-node.is-selected .attachment-tree-file-name {
+  color: var(--accent-2);
+}
+
+.attachment-tree-group-name,
+.attachment-tree-file-name {
+  min-width: 0;
+  color: var(--text);
+}
+
+.attachment-tree-group-line,
+.attachment-tree-file-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.attachment-tree-group-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.attachment-tree-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-tree-file-meta {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.attachment-tree-required {
+  margin-left: 4px;
+  color: var(--danger);
+}
+
+.attachment-tree-missing {
+  margin-left: auto;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.attachment-tree-count {
+  min-width: 24px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.attachment-tree-table-title {
+  display: grid;
+  gap: 2px;
+  color: var(--text);
+}
+
+.attachment-tree-table-title--single {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  font-weight: 700;
+}
+
+.attachment-tree-table-title-main {
+  font-weight: 700;
+}
+
+.attachment-tree-table-title-sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.attachment-tree-table-node {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.attachment-tree-table-node--single {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  min-height: 32px;
+}
+
+.attachment-tree-table-node-name {
+  font-weight: 600;
+}
+
+.attachment-tree-prefix {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  color: var(--muted);
+  font-family: Consolas, "Courier New", monospace;
+}
+
 .attachment-card {
   display: flex;
   gap: 16px;
@@ -853,6 +1700,27 @@ a {
   border: 1px solid rgba(55, 67, 46, 0.12);
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.74);
+}
+
+.attachment-card--selectable {
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+
+.attachment-card--selectable:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 18px rgba(55, 67, 46, 0.08);
+}
+
+.attachment-card--selectable.is-active {
+  border-color: rgba(86, 115, 58, 0.36);
+  box-shadow: 0 0 0 2px rgba(86, 115, 58, 0.12);
+  background: rgba(246, 249, 241, 0.94);
+}
+
+.attachment-card.is-compact {
+  padding: 12px 14px;
+  gap: 12px;
 }
 
 .attachment-card-thumb {
@@ -871,6 +1739,11 @@ a {
 
 .attachment-card-thumb.is-image {
   cursor: pointer;
+}
+
+.attachment-card-thumb--large {
+  width: 120px;
+  height: 120px;
 }
 
 .attachment-card-thumb-image {
@@ -914,13 +1787,137 @@ a {
   gap: 8px;
 }
 
+.attachment-preview-panel {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(245, 250, 255, 0.92));
+  align-content: start;
+  box-shadow: var(--shadow);
+}
+
+.attachment-preview-panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.attachment-preview-meta {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.attachment-preview-shell--inline {
+  min-height: 64vh;
+}
+
+.attachment-inline-empty {
+  display: grid;
+  gap: 14px;
+  justify-items: center;
+  text-align: center;
+}
+
+.attachment-inline-empty-text {
+  max-width: 320px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.gis-page {
+  min-height: 0;
+  height: 100%;
+}
+
 @media (max-width: 900px) {
+  .attachment-template-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .attachment-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .attachment-filter-row {
+    grid-template-columns: 1fr;
+  }
+
+  .request-form-attachment-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .request-form-attachment-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .attachment-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .attachment-template-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .attachment-preview-shell--inline {
+    min-height: 44vh;
+  }
+
+  .workflow-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-current-card,
+  .workflow-config-card,
+  .workflow-handler-card,
+  .workflow-step-list {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
+  .workflow-step-list {
+    grid-template-columns: 1fr;
+  }
+
+  .gis-scene-title {
+    position: static;
+    transform: none;
+    margin: 18px auto 0;
+    width: fit-content;
+  }
+
+  .gis-floating-toolbar {
+    right: 18px;
+    flex-wrap: wrap;
+  }
+
+  .gis-floating-panel--left,
+  .gis-floating-panel.secondary {
+    left: 18px;
+    right: 18px;
+    width: auto;
+  }
+
+  .gis-floating-panel.secondary {
+    top: 250px;
+  }
+
+  .gis-property-panel {
+    display: none;
+  }
+
+  .gis-bottom-bar {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .attachment-template-summary {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -929,9 +1926,9 @@ a {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgba(55, 67, 46, 0.12);
+  border: 1px solid rgba(73, 212, 255, 0.14);
   border-radius: 18px;
-  background: rgba(248, 249, 243, 0.88);
+  background: rgba(244, 249, 255, 0.92);
   overflow: hidden;
 }
 
@@ -951,7 +1948,9 @@ a {
 
 .workflow-overview {
   display: grid;
-  gap: 16px;
+  gap: 12px;
+  grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
+  align-items: start;
 }
 
 .workflow-current-card {
@@ -985,7 +1984,8 @@ a {
 
 .workflow-step-list {
   display: grid;
-  gap: 12px;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .workflow-step-card {
@@ -1044,6 +2044,23 @@ a {
   margin-top: 8px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.workflow-config-card,
+.workflow-handler-card {
+  min-width: 0;
+}
+
+.workflow-current-card,
+.workflow-config-card,
+.workflow-handler-card,
+.workflow-step-list {
+  grid-column: 2;
+}
+
+.workflow-current-card {
+  grid-column: 1;
+  grid-row: 1 / span 3;
 }
 
 .workflow-handler-card {

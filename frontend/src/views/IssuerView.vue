@@ -1,8 +1,20 @@
 <template>
   <section class="panel table-page">
     <div class="toolbar">
-      <div class="panel-title">发包方管理</div>
-      <div class="toolbar-actions">
+      <div>
+        <div class="panel-title">发包方管理</div>
+      </div>
+      <div class="toolbar-actions toolbar-wrap">
+        <el-input
+          v-model="keyword"
+          clearable
+          placeholder="搜索代码、名称、负责人、证件号、电话"
+          style="width: 320px"
+          @keyup.enter="handleSearch"
+          @clear="handleSearch"
+        />
+        <el-button plain @click="handleSearch">查询</el-button>
+        <el-button plain @click="resetFilters">重置</el-button>
         <el-button plain @click="loadData">刷新</el-button>
         <el-button v-if="canManage" type="success" @click="openCreateDialog">新增发包方</el-button>
       </div>
@@ -45,12 +57,7 @@
     </div>
   </section>
 
-  <el-dialog
-    v-model="dialogVisible"
-    :title="editingCode ? '编辑发包方' : '新增发包方'"
-    width="720px"
-    destroy-on-close
-  >
+  <el-dialog v-model="dialogVisible" :title="editingCode ? '编辑发包方' : '新增发包方'" width="720px" destroy-on-close>
     <el-form ref="formRef" :model="form" :rules="rules" class="compact-form" label-position="top" status-icon>
       <div class="form-grid">
         <el-form-item label="发包方代码" prop="code">
@@ -127,6 +134,7 @@ const rows = ref([]);
 const total = ref(0);
 const page = ref(1);
 const pageSize = ref(20);
+const keyword = ref("");
 const formRef = ref();
 
 const createEmptyForm = () => ({
@@ -201,12 +209,26 @@ function resetForm() {
 async function loadData() {
   loading.value = true;
   try {
-    const { data } = await fetchIssuers({ page: page.value, page_size: pageSize.value });
+    const { data } = await fetchIssuers({
+      page: page.value,
+      page_size: pageSize.value,
+      keyword: keyword.value.trim() || undefined,
+    });
     rows.value = data.data.items;
     total.value = data.data.total;
   } finally {
     loading.value = false;
   }
+}
+
+function handleSearch() {
+  page.value = 1;
+  loadData();
+}
+
+function resetFilters() {
+  keyword.value = "";
+  handleSearch();
 }
 
 function handlePageChange(value) {

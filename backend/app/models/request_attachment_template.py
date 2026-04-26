@@ -9,6 +9,12 @@ class RequestAttachmentTemplate(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     tenant_code: Mapped[str | None] = mapped_column(String(12), ForeignKey("tenants.code"), nullable=True, index=True)
+    parent_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("request_attachment_templates.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     request_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     stage_code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     stage_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -21,3 +27,5 @@ class RequestAttachmentTemplate(Base, TimestampMixin):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     tenant = relationship("Tenant")
+    parent = relationship("RequestAttachmentTemplate", remote_side=[id], back_populates="children")
+    children = relationship("RequestAttachmentTemplate", back_populates="parent", cascade="all, delete-orphan")

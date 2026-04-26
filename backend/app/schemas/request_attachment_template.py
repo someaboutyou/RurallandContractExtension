@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 
 class RequestAttachmentTemplateBase(BaseModel):
     tenantCode: str | None = Field(default=None, max_length=12)
+    parentId: int | None = None
     requestType: str = Field(min_length=1, max_length=32)
     stageCode: str = Field(min_length=1, max_length=64)
     stageName: str | None = Field(default=None, max_length=100)
@@ -25,3 +26,4 @@ class RequestAttachmentTemplateUpdate(RequestAttachmentTemplateBase):
 
 class RequestAttachmentTemplateRead(RequestAttachmentTemplateBase):
     id: int
+    hasChildren: bool = False

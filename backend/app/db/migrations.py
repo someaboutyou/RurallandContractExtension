@@ -3,6 +3,7 @@ from sqlalchemy.engine import Engine
 
 
 def upgrade_schema(engine: Engine) -> None:
+    _upgrade_map_layers(engine)
     _upgrade_tenants(engine)
     _upgrade_regions(engine)
     _upgrade_users(engine)
@@ -12,6 +13,47 @@ def upgrade_schema(engine: Engine) -> None:
     _upgrade_request_case_participants(engine)
     _upgrade_workflow_definition_versions(engine)
     _upgrade_request_workflow_mappings(engine)
+
+
+def _upgrade_map_layers(engine: Engine) -> None:
+    inspector = inspect(engine)
+    if inspector.has_table("map_layers"):
+        columns = {column["name"] for column in inspector.get_columns("map_layers")}
+        statements: list[str] = []
+        if "service_config" not in columns:
+            statements.append("ALTER TABLE map_layers ADD COLUMN service_config TEXT")
+
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.exec_driver_sql(statement)
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_map_layers_key ON map_layers(key)")
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_map_layers_category ON map_layers(category)")
+        return
+
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            """
+            CREATE TABLE map_layers (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(120) NOT NULL,
+                key VARCHAR(64) NOT NULL UNIQUE,
+                layer_type VARCHAR(32) NOT NULL,
+                category VARCHAR(16) NOT NULL,
+                group_name VARCHAR(64),
+                service_config TEXT,
+                service_url TEXT NOT NULL,
+                projection VARCHAR(32),
+                default_visible BOOLEAN NOT NULL DEFAULT FALSE,
+                is_default BOOLEAN NOT NULL DEFAULT FALSE,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+            )
+            """
+        )
+        connection.exec_driver_sql("CREATE INDEX ix_map_layers_key ON map_layers(key)")
+        connection.exec_driver_sql("CREATE INDEX ix_map_layers_category ON map_layers(category)")
 
 
 def _upgrade_tenants(engine: Engine) -> None:
@@ -353,6 +395,15 @@ def _upgrade_workflow_definition_versions(engine: Engine) -> None:
 def _upgrade_request_attachment_templates(engine: Engine) -> None:
     inspector = inspect(engine)
     if inspector.has_table("request_attachment_templates"):
+        columns = {item["name"] for item in inspector.get_columns("request_attachment_templates")}
+        with engine.begin() as connection:
+            if "parent_id" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE request_attachment_templates ADD COLUMN parent_id INTEGER REFERENCES request_attachment_templates(id) ON DELETE CASCADE"
+                )
+                connection.exec_driver_sql(
+                    "CREATE INDEX ix_request_attachment_templates_parent_id ON request_attachment_templates(parent_id)"
+                )
         return
 
     with engine.begin() as connection:
@@ -361,6 +412,7 @@ def _upgrade_request_attachment_templates(engine: Engine) -> None:
             CREATE TABLE request_attachment_templates (
                 id SERIAL PRIMARY KEY,
                 tenant_code VARCHAR(12) REFERENCES tenants(code),
+                parent_id INTEGER REFERENCES request_attachment_templates(id) ON DELETE CASCADE,
                 request_type VARCHAR(32) NOT NULL,
                 stage_code VARCHAR(64) NOT NULL,
                 stage_name VARCHAR(100),
@@ -378,6 +430,9 @@ def _upgrade_request_attachment_templates(engine: Engine) -> None:
         )
         connection.exec_driver_sql(
             "CREATE INDEX ix_request_attachment_templates_tenant_code ON request_attachment_templates(tenant_code)"
+        )
+        connection.exec_driver_sql(
+            "CREATE INDEX ix_request_attachment_templates_parent_id ON request_attachment_templates(parent_id)"
         )
         connection.exec_driver_sql(
             "CREATE INDEX ix_request_attachment_templates_request_type ON request_attachment_templates(request_type)"

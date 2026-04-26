@@ -11,12 +11,22 @@ from app.services.data_access_service import data_access_service
 
 
 class ContractorService:
-    def list_contractors(self, db: Session, page: int, page_size: int, current_user: User) -> dict:
+    def list_contractors(
+        self,
+        db: Session,
+        page: int,
+        page_size: int,
+        current_user: User,
+        keyword: str | None = None,
+        type_code: str | None = None,
+    ) -> dict:
         contractors, total = contractor_repository.list_contractors(
             db,
             page=page,
             page_size=page_size,
             extra_filters=data_access_service.build_code_scope_filters(Cbf.cbfbm, current_user),
+            keyword=keyword.strip() if keyword else None,
+            type_code=type_code or None,
         )
         return {
             "items": [self._serialize_summary(item) for item in contractors],

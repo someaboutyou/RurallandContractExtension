@@ -76,8 +76,9 @@
   <el-dialog
     v-model="dialogVisible"
     :title="editingId ? '编辑业务申请' : '新增业务申请'"
-    width="920px"
+    width="1080px"
     destroy-on-close
+    class="request-form-dialog"
   >
     <el-form ref="formRef" :model="form" :rules="rules" class="compact-form" label-position="top" status-icon>
       <div class="form-grid">
@@ -166,9 +167,110 @@
       </div>
     </el-form>
 
+    <div class="request-form-attachments">
+      <input
+        ref="dialogAttachmentInputRef"
+        type="file"
+        class="request-attachment-input"
+        @change="handleDialogAttachmentInputChange"
+      />
+      <div class="workflow-handler-head">
+        <div>
+          <div class="workflow-handler-title">附件材料</div>
+          <div class="role-hint">保存表单后，可直接在当前弹窗补充申请材料和审核附件。</div>
+        </div>
+        <div v-if="editingRequestRecord" class="attachment-toolbar">
+          <el-select
+            v-model="dialogAttachmentCategory"
+            clearable
+            filterable
+            allow-create
+            default-first-option
+            placeholder="请选择或输入附件分类"
+            style="width: 240px"
+          >
+            <el-option
+              v-for="item in dialogAttachmentTypeOptions"
+              :key="item"
+              :label="item"
+              :value="item"
+            />
+          </el-select>
+          <el-button :loading="uploadingAttachment" plain type="success" @click="openDialogAttachmentPicker">
+            上传附件
+          </el-button>
+        </div>
+      </div>
+
+      <template v-if="editingRequestRecord">
+        <div class="request-form-attachment-stats">
+          <div class="attachment-stat-card">
+            <div class="attachment-stat-label">当前附件</div>
+            <div class="attachment-stat-value">{{ editingRequestRecord.attachments.length }}</div>
+          </div>
+          <div class="attachment-stat-card">
+            <div class="attachment-stat-label">建议分类</div>
+            <div class="attachment-stat-value">{{ dialogAttachmentTypeOptions.length || 0 }}</div>
+          </div>
+          <div class="attachment-stat-card">
+            <div class="attachment-stat-label">待补分类</div>
+            <div class="attachment-stat-value">{{ dialogAttachmentMissingCategories.length }}</div>
+          </div>
+        </div>
+
+        <div v-if="dialogAttachmentMissingCategories.length" class="request-form-missing-tags">
+          <el-tag
+            v-for="item in dialogAttachmentMissingCategories"
+            :key="item"
+            size="small"
+            type="danger"
+            effect="plain"
+          >
+            {{ item }}
+          </el-tag>
+        </div>
+
+        <div v-if="editingRequestRecord.attachments.length" class="request-form-attachment-list">
+          <div
+            v-for="item in editingRequestRecord.attachments"
+            :key="item.id"
+            class="attachment-card is-compact"
+          >
+            <div class="attachment-card-main">
+              <div class="attachment-card-name">{{ item.originalName }}</div>
+              <div class="attachment-card-meta">
+                {{ formatFileSize(item.fileSize) }}
+                <span class="request-detail-dot">•</span>
+                {{ item.category || "-" }}
+                <span class="request-detail-dot">•</span>
+                {{ item.stageCode || "-" }}
+                <span class="request-detail-dot">•</span>
+                {{ formatDateTime(item.createdAt) }}
+              </div>
+            </div>
+            <div class="attachment-card-actions">
+              <el-button v-if="isPreviewableAttachment(item)" link type="success" @click="handleDialogAttachmentPreview(item)">
+                预览
+              </el-button>
+              <el-button link type="primary" @click="handleDialogAttachmentDownload(item)">下载</el-button>
+              <el-button link type="danger" @click="handleDialogAttachmentDelete(item)">删除</el-button>
+            </div>
+          </div>
+        </div>
+        <el-empty v-else description="当前申请还没有上传附件" />
+      </template>
+      <el-alert
+        v-else
+        title="请先保存表单，再继续上传附件。首次保存后会自动保留在当前窗口，方便继续补材料。"
+        type="info"
+        :closable="false"
+        show-icon
+      />
+    </div>
+
     <template #footer>
-      <el-button @click="dialogVisible = false">取消</el-button>
-      <el-button :loading="submitting" type="success" @click="handleSubmitForm">保存</el-button>
+      <el-button @click="handleCloseDialog">关闭</el-button>
+      <el-button :loading="submitting" type="success" @click="handleSubmitForm">保存表单</el-button>
     </template>
   </el-dialog>
 
@@ -184,40 +286,14 @@
         <div class="request-detail-head">
           <div>
             <div class="request-detail-title">{{ detailRecord.requestTitle || detailRecord.serialNo }}</div>
-            <div class="request-detail-subtitle">
-              {{ detailRecord.serialNo }}
-              <span class="request-detail-dot">•</span>
-              {{ detailRecord.requestType }}
-            </div>
+            <div class="request-detail-subtitle">{{ detailRecord.serialNo }}</div>
           </div>
           <div class="request-detail-side">
             <div class="request-detail-actions">
+              <el-tag :type="statusTagType(detailRecord.status)" effect="light">{{ detailRecord.status }}</el-tag>
               <el-button plain @click="handleExportDetailHtml">导出 HTML</el-button>
               <el-button plain type="success" @click="handlePrintDetail">打印留痕</el-button>
             </div>
-            <div class="request-detail-status">
-              <el-tag :type="statusTagType(detailRecord.status)" effect="light">{{ detailRecord.status }}</el-tag>
-              <span class="request-detail-step">{{ detailRecord.currentStep }}</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="request-summary-grid">
-          <div class="request-summary-card">
-            <div class="request-summary-label">创建人</div>
-            <div class="request-summary-value">{{ detailRecord.createdByName || "-" }}</div>
-          </div>
-          <div class="request-summary-card">
-            <div class="request-summary-label">租户编码</div>
-            <div class="request-summary-value">{{ detailRecord.tenantCode || "-" }}</div>
-          </div>
-          <div class="request-summary-card">
-            <div class="request-summary-label">区域编码</div>
-            <div class="request-summary-value">{{ detailRecord.regionCode || "-" }}</div>
-          </div>
-          <div class="request-summary-card">
-            <div class="request-summary-label">最近更新</div>
-            <div class="request-summary-value">{{ formatDateTime(detailRecord.updatedAt) }}</div>
           </div>
         </div>
 
@@ -408,54 +484,44 @@
             <el-empty v-else description="当前申请还没有办理轨迹" />
           </el-tab-pane>
           <el-tab-pane :label="`附件（${detailRecord.attachments.length}）`" name="attachments">
-            <div class="request-attachments">
+            <div class="request-attachments request-attachments--workspace">
               <input
                 ref="attachmentInputRef"
                 type="file"
                 class="request-attachment-input"
                 @change="handleAttachmentInputChange"
               />
-              <div class="workflow-handler-card">
-                <div class="workflow-handler-head">
-                  <div class="workflow-handler-title">节点附件要求</div>
-                  <div v-if="canUploadAttachmentsForDetail" class="attachment-toolbar">
-                    <el-select
-                      v-model="attachmentCategory"
-                      clearable
-                      filterable
-                      allow-create
-                      default-first-option
-                      placeholder="请选择或输入附件分类"
-                      style="width: 240px"
-                    >
-                      <el-option
-                        v-for="item in attachmentTypeOptions"
-                        :key="item"
-                        :label="item"
-                        :value="item"
-                      />
-                    </el-select>
-                    <el-button
-                      :loading="uploadingAttachment"
-                      plain
-                      type="success"
-                      @click="openAttachmentPicker"
-                    >
-                      上传附件
-                    </el-button>
-                    <el-button
-                      v-if="detailRecord.attachments.length"
-                      plain
-                      @click="handleDownloadAllAttachments"
-                    >
-                      打包下载
-                    </el-button>
-                  </div>
-                </div>
-                <div class="workflow-config-grid">
-                  <div class="workflow-config-item">
-                    <span class="workflow-config-label">是否必传</span>
-                    <span class="workflow-config-value">
+              <div class="attachment-workspace">
+                <aside class="attachment-sidebar">
+                  <div class="workflow-handler-card attachment-requirement-card">
+                    <div class="workflow-handler-head">
+                      <div class="workflow-handler-title">节点附件要求</div>
+                      <div v-if="canUploadAttachmentsForDetail" class="attachment-toolbar">
+                        <el-select
+                          v-model="attachmentCategory"
+                          clearable
+                          filterable
+                          allow-create
+                          default-first-option
+                          placeholder="请选择或输入附件分组"
+                          style="width: 220px"
+                        >
+                          <el-option
+                            v-for="item in attachmentTypeOptions"
+                            :key="item"
+                            :label="item"
+                            :value="item"
+                          />
+                        </el-select>
+                        <el-button :loading="uploadingAttachment" plain type="success" @click="openAttachmentPicker">
+                          上传附件
+                        </el-button>
+                        <el-button v-if="detailRecord.attachments.length" plain @click="handleDownloadAllAttachments">
+                          打包下载
+                        </el-button>
+                      </div>
+                    </div>
+                    <div class="attachment-requirement-summary">
                       <el-tag
                         size="small"
                         :type="detailRecord.taskConfig?.requireAttachment ? 'warning' : 'info'"
@@ -463,16 +529,13 @@
                       >
                         {{ detailRecord.taskConfig?.requireAttachment ? "当前节点要求上传" : "当前节点未强制要求" }}
                       </el-tag>
-                    </span>
-                  </div>
-                  <div class="workflow-config-item workflow-config-item--full">
-                    <span class="workflow-config-label">建议分类</span>
-                    <div
-                      v-if="detailRecord.taskConfig?.attachmentTypes?.length"
-                      class="workflow-config-tags"
-                    >
+                      <span class="attachment-list-summary">
+                        共 {{ detailRecord.attachments.length }} 个附件，已覆盖 {{ attachmentStats.requiredUploaded }}/{{ requiredAttachmentGroupCount || 0 }} 个必传分组
+                      </span>
+                    </div>
+                    <div v-if="attachmentTypeOptions.length" class="workflow-config-tags">
                       <el-tag
-                        v-for="item in detailRecord.taskConfig.attachmentTypes"
+                        v-for="item in attachmentTypeOptions"
                         :key="item"
                         size="small"
                         effect="plain"
@@ -480,151 +543,139 @@
                         {{ item }}
                       </el-tag>
                     </div>
-                    <span v-else class="workflow-config-value">未配置具体分类</span>
-                  </div>
-                </div>
-              </div>
-
-              <div v-if="detailRecord.attachmentTemplates?.length" class="attachment-template-panel">
-                <div class="workflow-handler-head">
-                  <div class="workflow-handler-title">材料模板</div>
-                  <div class="attachment-list-summary">
-                    已完成 {{ attachmentTemplateStats.satisfied }}/{{ attachmentTemplateStats.total }}，待补 {{ attachmentTemplateStats.pending }}
-                  </div>
-                </div>
-                <div class="attachment-template-grid">
-                  <div
-                    v-for="item in detailRecord.attachmentTemplates"
-                    :key="item.key"
-                    class="attachment-template-card"
-                    :class="{ 'is-satisfied': item.satisfied, 'is-pending': !item.satisfied }"
-                  >
-                    <div class="attachment-template-head">
-                      <div>
-                        <div class="attachment-template-title">{{ item.name }}</div>
-                        <div class="attachment-template-meta">{{ item.category }} · {{ item.stageName || item.stageCode || '-' }}</div>
-                      </div>
-                      <el-tag size="small" :type="item.satisfied ? 'success' : 'warning'" effect="light">
-                        {{ item.satisfied ? `已上传 ${item.uploadedCount}` : "待补充" }}
+                    <div v-if="attachmentMissingCategories.length" class="workflow-config-tags">
+                      <el-tag
+                        v-for="item in attachmentMissingCategories"
+                        :key="item"
+                        size="small"
+                        type="danger"
+                        effect="plain"
+                      >
+                        待补：{{ item }}
                       </el-tag>
                     </div>
-                    <div class="attachment-template-desc">{{ item.description || "请按模板要求准备对应材料。" }}</div>
-                    <div class="attachment-template-foot">
-                      <span>示例文件：{{ item.exampleFileName || "-" }}</span>
-                      <span>{{ item.required ? "必传" : "选传" }}</span>
-                    </div>
                   </div>
-                </div>
-              </div>
 
-              <div v-if="detailRecord.attachments.length" class="attachment-list">
-                <div class="attachment-stats">
-                  <div class="attachment-stat-card">
-                    <div class="attachment-stat-label">附件总数</div>
-                    <div class="attachment-stat-value">{{ attachmentStats.total }}</div>
+                  <div class="attachment-list-panel">
+                    <div class="attachment-list-toolbar">
+                      <el-input
+                        v-model="attachmentSearchKeyword"
+                        clearable
+                        placeholder="搜索附件名、分组、节点、上传人"
+                        style="width: 100%"
+                      />
+                      <el-select
+                        v-model="attachmentFilterCategory"
+                        clearable
+                        placeholder="按附件分组筛选"
+                        style="width: 180px"
+                      >
+                        <el-option
+                          v-for="item in attachmentFilterOptions"
+                          :key="item"
+                          :label="item"
+                          :value="item"
+                        />
+                      </el-select>
+                      <el-select
+                        v-model="attachmentFilterType"
+                        clearable
+                        placeholder="按文件类型筛选"
+                        style="width: 160px"
+                      >
+                        <el-option label="图片" value="image" />
+                        <el-option label="PDF" value="pdf" />
+                        <el-option label="其他" value="other" />
+                      </el-select>
+                    </div>
+                    <div v-if="attachmentTreeData.length" class="attachment-tree-shell">
+                      <el-tree
+                        :data="attachmentTreeData"
+                        node-key="key"
+                        default-expand-all
+                        highlight-current
+                        :expand-on-click-node="false"
+                        :props="{ children: 'children', label: 'label' }"
+                        @node-click="handleAttachmentTreeNodeClick"
+                      >
+                        <template #default="{ data }">
+                          <div
+                            class="attachment-tree-node"
+                            :class="{
+                              'is-group': data.nodeType === 'group',
+                              'is-attachment': data.nodeType === 'attachment',
+                              'is-required': data.required,
+                              'is-selected': data.nodeType === 'attachment' && selectedDetailAttachment?.id === data.attachment?.id,
+                            }"
+                          >
+                            <template v-if="data.nodeType === 'group'">
+                              <span class="attachment-tree-group-name">
+                                {{ data.label }}<span v-if="data.required" class="attachment-tree-required">*</span>
+                              </span>
+                              <span v-if="data.required && !data.satisfied" class="attachment-tree-missing">未上传</span>
+                              <span class="attachment-tree-count">{{ data.attachmentCount || 0 }}</span>
+                            </template>
+                            <template v-else>
+                              <span class="attachment-tree-file-name">{{ data.label }}</span>
+                              <span class="attachment-tree-file-meta">
+                                {{ formatFileSize(data.attachment.fileSize) }} · {{ data.attachment.uploadedByName || "-" }}
+                              </span>
+                            </template>
+                          </div>
+                        </template>
+                      </el-tree>
+                    </div>
+                    <el-empty v-else description="当前申请还没有上传附件" />
                   </div>
-                  <div class="attachment-stat-card">
-                    <div class="attachment-stat-label">图片</div>
-                    <div class="attachment-stat-value">{{ attachmentStats.imageCount }}</div>
-                  </div>
-                  <div class="attachment-stat-card">
-                    <div class="attachment-stat-label">PDF</div>
-                    <div class="attachment-stat-value">{{ attachmentStats.pdfCount }}</div>
-                  </div>
-                  <div class="attachment-stat-card">
-                    <div class="attachment-stat-label">已覆盖建议分类</div>
-                    <div class="attachment-stat-value">{{ attachmentStats.requiredUploaded }}/{{ attachmentTypeOptions.length || 0 }}</div>
-                  </div>
-                </div>
-                <div class="attachment-list-toolbar">
-                  <el-input
-                    v-model="attachmentSearchKeyword"
-                    clearable
-                    placeholder="搜索附件名称、分类、节点、上传人"
-                    style="width: 260px"
-                  />
-                  <el-select
-                    v-model="attachmentFilterCategory"
-                    clearable
-                    placeholder="按附件分类筛选"
-                    style="width: 240px"
-                  >
-                    <el-option
-                      v-for="item in attachmentFilterOptions"
-                      :key="item"
-                      :label="item"
-                      :value="item"
-                    />
-                  </el-select>
-                  <el-select
-                    v-model="attachmentFilterType"
-                    clearable
-                    placeholder="按文件类型筛选"
-                    style="width: 180px"
-                  >
-                    <el-option label="图片" value="image" />
-                    <el-option label="PDF" value="pdf" />
-                    <el-option label="其他" value="other" />
-                  </el-select>
-                  <div class="attachment-list-summary">
-                    共 {{ detailRecord.attachments.length }} 个附件，当前显示 {{ filteredAttachments.length }} 个
-                  </div>
-                </div>
-                <div
-                  v-for="item in filteredAttachments"
-                  :key="item.id"
-                  class="attachment-card"
-                >
-                  <div
-                    class="attachment-card-thumb"
-                    :class="{ 'is-image': Boolean(getAttachmentThumbnail(item)) }"
-                    @click="isPreviewableAttachment(item) && handleAttachmentPreview(item)"
-                  >
-                    <img
-                      v-if="getAttachmentThumbnail(item)"
-                      :src="getAttachmentThumbnail(item)"
-                      :alt="item.originalName"
-                      class="attachment-card-thumb-image"
-                    />
-                    <span v-else class="attachment-card-thumb-text">{{ getAttachmentKindLabel(item) }}</span>
-                  </div>
-                  <div class="attachment-card-main">
-                    <div class="attachment-card-name">{{ item.originalName }}</div>
-                    <div class="attachment-card-meta">
-                      {{ formatFileSize(item.fileSize) }}
-                      <span class="request-detail-dot">•</span>
-                      {{ item.category || "-" }}
-                      <span class="request-detail-dot">•</span>
-                      {{ item.stageCode || "-" }}
-                      <span class="request-detail-dot">•</span>
-                      {{ item.uploadedByName || "-" }}
-                      <span class="request-detail-dot">•</span>
-                      {{ formatDateTime(item.createdAt) }}
+                </aside>
+
+                <section class="attachment-preview-panel">
+                  <div class="attachment-preview-panel-head">
+                    <div>
+                      <div class="workflow-handler-title">附件预览</div>
+                      <div v-if="selectedDetailAttachment" class="attachment-list-summary">
+                        {{ inlineAttachmentPreviewName || selectedDetailAttachment.originalName }}
+                      </div>
+                    </div>
+                    <div v-if="selectedDetailAttachment" class="attachment-card-actions">
+                      <el-button link type="primary" @click="handleAttachmentDownload(selectedDetailAttachment)">下载</el-button>
                     </div>
                   </div>
-                  <div class="attachment-card-actions">
-                    <el-button
-                      v-if="isPreviewableAttachment(item)"
-                      link
-                      type="success"
-                      @click="handleAttachmentPreview(item)"
-                    >
-                      预览
-                    </el-button>
-                    <el-button link type="primary" @click="handleAttachmentDownload(item)">下载</el-button>
-                    <el-button
-                      v-if="canUploadAttachmentsForDetail"
-                      link
-                      type="danger"
-                      @click="handleAttachmentDelete(item)"
-                    >
-                      删除
-                    </el-button>
-                  </div>
-                </div>
-                <el-empty v-if="!filteredAttachments.length" description="当前筛选条件下没有附件" />
+
+                  <template v-if="selectedDetailAttachment">
+                    <div class="attachment-preview-meta">
+                      <span>{{ selectedDetailAttachment.category || "-" }}</span>
+                      <span class="request-detail-dot">•</span>
+                      <span>{{ selectedDetailAttachment.stageCode || "-" }}</span>
+                      <span class="request-detail-dot">•</span>
+                      <span>{{ formatDateTime(selectedDetailAttachment.createdAt) }}</span>
+                    </div>
+                    <div v-loading="inlineAttachmentPreviewLoading" class="attachment-preview-shell attachment-preview-shell--inline">
+                      <template v-if="inlineAttachmentPreviewUrl && inlineAttachmentPreviewType === 'image'">
+                        <img
+                          :src="inlineAttachmentPreviewUrl"
+                          :alt="inlineAttachmentPreviewName || selectedDetailAttachment.originalName"
+                          class="attachment-preview-image"
+                        />
+                      </template>
+                      <template v-else-if="inlineAttachmentPreviewUrl && inlineAttachmentPreviewType === 'pdf'">
+                        <iframe
+                          :src="inlineAttachmentPreviewUrl"
+                          class="attachment-preview-pdf"
+                          title="附件预览"
+                        ></iframe>
+                      </template>
+                      <div v-else class="attachment-inline-empty">
+                        <div class="attachment-card-thumb attachment-card-thumb--large">
+                          <span class="attachment-card-thumb-text">{{ getAttachmentKindLabel(selectedDetailAttachment) }}</span>
+                        </div>
+                        <div class="attachment-inline-empty-text">当前文件类型不支持直接预览，请使用下载查看原件。</div>
+                      </div>
+                    </div>
+                  </template>
+                  <el-empty v-else description="请选择左侧附件查看" />
+                </section>
               </div>
-              <el-empty v-else description="当前申请还没有上传附件" />
             </div>
           </el-tab-pane>
         </el-tabs>
@@ -709,7 +760,29 @@ const canUploadAttachmentsForDetail = computed(() => {
   }
   return ["edit", "approve", "reject"].some((action) => hasAction(detailRecord.value, action));
 });
-const attachmentTypeOptions = computed(() => detailRecord.value?.taskConfig?.attachmentTypes || []);
+const attachmentTemplateGroups = computed(() => detailRecord.value?.attachmentTemplates || []);
+const requiredAttachmentGroupCount = computed(() =>
+  attachmentTemplateGroups.value.filter((item) => item.required).length,
+);
+const attachmentTypeOptions = computed(() => {
+  const categories = new Set(detailRecord.value?.taskConfig?.attachmentTypes || []);
+  for (const item of attachmentTemplateGroups.value) {
+    categories.add(item.name || item.category);
+  }
+  for (const item of detailRecord.value?.attachments || []) {
+    if (item.category) {
+      categories.add(item.category);
+    }
+  }
+  return Array.from(categories);
+});
+const dialogAttachmentTypeOptions = computed(() => {
+  const categories = new Set(editingRequestRecord.value?.taskConfig?.attachmentTypes || []);
+  for (const item of editingRequestRecord.value?.attachmentTemplates || []) {
+    categories.add(item.name || item.category);
+  }
+  return Array.from(categories);
+});
 const attachmentStats = computed(() => {
   const items = detailRecord.value?.attachments || [];
   return {
@@ -717,13 +790,11 @@ const attachmentStats = computed(() => {
     imageCount: items.filter((item) => getAttachmentPreviewKind(item) === "image").length,
     pdfCount: items.filter((item) => getAttachmentPreviewKind(item) === "pdf").length,
     otherCount: items.filter((item) => !["image", "pdf"].includes(getAttachmentPreviewKind(item))).length,
-    requiredUploaded: attachmentTypeOptions.value.filter((category) =>
-      items.some((item) => item.category === category),
-    ).length,
+    requiredUploaded: attachmentTemplateGroups.value.filter((item) => item.required && item.satisfied).length,
   };
 });
 const attachmentTemplateStats = computed(() => {
-  const templates = detailRecord.value?.attachmentTemplates || [];
+  const templates = attachmentTemplateGroups.value;
   return {
     total: templates.length,
     satisfied: templates.filter((item) => item.satisfied).length,
@@ -731,7 +802,12 @@ const attachmentTemplateStats = computed(() => {
   };
 });
 const attachmentMissingCategories = computed(() =>
-  attachmentTypeOptions.value.filter((category) => !(detailRecord.value?.attachments || []).some((item) => item.category === category)),
+  attachmentTemplateGroups.value.filter((item) => item.required && !item.satisfied).map((item) => item.name || item.category),
+);
+const dialogAttachmentMissingCategories = computed(() =>
+  dialogAttachmentTypeOptions.value.filter(
+    (category) => !(editingRequestRecord.value?.attachments || []).some((item) => item.category === category),
+  ),
 );
 const attachmentFilterOptions = computed(() => {
   const categories = new Set();
@@ -767,16 +843,85 @@ const filteredAttachments = computed(() => {
     return true;
   });
 });
-const groupedFilteredAttachments = computed(() => {
-  const groups = new Map();
-  for (const item of filteredAttachments.value) {
-    const key = item.category || "未分类";
-    if (!groups.has(key)) {
-      groups.set(key, []);
-    }
-    groups.get(key).push(item);
+const attachmentTreeData = computed(() => {
+  const groupRows = attachmentTemplateGroups.value;
+  const nodeMap = new Map();
+  const roots = [];
+
+  for (const item of groupRows) {
+    nodeMap.set(item.key, {
+      key: `group-${item.key}`,
+      nodeType: "group",
+      label: item.name || item.category,
+      name: item.name || item.category,
+      required: item.required,
+      satisfied: item.satisfied,
+      attachmentCount: item.uploadedCount || 0,
+      children: [],
+      templateKey: item.key,
+      parentId: item.parentId,
+    });
   }
-  return Array.from(groups.entries()).map(([category, items]) => ({ category, items }));
+
+  const templateIdKeyMap = new Map(
+    groupRows
+      .filter((item) => item.key && String(item.key).split(":").length > 1)
+      .map((item) => [String(item.key).split(":")[1], item.key]),
+  );
+
+  for (const item of groupRows) {
+    const current = nodeMap.get(item.key);
+    const parentKey = item.parentId ? templateIdKeyMap.get(String(item.parentId)) : null;
+    if (current && parentKey && nodeMap.has(parentKey)) {
+      nodeMap.get(parentKey).children.push(current);
+    } else if (current) {
+      roots.push(current);
+    }
+  }
+
+  let ungroupedNode = null;
+  for (const item of filteredAttachments.value) {
+    const target = Array.from(nodeMap.values()).find((node) => node.name === (item.category || "")) || (() => {
+      if (!ungroupedNode) {
+        ungroupedNode = {
+          key: "group-ungrouped",
+          nodeType: "group",
+          label: "未分组",
+          name: "未分组",
+          required: false,
+          satisfied: true,
+          attachmentCount: 0,
+          children: [],
+        };
+        roots.push(ungroupedNode);
+      }
+      return ungroupedNode;
+    })();
+    target.children.push({
+      key: `attachment-${item.id}`,
+      nodeType: "attachment",
+      label: item.originalName,
+      attachment: item,
+      children: [],
+    });
+  }
+
+  const sortNodes = (nodes) => {
+    nodes.sort((a, b) => {
+      if (a.nodeType !== b.nodeType) {
+        return a.nodeType === "group" ? -1 : 1;
+      }
+      return String(a.label).localeCompare(String(b.label), "zh-Hans-CN");
+    });
+    nodes.forEach((node) => {
+      if (node.children?.length) {
+        sortNodes(node.children);
+      }
+    });
+  };
+
+  sortNodes(roots);
+  return roots;
 });
 
 const loading = ref(false);
@@ -788,6 +933,7 @@ const detailVisible = ref(false);
 const editingId = ref(0);
 const rows = ref([]);
 const detailRecord = ref(null);
+const editingRequestRecord = ref(null);
 const detailWorkflowView = ref(null);
 const total = ref(0);
 const page = ref(1);
@@ -796,6 +942,7 @@ const keyword = ref("");
 const statusFilter = ref("");
 const formRef = ref();
 const attachmentInputRef = ref(null);
+const dialogAttachmentInputRef = ref(null);
 const workflowCanvasRef = ref(null);
 const requestWorkflowMappings = ref([]);
 const workflowOptions = ref([]);
@@ -804,9 +951,15 @@ const lockWorkflowBinding = ref(false);
 const detailTab = ref("overview");
 const activeWorkflowStepCode = ref("");
 const attachmentCategory = ref("");
+const dialogAttachmentCategory = ref("");
 const attachmentFilterCategory = ref("");
 const attachmentFilterType = ref("");
 const attachmentSearchKeyword = ref("");
+const selectedDetailAttachmentId = ref(0);
+const inlineAttachmentPreviewLoading = ref(false);
+const inlineAttachmentPreviewUrl = ref("");
+const inlineAttachmentPreviewName = ref("");
+const inlineAttachmentPreviewType = ref("");
 const attachmentPreviewVisible = ref(false);
 const attachmentPreviewLoading = ref(false);
 const attachmentPreviewUrl = ref("");
@@ -814,6 +967,10 @@ const attachmentPreviewName = ref("");
 const attachmentPreviewType = ref("");
 const attachmentPreviewSource = ref(null);
 const attachmentThumbUrls = ref({});
+
+const selectedDetailAttachment = computed(() =>
+  filteredAttachments.value.find((item) => item.id === selectedDetailAttachmentId.value) || filteredAttachments.value[0] || null,
+);
 
 const statusOptions = [
   { label: "待提交", value: "待提交" },
@@ -887,7 +1044,14 @@ function resetForm() {
   Object.assign(form, createEmptyForm());
   workflowVersionOptions.value = [];
   lockWorkflowBinding.value = false;
+  editingRequestRecord.value = null;
+  dialogAttachmentCategory.value = "";
   formRef.value?.clearValidate();
+}
+
+function handleCloseDialog() {
+  dialogVisible.value = false;
+  resetForm();
 }
 
 function findWorkflowMapping(requestType) {
@@ -1440,12 +1604,26 @@ function revokeAttachmentPreviewUrl() {
   }
 }
 
+function revokeInlineAttachmentPreviewUrl() {
+  if (inlineAttachmentPreviewUrl.value) {
+    URL.revokeObjectURL(inlineAttachmentPreviewUrl.value);
+    inlineAttachmentPreviewUrl.value = "";
+  }
+}
+
 function handleAttachmentPreviewClosed() {
   revokeAttachmentPreviewUrl();
   attachmentPreviewLoading.value = false;
   attachmentPreviewName.value = "";
   attachmentPreviewType.value = "";
   attachmentPreviewSource.value = null;
+}
+
+function resetInlineAttachmentPreview() {
+  revokeInlineAttachmentPreviewUrl();
+  inlineAttachmentPreviewLoading.value = false;
+  inlineAttachmentPreviewName.value = "";
+  inlineAttachmentPreviewType.value = "";
 }
 
 function revokeAttachmentThumbUrls() {
@@ -1497,6 +1675,79 @@ async function preloadAttachmentThumbnails(items = detailRecord.value?.attachmen
   await Promise.all(targets.map((item) => loadAttachmentThumbnail(item)));
 }
 
+function findFirstAttachmentNode(node) {
+  if (!node) {
+    return null;
+  }
+  if (node.nodeType === "attachment" && node.attachment) {
+    return node.attachment;
+  }
+  for (const child of node.children || []) {
+    const target = findFirstAttachmentNode(child);
+    if (target) {
+      return target;
+    }
+  }
+  return null;
+}
+
+async function handleAttachmentTreeNodeClick(node) {
+  if (!node) {
+    return;
+  }
+  if (node.nodeType === "attachment" && node.attachment) {
+    await handleAttachmentPreview(node.attachment);
+    return;
+  }
+  const target = findFirstAttachmentNode(node);
+  if (target) {
+    await handleAttachmentPreview(target);
+  }
+}
+
+async function selectDetailAttachment(item) {
+
+  selectedDetailAttachmentId.value = item?.id || 0;
+  resetInlineAttachmentPreview();
+  if (!detailRecord.value || !item) {
+    return;
+  }
+  const previewType = getAttachmentPreviewKind(item);
+  inlineAttachmentPreviewName.value = item.originalName || "附件预览";
+  inlineAttachmentPreviewType.value = previewType;
+  if (!previewType) {
+    return;
+  }
+
+  inlineAttachmentPreviewLoading.value = true;
+  try {
+    const response = await downloadRequestAttachment(detailRecord.value.id, item.id);
+    const blob = new Blob([response.data], {
+      type: item.contentType || response.headers["content-type"] || "application/octet-stream",
+    });
+    inlineAttachmentPreviewUrl.value = URL.createObjectURL(blob);
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || "附件预览失败");
+  } finally {
+    inlineAttachmentPreviewLoading.value = false;
+  }
+}
+
+async function syncSelectedDetailAttachment() {
+  if (!detailVisible.value || detailTab.value !== "attachments") {
+    return;
+  }
+  const target = selectedDetailAttachment.value;
+  if (!target) {
+    selectedDetailAttachmentId.value = 0;
+    resetInlineAttachmentPreview();
+    return;
+  }
+  if (target.id !== selectedDetailAttachmentId.value || !inlineAttachmentPreviewName.value) {
+    await selectDetailAttachment(target);
+  }
+}
+
 async function handleAttachmentInputChange(event) {
   const file = event.target.files?.[0];
   event.target.value = "";
@@ -1514,6 +1765,32 @@ async function handleAttachmentInputChange(event) {
     attachmentCategory.value = "";
     ElMessage.success("附件上传成功");
     await loadDetail(detailRecord.value.id);
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || "附件上传失败");
+  } finally {
+    uploadingAttachment.value = false;
+  }
+}
+
+async function handleDialogAttachmentInputChange(event) {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file || !editingRequestRecord.value) {
+    return;
+  }
+  const formData = new FormData();
+  formData.append("file", file);
+  if (dialogAttachmentCategory.value?.trim()) {
+    formData.append("category", dialogAttachmentCategory.value.trim());
+  }
+  uploadingAttachment.value = true;
+  try {
+    await uploadRequestAttachment(editingRequestRecord.value.id, formData);
+    dialogAttachmentCategory.value = "";
+    const { data } = await fetchRequestDetail(editingRequestRecord.value.id);
+    editingRequestRecord.value = data.data;
+    ElMessage.success("附件上传成功");
+    await refreshDetailIfOpen(editingRequestRecord.value.id);
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || "附件上传失败");
   } finally {
@@ -1541,8 +1818,34 @@ async function handleAttachmentDelete(item) {
   }
 }
 
+async function handleDialogAttachmentDelete(item) {
+  if (!editingRequestRecord.value) {
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(`确定删除附件“${item.originalName}”吗？`, "删除附件", {
+      type: "warning",
+      confirmButtonText: "删除",
+      cancelButtonText: "取消",
+    });
+    await deleteRequestAttachment(editingRequestRecord.value.id, item.id);
+    const { data } = await fetchRequestDetail(editingRequestRecord.value.id);
+    editingRequestRecord.value = data.data;
+    ElMessage.success("附件已删除");
+    await refreshDetailIfOpen(editingRequestRecord.value.id);
+  } catch (error) {
+    if (error !== "cancel" && error !== "close") {
+      ElMessage.error(error.response?.data?.detail || "附件删除失败");
+    }
+  }
+}
+
 async function handleAttachmentPreview(item) {
-  if (!detailRecord.value) {
+  await selectDetailAttachment(item);
+}
+
+async function handleDialogAttachmentPreview(item) {
+  if (!editingRequestRecord.value) {
     return;
   }
   const previewType = getAttachmentPreviewKind(item);
@@ -1555,11 +1858,11 @@ async function handleAttachmentPreview(item) {
   attachmentPreviewLoading.value = true;
   attachmentPreviewName.value = item.originalName || "附件预览";
   attachmentPreviewType.value = previewType;
-  attachmentPreviewSource.value = item;
+  attachmentPreviewSource.value = { ...item, __caseId: editingRequestRecord.value.id };
   revokeAttachmentPreviewUrl();
 
   try {
-    const response = await downloadRequestAttachment(detailRecord.value.id, item.id);
+    const response = await downloadRequestAttachment(editingRequestRecord.value.id, item.id);
     const blob = new Blob([response.data], {
       type: item.contentType || response.headers["content-type"] || "application/octet-stream",
     });
@@ -1595,11 +1898,12 @@ async function handleDownloadAllAttachments() {
 }
 
 async function handleAttachmentDownload(item) {
-  if (!detailRecord.value) {
+  const caseId = item?.__caseId || detailRecord.value?.id;
+  if (!caseId) {
     return;
   }
   try {
-    const response = await downloadRequestAttachment(detailRecord.value.id, item.id);
+    const response = await downloadRequestAttachment(caseId, item.id);
     const blob = new Blob([response.data], {
       type: item.contentType || response.headers["content-type"] || "application/octet-stream",
     });
@@ -1616,15 +1920,33 @@ async function handleAttachmentDownload(item) {
   }
 }
 
+async function handleDialogAttachmentDownload(item) {
+  await handleAttachmentDownload({ ...item, __caseId: editingRequestRecord.value?.id });
+}
+
+function openDialogAttachmentPicker() {
+  if (!editingRequestRecord.value) {
+    ElMessage.info("请先保存表单，再上传附件");
+    return;
+  }
+  if (dialogAttachmentTypeOptions.value.length && !dialogAttachmentCategory.value?.trim()) {
+    ElMessage.warning("请先选择附件分类");
+    return;
+  }
+  dialogAttachmentInputRef.value?.click();
+}
+
 async function loadDetail(id) {
   detailLoading.value = true;
   try {
     const { data } = await fetchRequestDetail(id);
     revokeAttachmentThumbUrls();
+    resetInlineAttachmentPreview();
     detailRecord.value = data.data;
     attachmentFilterCategory.value = "";
     attachmentFilterType.value = "";
     attachmentSearchKeyword.value = "";
+    selectedDetailAttachmentId.value = data.data.attachments?.[0]?.id || 0;
     if (
       attachmentCategory.value &&
       !((data.data.taskConfig?.attachmentTypes || []).includes(attachmentCategory.value))
@@ -1636,6 +1958,7 @@ async function loadDetail(id) {
     const workflowResponse = await fetchRequestWorkflowView(id);
     detailWorkflowView.value = workflowResponse.data.data;
     await preloadAttachmentThumbnails(data.data.attachments || []);
+    await syncSelectedDetailAttachment();
     await nextTick();
     if (detailTab.value === "diagram") {
       await renderWorkflowDiagram();
@@ -1687,6 +2010,7 @@ async function openEditDialog(row) {
   editingId.value = row.id;
   try {
     const { data } = await fetchRequestDetail(row.id);
+    editingRequestRecord.value = data.data;
     Object.assign(form, {
       requestType: data.data.requestType,
       requestTitle: data.data.requestTitle || "",
@@ -1705,6 +2029,12 @@ async function openEditDialog(row) {
       workflowVersionId: data.data.workflowVersionId || null,
     });
     lockWorkflowBinding.value = Boolean(data.data.submittedAt);
+    if (
+      dialogAttachmentCategory.value &&
+      !((data.data.taskConfig?.attachmentTypes || []).includes(dialogAttachmentCategory.value))
+    ) {
+      dialogAttachmentCategory.value = "";
+    }
     applyWorkflowMapping(form.requestType, { force: !form.workflowCode });
     await loadWorkflowVersions(form.workflowCode, data.data.workflowVersionId || null);
     formRef.value?.clearValidate();
@@ -1752,14 +2082,17 @@ async function handleSubmitForm() {
     const payload = buildPayload();
     if (editingId.value) {
       await updateRequest(editingId.value, payload);
+      const { data } = await fetchRequestDetail(editingId.value);
+      editingRequestRecord.value = data.data;
       ElMessage.success("业务申请已更新");
       await refreshDetailIfOpen(editingId.value);
     } else {
-      await createRequest(payload);
-      ElMessage.success("业务申请已创建");
+      const response = await createRequest(payload);
+      editingId.value = response.data.data.id;
+      editingRequestRecord.value = response.data.data;
+      lockWorkflowBinding.value = Boolean(response.data.data.submittedAt);
+      ElMessage.success("业务申请已创建，请继续上传附件");
     }
-    dialogVisible.value = false;
-    resetForm();
     await loadData();
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || "保存失败");
@@ -1901,24 +2234,34 @@ watch(detailTab, async (value) => {
   }
   if (value === "attachments" && detailVisible.value) {
     await preloadAttachmentThumbnails(filteredAttachments.value);
+    await syncSelectedDetailAttachment();
   }
 });
 
 watch(attachmentFilterCategory, async () => {
   if (detailVisible.value && detailTab.value === "attachments") {
     await preloadAttachmentThumbnails(filteredAttachments.value);
+    await syncSelectedDetailAttachment();
   }
 });
 
 watch(attachmentFilterType, async () => {
   if (detailVisible.value && detailTab.value === "attachments") {
     await preloadAttachmentThumbnails(filteredAttachments.value);
+    await syncSelectedDetailAttachment();
   }
 });
 
 watch(attachmentSearchKeyword, async () => {
   if (detailVisible.value && detailTab.value === "attachments") {
     await preloadAttachmentThumbnails(filteredAttachments.value);
+    await syncSelectedDetailAttachment();
+  }
+});
+
+watch(dialogVisible, (value) => {
+  if (!value) {
+    resetForm();
   }
 });
 
@@ -1926,6 +2269,7 @@ watch(detailVisible, (value) => {
   if (value) {
     return;
   }
+  resetInlineAttachmentPreview();
   attachmentPreviewVisible.value = false;
   handleAttachmentPreviewClosed();
   revokeAttachmentThumbUrls();
@@ -1933,6 +2277,7 @@ watch(detailVisible, (value) => {
   detailWorkflowView.value = null;
   detailTab.value = "overview";
   activeWorkflowStepCode.value = "";
+  selectedDetailAttachmentId.value = 0;
   attachmentCategory.value = "";
   attachmentFilterCategory.value = "";
   attachmentFilterType.value = "";

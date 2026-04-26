@@ -10,12 +10,13 @@ from app.services.data_access_service import data_access_service
 
 
 class IssuerService:
-    def list_issuers(self, db: Session, page: int, page_size: int, current_user: User) -> dict:
+    def list_issuers(self, db: Session, page: int, page_size: int, current_user: User, keyword: str | None = None) -> dict:
         records, total = issuer_repository.list_issuers(
             db,
             page=page,
             page_size=page_size,
             extra_filters=data_access_service.build_code_scope_filters(Fbf.fbfbm, current_user),
+            keyword=keyword.strip() if keyword else None,
         )
         return {
             "items": [self._serialize(item) for item in records],

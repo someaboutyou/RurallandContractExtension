@@ -49,9 +49,26 @@ def has_permission(current_user: User, permission_code: str) -> bool:
     return any(item.code == permission_code for item in current_user.role.permissions)
 
 
+def has_any_permission(current_user: User, permission_codes: list[str] | tuple[str, ...]) -> bool:
+    current_codes = {item.code for item in current_user.role.permissions}
+    return any(code in current_codes for code in permission_codes)
+
+
 def require_permission(permission_code: str):
     def dependency(current_user: User = Depends(get_current_user)) -> User:
         if not has_permission(current_user, permission_code):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="当前用户无权执行此操作",
+            )
+        return current_user
+
+    return dependency
+
+
+def require_any_permission(permission_codes: list[str] | tuple[str, ...]):
+    def dependency(current_user: User = Depends(get_current_user)) -> User:
+        if not has_any_permission(current_user, permission_codes):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="当前用户无权执行此操作",

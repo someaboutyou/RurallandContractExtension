@@ -99,6 +99,7 @@ class RequestCaseAttachmentRead(BaseModel):
 
 class RequestCaseAttachmentTemplateRead(BaseModel):
     key: str
+    parentId: int | None = None
     category: str
     name: str
     required: bool = True

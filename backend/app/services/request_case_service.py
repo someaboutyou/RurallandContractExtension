@@ -760,6 +760,7 @@ class RequestCaseService:
                 template_rows.append(
                     {
                         "id": 0,
+                        "parentId": None,
                         "tenantCode": item.tenant_code,
                         "requestType": item.request_type,
                         "stageCode": stage_code,
@@ -778,6 +779,7 @@ class RequestCaseService:
             template_rows = [
                 {
                     "id": 0,
+                    "parentId": None,
                     "tenantCode": item.tenant_code,
                     "requestType": item.request_type,
                     "stageCode": stage_code,
@@ -793,28 +795,54 @@ class RequestCaseService:
             ]
 
         attachments = item.attachments or []
+        sorted_rows = sorted(
+            template_rows,
+            key=lambda row: (
+                row.get("sortOrder", 0),
+                0 if row.get("parentId") is None else 1,
+                row.get("id", 0),
+                row["name"],
+            ),
+        )
+
+        template_map: dict[int, dict] = {}
         templates: list[dict] = []
-        for index, row in enumerate(sorted(template_rows, key=lambda item: (item.get("sortOrder", 0), item.get("id", 0), item["category"])), start=1):
-            category = row["category"]
+        for index, row in enumerate(sorted_rows, start=1):
+            group_name = row.get("name") or row["category"]
             matched = [
                 attachment
                 for attachment in attachments
-                if (attachment.category or category) == category and (not stage_code or attachment.stage_code == stage_code)
+                if (attachment.category or "") == group_name and (not stage_code or attachment.stage_code == stage_code)
             ]
-            templates.append(
-                {
-                    "key": f"{stage_code}:{category}:{index}",
-                    "category": category,
-                    "name": row["name"],
-                    "required": row.get("required", True),
-                    "stageCode": stage_code,
-                    "stageName": row.get("stageName") or (task_config.name if task_config else item.current_step),
-                    "description": row.get("description"),
-                    "exampleFileName": row.get("exampleFileName"),
-                    "uploadedCount": len(matched),
-                    "satisfied": len(matched) > 0,
-                }
-            )
+            node = {
+                "key": f"{stage_code}:{row.get('id', 0)}:{index}",
+                "parentId": row.get("parentId"),
+                "category": group_name,
+                "name": group_name,
+                "required": row.get("required", True),
+                "stageCode": stage_code,
+                "stageName": row.get("stageName") or (task_config.name if task_config else item.current_step),
+                "description": row.get("description"),
+                "exampleFileName": row.get("exampleFileName"),
+                "uploadedCount": len(matched),
+                "satisfied": len(matched) > 0,
+            }
+            templates.append(node)
+            if row.get("id"):
+                template_map[row["id"]] = node
+
+        for row in reversed(sorted_rows):
+            row_id = row.get("id")
+            parent_id = row.get("parentId")
+            if not row_id or not parent_id:
+                continue
+            current = template_map.get(row_id)
+            parent = template_map.get(parent_id)
+            if current is None or parent is None:
+                continue
+            parent["uploadedCount"] += current["uploadedCount"]
+            parent["satisfied"] = parent["satisfied"] or current["satisfied"]
+            parent["required"] = parent["required"] or current["required"]
         return templates
 
     def _serialize_candidate(self, user: User) -> dict:

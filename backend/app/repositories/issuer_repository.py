@@ -1,4 +1,4 @@
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.fbf import Fbf
@@ -12,12 +12,24 @@ class IssuerRepository:
         page_size: int,
         *,
         extra_filters: list | None = None,
+        keyword: str | None = None,
     ) -> tuple[list[Fbf], int]:
         total_stmt = select(func.count(Fbf.fbfbm))
         stmt = select(Fbf).order_by(Fbf.fbfbm.desc()).offset((page - 1) * page_size).limit(page_size)
         if extra_filters:
             total_stmt = total_stmt.where(*extra_filters)
             stmt = stmt.where(*extra_filters)
+        if keyword:
+            pattern = f"%{keyword}%"
+            keyword_filter = or_(
+                Fbf.fbfbm.ilike(pattern),
+                Fbf.fbfmc.ilike(pattern),
+                Fbf.fbffzrxm.ilike(pattern),
+                Fbf.fzrzjhm.ilike(pattern),
+                Fbf.lxdh.ilike(pattern),
+            )
+            total_stmt = total_stmt.where(keyword_filter)
+            stmt = stmt.where(keyword_filter)
         total = db.scalar(total_stmt) or 0
         return list(db.scalars(stmt).all()), total
 

@@ -15,10 +15,19 @@ router = APIRouter()
 def list_issuers(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
+    keyword: str | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("issuers.view")),
 ):
-    return {"data": issuer_service.list_issuers(db, page=page, page_size=page_size, current_user=current_user)}
+    return {
+        "data": issuer_service.list_issuers(
+            db,
+            page=page,
+            page_size=page_size,
+            current_user=current_user,
+            keyword=keyword,
+        )
+    }
 
 
 @router.post("", response_model=ApiResponse[IssuerRead], status_code=status.HTTP_201_CREATED)

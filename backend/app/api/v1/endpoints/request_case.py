@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_db, require_permission
+from app.api.deps import get_current_user, get_db, require_any_permission, require_permission
 from app.models.user import User
 from app.schemas.pagination import PageResponse
 from app.schemas.request_case import (
@@ -24,6 +24,14 @@ from app.services.request_case_service import request_case_service
 
 router = APIRouter()
 
+REQUEST_MODULE_PERMISSIONS = (
+    "requests.manage",
+    "requests.submit",
+    "requests.review.village",
+    "requests.review.town",
+    "requests.review.county",
+)
+
 
 @router.get("", response_model=ApiResponse[PageResponse[RequestCaseRead]])
 def list_request_cases(
@@ -32,7 +40,7 @@ def list_request_cases(
     keyword: str | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("requests.view")),
+    current_user: User = Depends(require_any_permission(REQUEST_MODULE_PERMISSIONS)),
 ):
     return {
         "data": request_case_service.list_cases(
@@ -50,7 +58,7 @@ def list_request_cases(
 def get_request_case(
     case_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("requests.view")),
+    current_user: User = Depends(require_any_permission(REQUEST_MODULE_PERMISSIONS)),
 ):
     return {"data": request_case_service.get_case(db, case_id, current_user)}
 
@@ -59,7 +67,7 @@ def get_request_case(
 def get_request_case_workflow_view(
     case_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("requests.view")),
+    current_user: User = Depends(require_any_permission(REQUEST_MODULE_PERMISSIONS)),
 ):
     return {"data": request_case_service.get_case_workflow_view(db, case_id, current_user)}
 
@@ -70,7 +78,7 @@ def upload_request_case_attachment(
     file: UploadFile = File(...),
     category: str | None = Form(default=None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("requests.view")),
+    current_user: User = Depends(require_any_permission(REQUEST_MODULE_PERMISSIONS)),
 ):
     return {
         "data": request_case_service.upload_attachment(
@@ -88,7 +96,7 @@ def download_request_case_attachment(
     case_id: int,
     attachment_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("requests.view")),
+    current_user: User = Depends(require_any_permission(REQUEST_MODULE_PERMISSIONS)),
 ):
     attachment = request_case_service.get_attachment(db, case_id, attachment_id, current_user)
     return FileResponse(
@@ -102,7 +110,7 @@ def download_request_case_attachment(
 def download_request_case_attachments_bundle(
     case_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("requests.view")),
+    current_user: User = Depends(require_any_permission(REQUEST_MODULE_PERMISSIONS)),
 ):
     filename, content = request_case_service.build_attachment_archive(db, case_id, current_user)
     headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
@@ -114,7 +122,7 @@ def delete_request_case_attachment(
     case_id: int,
     attachment_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("requests.view")),
+    current_user: User = Depends(require_any_permission(REQUEST_MODULE_PERMISSIONS)),
 ):
     request_case_service.delete_attachment(db, case_id, attachment_id, current_user)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -153,7 +161,7 @@ def approve_request_case(
     case_id: int,
     payload: RequestCaseAuditAction,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("requests.view")),
+    current_user: User = Depends(require_any_permission(REQUEST_MODULE_PERMISSIONS)),
 ):
     return {"data": request_case_service.approve_case(db, case_id, current_user, payload.comment)}
 
@@ -163,7 +171,7 @@ def reject_request_case(
     case_id: int,
     payload: RequestCaseAuditAction,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("requests.view")),
+    current_user: User = Depends(require_any_permission(REQUEST_MODULE_PERMISSIONS)),
 ):
     return {"data": request_case_service.reject_case(db, case_id, current_user, payload.comment)}
 
