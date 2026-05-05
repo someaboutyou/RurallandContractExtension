@@ -4,10 +4,10 @@ from decimal import Decimal
 from sqlalchemy import DateTime, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, TenantScopedMixin
 
 
-class Cbht(Base):
+class Cbht(TenantScopedMixin, Base):
     __tablename__ = "cbht"
 
     cbhtbm: Mapped[str] = mapped_column(String(19), primary_key=True)

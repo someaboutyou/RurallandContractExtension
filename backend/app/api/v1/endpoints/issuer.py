@@ -16,6 +16,7 @@ def list_issuers(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
     keyword: str | None = Query(default=None),
+    region_code: str | None = Query(default=None, alias="regionCode"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("issuers.view")),
 ):
@@ -26,6 +27,7 @@ def list_issuers(
             page_size=page_size,
             current_user=current_user,
             keyword=keyword,
+            region_code=region_code,
         )
     }
 

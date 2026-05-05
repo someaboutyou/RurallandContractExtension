@@ -13,12 +13,17 @@ class IssuerRepository:
         *,
         extra_filters: list | None = None,
         keyword: str | None = None,
+        region_code: str | None = None,
     ) -> tuple[list[Fbf], int]:
         total_stmt = select(func.count(Fbf.fbfbm))
         stmt = select(Fbf).order_by(Fbf.fbfbm.desc()).offset((page - 1) * page_size).limit(page_size)
         if extra_filters:
             total_stmt = total_stmt.where(*extra_filters)
             stmt = stmt.where(*extra_filters)
+        if region_code:
+            condition = Fbf.region_code.like(f"{region_code}%")
+            total_stmt = total_stmt.where(condition)
+            stmt = stmt.where(condition)
         if keyword:
             pattern = f"%{keyword}%"
             keyword_filter = or_(

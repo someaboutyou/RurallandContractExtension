@@ -14,6 +14,7 @@ class UserRead(BaseModel):
     dataScope: str
     regionId: int
     region: str
+    regionPermissions: list[dict] = Field(default_factory=list)
     status: str
 
 
@@ -23,7 +24,7 @@ class UserCreate(BaseModel):
     password: str = Field(min_length=8, max_length=100)
     mobile: str | None = Field(default=None, max_length=32)
     roleId: int
-    regionId: int
+    regionCodes: list[str] = Field(default_factory=list)
     status: str = Field(default="active", max_length=32)
 
 
@@ -32,7 +33,7 @@ class UserUpdate(BaseModel):
     realName: str = Field(min_length=2, max_length=100)
     mobile: str | None = Field(default=None, max_length=32)
     roleId: int
-    regionId: int
+    regionCodes: list[str] = Field(default_factory=list)
     status: str = Field(default="active", max_length=32)
 
 

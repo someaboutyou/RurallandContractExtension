@@ -15,13 +15,21 @@
             class="gis-floating-tool"
             :class="{ 'is-active': activeTool === tool.key }"
             @click="toggleTool(tool.key)"
+            :title="tool.label"
+            :aria-label="tool.label"
           >
-            <span class="gis-tool-icon">{{ tool.short }}</span>
-            <span>{{ tool.label }}</span>
+            <span class="gis-tool-label">{{ tool.label }}</span>
+            <span class="gis-tool-icon" aria-hidden="true" v-html="tool.icon"></span>
           </button>
-          <button type="button" class="gis-floating-tool gis-floating-tool--ghost" @click="resetView">
-            <span class="gis-tool-icon">R</span>
-            <span>{{ ui.reset }}</span>
+          <button
+            type="button"
+            class="gis-floating-tool gis-floating-tool--ghost"
+            @click="resetView"
+            :title="resetTool.label"
+            :aria-label="resetTool.label"
+          >
+            <span class="gis-tool-label">{{ resetTool.label }}</span>
+            <span class="gis-tool-icon" aria-hidden="true" v-html="resetTool.icon"></span>
           </button>
         </div>
 
@@ -264,11 +272,36 @@ const ui = {
 };
 
 const tools = [
-  { key: "layers", label: "\u56fe\u5c42", short: "L" },
-  { key: "measure", label: "\u91cf\u6d4b", short: "M" },
-  { key: "label", label: "\u6807\u6ce8", short: "A" },
-  { key: "query", label: "\u67e5\u8be2", short: "Q" },
+  {
+    key: "layers",
+    label: "\u56fe\u5c42",
+    icon:
+      "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3 3.5 7.5 12 12l8.5-4.5L12 3Z'/><path d='M3.5 12 12 16.5 20.5 12'/><path d='M3.5 16.5 12 21l8.5-4.5'/></svg>",
+  },
+  {
+    key: "measure",
+    label: "\u91cf\u6d4b",
+    icon:
+      "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M4 16 16 4'/><path d='M14 4h6v6'/><path d='M6.5 13.5 9 16'/><path d='M10 10 12.5 12.5'/><path d='M13.5 6.5 16 9'/></svg>",
+  },
+  {
+    key: "label",
+    label: "\u6807\u6ce8",
+    icon:
+      "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M12 21s6-5.2 6-10a6 6 0 1 0-12 0c0 4.8 6 10 6 10Z'/><circle cx='12' cy='11' r='2.2' fill='currentColor' stroke='none'/></svg>",
+  },
+  {
+    key: "query",
+    label: "\u67e5\u8be2",
+    icon:
+      "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='5.5'/><path d='m16 16 4.2 4.2'/></svg>",
+  },
 ];
+
+const resetTool = {
+  label: ui.reset,
+  icon: "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6v6h-6'/><path d='M20 12a8 8 0 1 1-2.34-5.66L20 8.7'/></svg>",
+};
 
 const mapRootRef = ref(null);
 const scaleLineRef = ref(null);
@@ -276,7 +309,7 @@ const mapRef = shallowRef(null);
 
 const activeTool = ref("layers");
 const activeBasemap = ref("image");
-const collapseLayerPanel = ref(false);
+const collapseLayerPanel = ref(true);
 const measureMode = ref("distance");
 const measureResult = ref(`0 ${ui.meters}`);
 const queryKeyword = ref("");
@@ -384,8 +417,8 @@ function ensurePrimaryGeoServerLayer(rows) {
   if (primaryLayer) {
     primaryLayer.visible = true;
     primaryLayer.defaultVisible = true;
-    primaryLayer.name = primaryLayer.name || "GeoServer地块图层";
-    primaryLayer.groupName = primaryLayer.groupName || "GeoServer图层";
+    primaryLayer.name = "GeoServer地块图层";
+    primaryLayer.groupName = "GeoServer图层";
     return normalizedRows;
   }
 
@@ -676,7 +709,7 @@ function createWmsLayer(config) {
       crossOrigin: "anonymous",
     }),
     minZoom: config.serviceConfigs[0]?.minZoom ?? 0,
-    maxZoom: config.serviceConfigs[0]?.maxZoom ?? 24,
+    maxZoom: config.serviceConfigs[0]?.maxZoom ?? 19,
     visible: config.visible,
   });
 }
@@ -706,11 +739,11 @@ async function createWmtsLayer(config) {
       projection: projection || void 0,
       requestEncoding: "KVP",
       tileGrid,
-      wrapX: true,
+      wrapX: false,
       crossOrigin: "anonymous",
     }),
     minZoom: config.serviceConfigs[0]?.minZoom ?? 0,
-    maxZoom: config.serviceConfigs[0]?.maxZoom ?? 24,
+    maxZoom: config.serviceConfigs[0]?.maxZoom ?? 19,
     visible: config.visible,
   });
 }
@@ -979,9 +1012,11 @@ async function buildMap() {
   basemapLayerInstances.clear();
   layerInstances.clear();
 
-  for (const item of basemapRows.value) {
-    const layer = createBasemapLayer(item);
-    basemapLayerInstances.set(item.key, layer);
+  const activeBasemapConfig =
+    basemapRows.value.find((item) => item.key === activeBasemap.value) || basemapRows.value[0];
+  if (activeBasemapConfig) {
+    const layer = createBasemapLayer(activeBasemapConfig);
+    basemapLayerInstances.set(activeBasemapConfig.key, layer);
   }
   for (const item of layerRows.value) {
     try {
@@ -1001,14 +1036,13 @@ async function buildMap() {
   });
 
   mapRef.value = new OlMap({
-    target: mapRootRef.value,
     layers: [...basemapLayerInstances.values(), ...layerInstances.values()],
     controls: [scaleControl],
     view: new View({
       center: fromLonLat([120.12345, 30.6789]),
       zoom: 15,
       minZoom: 5,
-      maxZoom: 22,
+      maxZoom: 19,
     }),
   });
 
@@ -1027,9 +1061,21 @@ async function buildMap() {
 }
 
 function switchBasemap() {
-  basemapLayerInstances.forEach((layer, key) => {
-    layer.setVisible(key === activeBasemap.value);
+  if (!mapRef.value) return;
+  basemapLayerInstances.forEach((layer) => {
+    mapRef.value.removeLayer(layer);
   });
+  let newLayer = basemapLayerInstances.get(activeBasemap.value);
+  if (!newLayer) {
+    const config = basemapRows.value.find((item) => item.key === activeBasemap.value);
+    if (config) {
+      newLayer = createBasemapLayer(config);
+      basemapLayerInstances.set(activeBasemap.value, newLayer);
+    }
+  }
+  if (newLayer) {
+    mapRef.value.addLayer(newLayer);
+  }
 }
 
 function syncLayerVisibility(layer) {
@@ -1214,6 +1260,7 @@ onMounted(async () => {
   await loadLayerConfigs();
   await buildMap();
   await fitToPrimaryLayer();
+  mapRef.value.setTarget(mapRootRef.value);
 });
 
 onBeforeUnmount(() => {

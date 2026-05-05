@@ -20,3 +20,8 @@ class User(Base, TimestampMixin):
     tenant = relationship("Tenant", back_populates="users")
     role = relationship("Role", back_populates="users")
     region = relationship("Region", back_populates="users")
+    region_permissions = relationship(
+        "UserRegionPermission",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )

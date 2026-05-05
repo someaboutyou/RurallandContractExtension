@@ -1,5 +1,5 @@
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models.user import User
 
@@ -38,7 +38,7 @@ class UserRepository:
             count_stmt = count_stmt.where(User.status == status)
 
         stmt = (
-            stmt.options(joinedload(User.tenant), joinedload(User.role), joinedload(User.region))
+            stmt.options(joinedload(User.tenant), joinedload(User.role), joinedload(User.region), selectinload(User.region_permissions))
             .order_by(User.id.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
@@ -48,11 +48,21 @@ class UserRepository:
         return items, total
 
     def get_user(self, db: Session, user_id: int) -> User | None:
-        stmt = select(User).options(joinedload(User.tenant), joinedload(User.role), joinedload(User.region)).where(User.id == user_id)
+        stmt = select(User).options(
+            joinedload(User.tenant),
+            joinedload(User.role),
+            joinedload(User.region),
+            selectinload(User.region_permissions),
+        ).where(User.id == user_id)
         return db.scalars(stmt).unique().first()
 
     def get_user_by_username(self, db: Session, username: str) -> User | None:
-        stmt = select(User).options(joinedload(User.tenant), joinedload(User.role), joinedload(User.region)).where(User.username == username)
+        stmt = select(User).options(
+            joinedload(User.tenant),
+            joinedload(User.role),
+            joinedload(User.region),
+            selectinload(User.region_permissions),
+        ).where(User.username == username)
         return db.scalars(stmt).first()
 
     def add_user(self, db: Session, user: User) -> User:

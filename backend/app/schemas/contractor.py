@@ -36,6 +36,8 @@ class ContractorBase(BaseModel):
     publicNoticeRecorder: str | None = Field(default=None, max_length=50)
     publicNoticeReviewDate: str | None = None
     publicNoticeReviewer: str | None = Field(default=None, max_length=50)
+    groupRegionCode: str | None = Field(default=None, max_length=32)
+    groupRegionName: str | None = Field(default=None, max_length=120)
     familyMembers: list[FamilyMemberCreate] = []
 
 
@@ -64,4 +66,6 @@ class ContractorRead(BaseModel):
     publicNoticeRecorder: str | None = None
     publicNoticeReviewDate: str | None = None
     publicNoticeReviewer: str | None = None
+    groupRegionCode: str | None = None
+    groupRegionName: str | None = None
     familyMembers: list[FamilyMemberRead]

@@ -1,49 +1,134 @@
 <template>
   <section class="panel table-page">
     <div class="toolbar">
-      <div class="panel-title">承包方管理</div>
-      <div class="toolbar-actions">
+      <div>
+        <div class="panel-title">承包方管理</div>
+      </div>
+      <div class="toolbar-actions toolbar-wrap">
+        <el-input
+          v-model="filters.name"
+          clearable
+          placeholder="承包方名称"
+          style="width: 160px"
+          @keyup.enter="handleSearch"
+          @clear="handleSearch"
+        />
+        <el-input
+          v-model="filters.memberName"
+          clearable
+          placeholder="家庭成员名称"
+          style="width: 160px"
+          @keyup.enter="handleSearch"
+          @clear="handleSearch"
+        />
+        <el-input
+          v-model="filters.idNo"
+          clearable
+          placeholder="证件号码"
+          style="width: 180px"
+          @keyup.enter="handleSearch"
+          @clear="handleSearch"
+        />
+        <el-input
+          v-model="filters.address"
+          clearable
+          placeholder="承包方地址"
+          style="width: 180px"
+          @keyup.enter="handleSearch"
+          @clear="handleSearch"
+        />
+        <el-button plain @click="handleSearch">查询</el-button>
+        <el-button plain @click="resetFilters">重置</el-button>
         <el-button plain @click="loadData">刷新</el-button>
         <el-button v-if="canManage" type="success" @click="openCreateDialog">新增承包方</el-button>
       </div>
     </div>
 
-    <div class="table-shell">
-      <div class="table-scroll">
-        <el-table v-loading="loading" :data="rows" border>
-          <el-table-column prop="code" label="承包方代码" min-width="180" />
-          <el-table-column prop="name" label="承包方名称" min-width="180" />
-          <el-table-column prop="typeCode" label="承包方类型" min-width="120">
-            <template #default="{ row }">{{ contractorTypeLabel(row.typeCode) }}</template>
-          </el-table-column>
-          <el-table-column prop="mobile" label="联系电话" min-width="140" />
-          <el-table-column prop="address" label="承包方地址" min-width="260" />
-          <el-table-column prop="memberCount" label="家庭成员数" min-width="110" />
-          <el-table-column prop="surveyorName" label="调查员" min-width="120" />
-          <el-table-column prop="surveyDate" label="调查日期" min-width="120" />
-          <el-table-column v-if="canManage" label="操作" fixed="right" min-width="160">
-            <template #default="{ row }">
-              <div class="table-actions">
-                <el-button link type="primary" @click="openEditDialog(row)">编辑</el-button>
-                <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
-              </div>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
-    </div>
+    <div class="contractor-workspace">
+      <div class="contractor-table-area">
+        <div class="table-shell">
+          <div class="table-scroll">
+            <el-table v-loading="loading" :data="rows" border>
+              <el-table-column prop="code" label="承包方代码" min-width="180" />
+              <el-table-column prop="name" label="承包方名称" min-width="180" />
+              <el-table-column prop="typeCode" label="承包方类型" min-width="120">
+                <template #default="{ row }">{{ contractorTypeLabel(row.typeCode) }}</template>
+              </el-table-column>
+              <el-table-column prop="mobile" label="联系电话" min-width="140" />
+              <el-table-column prop="groupRegionName" label="所属组" min-width="180" show-overflow-tooltip />
+              <el-table-column prop="address" label="承包方地址" min-width="260" />
+              <el-table-column prop="memberCount" label="家庭成员数" min-width="110" />
+              <el-table-column prop="surveyorName" label="调查员" min-width="120" />
+              <el-table-column prop="surveyDate" label="调查日期" min-width="120" />
+              <el-table-column v-if="canManage" label="操作" fixed="right" min-width="160">
+                <template #default="{ row }">
+                  <div class="table-actions">
+                    <el-button link type="primary" @click="openEditDialog(row)">编辑</el-button>
+                    <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
+                  </div>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
 
-    <div class="pagination-wrap">
-      <el-pagination
-        :current-page="page"
-        :page-size="pageSize"
-        :page-sizes="[10, 20, 50, 100]"
-        :total="total"
-        background
-        layout="total, sizes, prev, pager, next, jumper"
-        @current-change="handlePageChange"
-        @size-change="handlePageSizeChange"
-      />
+        <div class="pagination-wrap">
+          <el-pagination
+            :current-page="page"
+            :page-size="pageSize"
+            :page-sizes="[10, 20, 50, 100]"
+            :total="total"
+            background
+            layout="total, sizes, prev, pager, next, jumper"
+            @current-change="handlePageChange"
+            @size-change="handlePageSizeChange"
+          />
+        </div>
+      </div>
+
+      <aside class="contractor-region-panel">
+        <div class="region-panel-head">
+          <div>
+            <div class="region-panel-title">区域筛选</div>
+            <div class="region-panel-subtitle">{{ activeRegionLabel || "全部区域" }}</div>
+          </div>
+          <el-button link type="primary" @click="clearRegionFilter">全部</el-button>
+        </div>
+        <el-input
+          v-model="regionNameKeyword"
+          class="region-filter-search"
+          clearable
+          placeholder="按区域名称搜索"
+        />
+        <el-tree
+          class="region-filter-tree"
+          :data="displayRegionTree"
+          node-key="value"
+          highlight-current
+          :current-node-key="activeRegionCode"
+          :props="regionTreeProps"
+          :expand-on-click-node="false"
+          :default-expanded-keys="regionDefaultExpandedKeys"
+        >
+          <template #default="{ node, data }">
+            <div class="region-tree-node">
+              <button class="region-tree-label" type="button" @click.stop="handleRegionNodeClick(data)">
+                {{ node.label }}
+              </button>
+              <el-dropdown trigger="click" @command="(command) => handleRegionAction(command, data)">
+                <el-button link type="primary" class="region-tree-action" @click.stop>操作</el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="printSurveyForms">批量打印调查表</el-dropdown-item>
+                    <el-dropdown-item command="printRoster">打印承包方清册</el-dropdown-item>
+                    <el-dropdown-item command="exportSurveyForms">导出调查表信息</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
+          </template>
+        </el-tree>
+      </aside>
     </div>
   </section>
 
@@ -51,7 +136,8 @@
     v-model="dialogVisible"
     :title="editingCode ? '编辑承包方' : '新增承包方'"
     class="contractor-dialog"
-    width="980px"
+    width="92vw"
+    top="3vh"
     destroy-on-close
   >
     <el-tabs v-model="activeMainTab" class="compact-dialog-tabs">
@@ -70,6 +156,19 @@
             </el-form-item>
             <el-form-item label="承包方名称" prop="name">
               <el-input v-model="form.name" placeholder="请输入承包方名称" />
+            </el-form-item>
+            <el-form-item label="所属组" prop="groupRegionCode">
+              <el-tree-select
+                v-model="form.groupRegionCode"
+                :data="regionTree"
+                check-strictly
+                clearable
+                filterable
+                node-key="value"
+                placeholder="请选择所属组"
+                :props="regionTreeProps"
+                @change="handleGroupRegionChange"
+              />
             </el-form-item>
             <el-form-item label="证件类型" prop="idType">
               <el-select v-model="form.idType" placeholder="请选择证件类型">
@@ -94,6 +193,7 @@
             </el-form-item>
             <el-form-item label="调查日期" prop="surveyDate">
               <el-date-picker
+                class="form-date-picker"
                 v-model="form.surveyDate"
                 type="date"
                 format="YYYY-MM-DD"
@@ -115,6 +215,7 @@
             </el-form-item>
             <el-form-item label="公示审核日期" prop="publicNoticeReviewDate">
               <el-date-picker
+                class="form-date-picker"
                 v-model="form.publicNoticeReviewDate"
                 type="date"
                 format="YYYY-MM-DD"
@@ -218,6 +319,69 @@
           </div>
         </template>
       </el-tab-pane>
+
+      <el-tab-pane :disabled="!editingCode" label="地块信息" name="parcels">
+        <div v-if="parcelsTabActivated" class="parcels-map-area">
+          <div v-if="parcelsLoading" class="parcels-status">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            <span>加载地块数据...</span>
+          </div>
+          <div v-else-if="parcelsError" class="parcels-status">
+            <span>{{ parcelsError }}</span>
+            <el-button size="small" @click="loadParcelData">重试</el-button>
+          </div>
+          <div v-else-if="parcelData.length === 0" class="parcels-status">
+            <span>该承包方暂无关联地块信息。</span>
+          </div>
+          <template v-else>
+            <div class="parcels-layout">
+              <div class="parcels-map-container">
+                <div ref="parcelMapRootRef" class="parcels-ol-map"></div>
+                <div class="parcels-map-basemap">
+                  <el-segmented
+                    v-model="activeBasemap"
+                    :options="basemapOptions"
+                    size="small"
+                    @change="switchBasemap"
+                  />
+                </div>
+              </div>
+              <div class="parcels-info-panel">
+                <div class="parcels-info-title">地块列表 ({{ parcelData.length }})</div>
+                <div class="parcels-info-list">
+                  <div
+                    v-for="item in parcelData"
+                    :key="item.dkbm"
+                    class="parcels-info-item"
+                    :class="{ 'parcels-info-item--flash': flashDkbm === item.dkbm }"
+                    @click="focusParcel(item)"
+                  >
+                    <div class="parcels-info-dkbm">{{ item.dkbm }}</div>
+                    <div class="parcels-info-dkmc">{{ item.dkmc || '--' }}</div>
+                    <div class="parcels-info-meta">
+                      <span v-if="item.htmj">合同面积: {{ item.htmj }}m²</span>
+                      <span v-if="item.scmj">实测面积: {{ item.scmj }}m²</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="parcels-detail-panel">
+                <div class="parcels-detail-title">地块详情</div>
+                <div v-if="!selectedParcel" class="parcels-detail-empty">点击左侧地块查看详细信息</div>
+                <div v-else class="parcels-detail-list">
+                  <div v-for="f in parcelDetailFields" :key="f.key" class="parcels-detail-row">
+                    <div class="parcels-detail-label">{{ f.label }}</div>
+                    <div class="parcels-detail-value">{{ selectedParcel[f.key] || '--' }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+        <div v-else class="parcels-status">
+          <el-button type="primary" @click="activateParcelsTab">加载地块信息</el-button>
+        </div>
+      </el-tab-pane>
     </el-tabs>
 
     <template #footer>
@@ -228,8 +392,9 @@
 </template>
 
 <script setup>
-import { computed, nextTick, reactive, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { Loading } from "@element-plus/icons-vue";
 
 import {
   createContractor,
@@ -238,7 +403,10 @@ import {
   fetchContractors,
   updateContractor,
 } from "../api/contractor";
+import { fetchContractorParcels } from "../api/landParcel";
+import { fetchRegionTree } from "../api/region";
 import { useAuthStore } from "../stores/auth";
+import { useDialogMap } from "../composables/useDialogMap";
 import { validateChinaId, validateMobile, validatePostcode } from "../utils/validators";
 
 const authStore = useAuthStore();
@@ -252,12 +420,25 @@ const rows = ref([]);
 const total = ref(0);
 const page = ref(1);
 const pageSize = ref(20);
-const keyword = ref("");
-const typeFilter = ref("");
+const filters = reactive({
+  name: "",
+  memberName: "",
+  idNo: "",
+  address: "",
+});
+const regionTree = ref([]);
+const filterRegionTree = ref([]);
+const regionNameKeyword = ref("");
+const activeRegionCode = ref("");
+const activeRegionLabel = ref("");
 const formRef = ref();
 const activeMainTab = ref("base");
 const activeMemberTab = ref("member-1");
 let memberTabSeed = 0;
+const regionTreeProps = {
+  label: "label",
+  children: "children",
+};
 
 const createMemberTabKey = () => {
   memberTabSeed += 1;
@@ -292,10 +473,93 @@ const createEmptyForm = () => ({
   publicNoticeRecorder: "",
   publicNoticeReviewDate: "",
   publicNoticeReviewer: "",
+  groupRegionCode: "",
+  groupRegionName: "",
   familyMembers: [],
 });
 
 const form = reactive(createEmptyForm());
+
+// --- Parcels tab state ---
+const parcelsTabActivated = ref(false);
+const parcelsLoading = ref(false);
+const parcelsError = ref("");
+const parcelData = ref([]);
+const parcelMapRootRef = ref(null);
+
+const {
+  mapReady,
+  activeBasemap,
+  basemapOptions,
+  selectedParcelDkbm,
+  initMap,
+  switchBasemap,
+  loadParcels,
+  fitToParcels,
+  focusParcel: focusParcelOnMap,
+  updateMapSize,
+  destroyMap,
+  clearSelection: clearMapSelection,
+} = useDialogMap(parcelMapRootRef);
+
+const flashDkbm = ref(null);
+const selectedParcel = ref(null);
+
+const parcelDetailFields = [
+  { key: "dkbm", label: "地块编码" },
+  { key: "dkmc", label: "地块名称" },
+  { key: "htmj", label: "合同面积(m²)" },
+  { key: "scmj", label: "实测面积(m²)" },
+  { key: "syqxz", label: "所有权性质" },
+  { key: "dklb", label: "地块类别" },
+  { key: "dkdz", label: "地块地址" },
+];
+
+function triggerFlash(dkbm) {
+  flashDkbm.value = dkbm;
+  setTimeout(() => {
+    if (flashDkbm.value === dkbm) {
+      flashDkbm.value = null;
+    }
+  }, 2800);
+}
+
+async function activateParcelsTab() {
+  parcelsTabActivated.value = true;
+  await nextTick();
+  await loadParcelData();
+  await nextTick();
+  if (parcelData.value.length > 0) {
+    await initMap();
+    setTimeout(() => updateMapSize(), 100);
+  }
+}
+
+async function loadParcelData() {
+  if (!editingCode.value) return;
+  parcelsLoading.value = true;
+  parcelsError.value = "";
+  try {
+    const { data } = await fetchContractorParcels(editingCode.value);
+    parcelData.value = data.data || [];
+    if (mapReady.value) {
+      loadParcels(parcelData.value);
+      if (parcelData.value.length > 0) {
+        setTimeout(() => fitToParcels(), 300);
+      }
+    }
+  } catch (error) {
+    parcelsError.value = error.response?.data?.detail || "加载地块信息失败";
+  } finally {
+    parcelsLoading.value = false;
+  }
+}
+
+function focusParcel(item) {
+  selectedParcel.value = item;
+  triggerFlash(item.dkbm);
+  focusParcelOnMap(item.dkbm);
+}
 
 const validateMainIdNo = (_rule, value, callback) => {
   if (!value) {
@@ -342,6 +606,7 @@ const rules = {
   address: [{ required: true, message: "请输入承包方地址", trigger: "blur" }],
   postcode: [{ validator: validatePostcodeField, trigger: "blur" }],
   mobile: [{ validator: validateMobileField, trigger: "blur" }],
+  groupRegionCode: [{ required: true, message: "请选择所属组", trigger: "change" }],
   surveyorName: [{ required: true, message: "请输入调查员姓名", trigger: "blur" }],
 };
 
@@ -355,6 +620,34 @@ watch(
   },
 );
 
+watch(activeMainTab, (tabName) => {
+  if (tabName === "parcels" && !parcelsTabActivated.value) {
+    activateParcelsTab();
+  }
+});
+
+watch(mapReady, (ready) => {
+  if (ready && parcelData.value.length > 0) {
+    loadParcels(parcelData.value);
+    setTimeout(() => fitToParcels(), 300);
+  }
+});
+
+watch(dialogVisible, (visible) => {
+  if (!visible) {
+    parcelsTabActivated.value = false;
+    parcelsError.value = "";
+    parcelData.value = [];
+    selectedParcel.value = null;
+    flashDkbm.value = null;
+    destroyMap();
+  }
+});
+
+onBeforeUnmount(() => {
+  destroyMap();
+});
+
 function resetForm() {
   Object.assign(form, createEmptyForm());
   activeMainTab.value = "base";
@@ -364,6 +657,77 @@ function resetForm() {
 
 function contractorTypeLabel(code) {
   return { 1: "农户", 2: "个人", 3: "单位" }[code] || code;
+}
+
+function normalizeRegionTree(nodes = []) {
+  return nodes.map((item) => ({
+    ...item,
+    value: item.code,
+    label: item.name,
+    children: normalizeRegionTree(item.children || []),
+  }));
+}
+
+function filterRegionNodesByName(nodes, keyword) {
+  if (!keyword) {
+    return nodes;
+  }
+  return nodes
+    .map((item) => {
+      const children = filterRegionNodesByName(item.children || [], keyword);
+      if (item.label.includes(keyword) || children.length) {
+        return { ...item, children };
+      }
+      return null;
+    })
+    .filter(Boolean);
+}
+
+function collectDefaultExpandedRegionKeys(nodes, expandTownLevel = false) {
+  return nodes.flatMap((item) => {
+    const children = item.children || [];
+    const childKeys = collectDefaultExpandedRegionKeys(children, expandTownLevel);
+    if (!children.length || (!expandTownLevel && item.level === "town")) {
+      return childKeys;
+    }
+    return [item.value, ...childKeys];
+  });
+}
+
+const displayRegionTree = computed(() => {
+  const keyword = regionNameKeyword.value.trim();
+  return filterRegionNodesByName(filterRegionTree.value, keyword);
+});
+
+const regionDefaultExpandedKeys = computed(() =>
+  collectDefaultExpandedRegionKeys(displayRegionTree.value, Boolean(regionNameKeyword.value.trim())),
+);
+
+function findRegionNode(nodes, code) {
+  for (const item of nodes) {
+    if (item.value === code) {
+      return item;
+    }
+    const matched = findRegionNode(item.children || [], code);
+    if (matched) {
+      return matched;
+    }
+  }
+  return null;
+}
+
+function handleGroupRegionChange(code) {
+  const node = findRegionNode(regionTree.value, code);
+  form.groupRegionName = node?.label || "";
+}
+
+async function loadRegionTree() {
+  const [{ data: groupTree }, { data: villageTree }] = await Promise.all([
+    fetchRegionTree(undefined, { includeGroups: true }),
+    fetchRegionTree("village"),
+  ]);
+  regionTree.value = normalizeRegionTree(groupTree.data || []);
+  filterRegionTree.value = normalizeRegionTree(villageTree.data || []);
 }
 
 function appendFamilyMember() {
@@ -392,8 +756,11 @@ async function loadData() {
     const { data } = await fetchContractors({
       page: page.value,
       page_size: pageSize.value,
-      keyword: keyword.value.trim() || undefined,
-      typeCode: typeFilter.value || undefined,
+      name: filters.name.trim() || undefined,
+      memberName: filters.memberName.trim() || undefined,
+      idNo: filters.idNo.trim() || undefined,
+      address: filters.address.trim() || undefined,
+      regionCode: activeRegionCode.value || undefined,
     });
     rows.value = data.data.items;
     total.value = data.data.total;
@@ -408,9 +775,32 @@ function handleSearch() {
 }
 
 function resetFilters() {
-  keyword.value = "";
-  typeFilter.value = "";
+  filters.name = "";
+  filters.memberName = "";
+  filters.idNo = "";
+  filters.address = "";
   handleSearch();
+}
+
+function handleRegionNodeClick(data) {
+  activeRegionCode.value = data.value;
+  activeRegionLabel.value = data.label;
+  handleSearch();
+}
+
+function clearRegionFilter() {
+  activeRegionCode.value = "";
+  activeRegionLabel.value = "";
+  handleSearch();
+}
+
+function handleRegionAction(command, data) {
+  const actionMap = {
+    printSurveyForms: "批量打印调查表",
+    printRoster: "打印承包方清册",
+    exportSurveyForms: "导出调查表信息",
+  };
+  ElMessage.info(`${data.label}：${actionMap[command]}功能已预留`);
 }
 
 function handlePageChange(value) {
@@ -453,6 +843,8 @@ async function openEditDialog(row) {
       publicNoticeRecorder: detail.publicNoticeRecorder || "",
       publicNoticeReviewDate: detail.publicNoticeReviewDate || "",
       publicNoticeReviewer: detail.publicNoticeReviewer || "",
+      groupRegionCode: detail.groupRegionCode || "",
+      groupRegionName: detail.groupRegionName || "",
       familyMembers: detail.familyMembers?.length
         ? detail.familyMembers.map((item) => ({ ...item, _tabKey: createMemberTabKey() }))
         : [],
@@ -517,6 +909,8 @@ async function handleSubmit() {
     publicNoticeRecorder: form.publicNoticeRecorder.trim() || null,
     publicNoticeReviewDate: form.publicNoticeReviewDate || null,
     publicNoticeReviewer: form.publicNoticeReviewer.trim() || null,
+    groupRegionCode: form.groupRegionCode || null,
+    groupRegionName: form.groupRegionName || null,
     familyMembers:
       form.typeCode === "1"
         ? form.familyMembers.map((item) => ({
@@ -571,5 +965,6 @@ async function handleDelete(row) {
   }
 }
 
+loadRegionTree();
 loadData();
 </script>

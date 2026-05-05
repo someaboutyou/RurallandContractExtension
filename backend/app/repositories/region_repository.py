@@ -11,7 +11,7 @@ class RegionRepository:
         level: str | None = None,
         tenant_code: str | None = None,
     ) -> list[Region]:
-        stmt = select(Region).order_by(Region.code)
+        stmt = select(Region).order_by(Region.sort_order.asc(), Region.code.asc())
         if level:
             stmt = stmt.where(Region.level == level)
         if tenant_code:
@@ -20,6 +20,9 @@ class RegionRepository:
 
     def get_region(self, db: Session, region_id: int) -> Region | None:
         return db.get(Region, region_id)
+
+    def get_region_by_code(self, db: Session, code: str) -> Region | None:
+        return db.scalar(select(Region).where(Region.code == code))
 
 
 region_repository = RegionRepository()

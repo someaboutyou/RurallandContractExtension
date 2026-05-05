@@ -9,9 +9,12 @@ const DashboardView = () => import("../views/DashboardView.vue");
 const DataCenterView = () => import("../views/DataCenterView.vue");
 const ArchiveView = () => import("../views/ArchiveView.vue");
 const LayerManagementView = () => import("../views/LayerManagementView.vue");
+const RegionManagementView = () => import("../views/RegionManagementView.vue");
 const UserView = () => import("../views/UserView.vue");
 const IssuerView = () => import("../views/IssuerView.vue");
 const ContractorView = () => import("../views/ContractorView.vue");
+const DataImportView = () => import("../views/DataImportView.vue");
+const SurveyView = () => import("../views/SurveyView.vue");
 const GisView = () => import("../views/GisView.vue");
 const RequestView = () => import("../views/RequestView.vue");
 const RequestAttachmentTemplateView = () => import("../views/RequestAttachmentTemplateView.vue");
@@ -29,6 +32,8 @@ const appChildren = [
   { path: "gis", name: "gis", component: GisView, meta: { requiresAuth: true, permissions: ["dashboard.view"] } },
   { path: "issuers", name: "issuers", component: IssuerView, meta: { requiresAuth: true, permissions: ["issuers.view"] } },
   { path: "contractors", name: "contractors", component: ContractorView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
+  { path: "data-imports", name: "data-imports", component: DataImportView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
+  { path: "surveys", name: "surveys", component: SurveyView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
   { path: "requests", name: "requests", component: RequestView, meta: { requiresAuth: true, permissions: REQUEST_MODULE_PERMISSIONS } },
   {
     path: "data-center",
@@ -44,6 +49,7 @@ const appChildren = [
     meta: { requiresAuth: true, permissions: [...REQUEST_MODULE_PERMISSIONS, "users.view", "roles.view"] },
   },
   { path: "users", name: "users", component: UserView, meta: { requiresAuth: true, permissions: ["users.view", "roles.view"] } },
+  { path: "regions", name: "regions", component: RegionManagementView, meta: { requiresAuth: true, permissions: ["regions.view", "regions.manage"] } },
   { path: "workflows", name: "workflows", component: WorkflowDesignerView, meta: { requiresAuth: true, permissions: ["roles.manage"] } },
   { path: "layers", name: "layers", component: LayerManagementView, meta: { requiresAuth: true, permissions: ["layers.manage"] } },
   {

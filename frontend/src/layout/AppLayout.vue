@@ -99,16 +99,18 @@ const navItems = [
     key: "business",
     label: "业务办理",
     children: [
-      { to: "/issuers", label: "发包方管理", permissions: ["issuers.view"] },
-      { to: "/contractors", label: "承包方管理", permissions: ["contractors.view"] },
+      { to: "/surveys", label: "串户调查成果", permissions: ["contractors.view"] },
       { to: "/requests", label: "业务申请", permissions: REQUEST_MODULE_PERMISSIONS },
     ],
   },
   {
     key: "data-center",
     label: "数据中心",
-    to: "/data-center",
-    permissions: ["issuers.view", "contractors.view", ...REQUEST_MODULE_PERMISSIONS],
+    children: [
+      { to: "/issuers", label: "发包方管理", permissions: ["issuers.view"] },
+      { to: "/contractors", label: "承包方管理", permissions: ["contractors.view"] },
+      { to: "/data-imports", label: "数据导入", permissions: ["contractors.view"] },
+    ],
   },
   {
     key: "data-viz",
@@ -127,6 +129,7 @@ const navItems = [
     label: "系统管理",
     children: [
       { to: "/users", label: "人员权限", permissions: ["users.view", "roles.view"] },
+      { to: "/regions", label: "区域管理", permissions: ["regions.view", "regions.manage"] },
       { to: "/workflows", label: "流程设计", permissions: ["roles.manage"] },
       { to: "/layers", label: "图层管理", permissions: ["layers.manage"] },
       { to: "/request-attachment-templates", label: "流程附件", permissions: ["requests.manage"] },
@@ -134,7 +137,7 @@ const navItems = [
   },
 ];
 
-const expandedGroups = ref(["business", "system"]);
+const expandedGroups = ref(["business", "system", "data-center"]);
 
 const visibleNavItems = computed(() =>
   navItems

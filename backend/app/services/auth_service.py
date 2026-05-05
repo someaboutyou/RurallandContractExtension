@@ -51,6 +51,14 @@ class AuthService:
             "dataScope": user.role.data_scope,
             "regionCode": user.region.code,
             "region": user.region.full_name,
+            "regionPermissions": [
+                {
+                    "tenantCode": item.tenant_code,
+                    "regionCode": item.region_code,
+                    "level": item.level,
+                }
+                for item in sorted(user.region_permissions, key=lambda value: value.region_code)
+            ],
             "status": user.status,
             "permissions": sorted(item.code for item in user.role.permissions),
         }

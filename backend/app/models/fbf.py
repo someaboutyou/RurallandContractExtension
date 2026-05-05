@@ -3,10 +3,10 @@ from datetime import datetime
 from sqlalchemy import DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, TenantScopedMixin
 
 
-class Fbf(Base):
+class Fbf(TenantScopedMixin, Base):
     __tablename__ = "fbf"
 
     fbfbm: Mapped[str] = mapped_column(String(14), primary_key=True)

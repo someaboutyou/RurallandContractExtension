@@ -1,8 +1,23 @@
-from sqlalchemy import and_, exists, or_, select
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from fastapi import HTTPException, status
+from sqlalchemy import and_, exists, false, or_, select
 
 from app.models.request_case import RequestCase
 from app.models.request_case_participant import RequestCaseParticipant
 from app.models.user import User
+
+
+LEVEL_BY_LENGTH = {6: "county", 9: "town", 12: "village", 14: "group"}
+
+
+@dataclass(frozen=True)
+class RegionPermission:
+    tenant_code: str
+    region_code: str
+    level: str
 
 
 class DataAccessService:
@@ -18,43 +33,114 @@ class DataAccessService:
         region_code = getattr(user.region, "code", None)
         return region_code[:6] if region_code else None
 
-    def get_region_scope_prefix(self, user: User) -> str | None:
-        data_scope = user.role.data_scope
-        region_code = getattr(user.region, "code", None)
-        if not region_code or data_scope == "all":
+    def normalize_region_code(self, code: str | None) -> str | None:
+        if not code:
             return None
-        if data_scope == "county":
-            return region_code[:6]
-        if data_scope == "town":
-            return region_code[:9] if len(region_code) >= 9 else region_code[:6]
-        if data_scope in {"village", "self"}:
-            return region_code
-        return region_code[:6]
+        text = str(code).strip()
+        if len(text) >= 14:
+            return text[:14]
+        if len(text) >= 12:
+            return text[:12]
+        if len(text) >= 9:
+            return text[:9]
+        return text[:6] if len(text) >= 6 else text
 
-    def get_allowed_workflow_steps(self, user: User) -> list[str]:
-        user_permissions = {item.code for item in user.role.permissions}
-        return [
-            step_name
-            for step_name, permission_code in self.workflow_step_permissions.items()
-            if permission_code in user_permissions
-        ]
+    def derive_tenant_code(self, code: str | None) -> str | None:
+        normalized = self.normalize_region_code(code)
+        return normalized[:6] if normalized and len(normalized) >= 6 else None
 
-    def build_code_scope_filters(self, column, user: User) -> list:
+    def derive_level(self, code: str | None) -> str:
+        normalized = self.normalize_region_code(code)
+        return LEVEL_BY_LENGTH.get(len(normalized or ""), "custom")
+
+    def get_region_permissions(self, user: User) -> list[RegionPermission]:
         if user.role.data_scope == "all":
             return []
-        prefix = self.get_region_scope_prefix(user)
-        if not prefix:
-            return []
-        return [column.like(f"{prefix}%")]
+        tenant_code = self.get_tenant_code(user)
+        items = [
+            RegionPermission(
+                tenant_code=tenant_code or item.tenant_code,
+                region_code=item.region_code,
+                level=item.level,
+            )
+            for item in getattr(user, "region_permissions", [])
+            if item.region_code and (tenant_code is None or item.tenant_code == tenant_code)
+        ]
+        if items:
+            return items
+        fallback_code = getattr(user.region, "code", None)
+        if fallback_code and tenant_code:
+            normalized = self.normalize_region_code(fallback_code)
+            return [RegionPermission(tenant_code=tenant_code, region_code=normalized, level=self.derive_level(normalized))]
+        return []
+
+    def build_tenant_filter(self, model, user: User):
+        if user.role.data_scope == "all":
+            return None
+        tenant_code = self.get_tenant_code(user)
+        if not tenant_code:
+            return false()
+        return getattr(model, "tenant_code") == tenant_code
+
+    def build_region_filter(self, model, user: User):
+        if user.role.data_scope == "all":
+            return None
+        permissions = self.get_region_permissions(user)
+        if not permissions:
+            return false()
+        region_column = getattr(model, "region_code")
+        return or_(
+            *[
+                region_column.like(f"{permission.region_code}%")
+                for permission in permissions
+            ]
+        )
+
+    def build_scoped_filter(self, model, user: User):
+        if user.role.data_scope == "all":
+            return None
+        tenant_filter = self.build_tenant_filter(model, user)
+        if hasattr(model, "region_code"):
+            region_filter = self.build_region_filter(model, user)
+            return and_(tenant_filter, region_filter)
+        return tenant_filter
+
+    def get_data_permission_sql(
+        self,
+        user: User,
+        *,
+        table_alias: str,
+        tenant_column: str = "tenant_code",
+        region_column: str = "region_code",
+    ) -> str:
+        if user.role.data_scope == "all":
+            return "1=1"
+        tenant_code = self.get_tenant_code(user)
+        if not tenant_code:
+            return "1=0"
+        permissions = self.get_region_permissions(user)
+        if not permissions:
+            return "1=0"
+        clauses = [
+            f"{table_alias}.{region_column} LIKE '{item.region_code}%'"
+            for item in permissions
+        ]
+        return f"({table_alias}.{tenant_column} = '{tenant_code}' AND (" + " OR ".join(clauses) + "))"
 
     def ensure_code_in_scope(self, user: User, code: str | None, *, detail: str = "当前数据不在可操作范围内") -> None:
         if user.role.data_scope == "all" or not code:
             return
-        prefix = self.get_region_scope_prefix(user)
-        if prefix and not str(code).startswith(prefix):
-            from fastapi import HTTPException, status
-
+        normalized = self.normalize_region_code(code)
+        tenant_code = self.derive_tenant_code(normalized)
+        if tenant_code != self.get_tenant_code(user):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+        for permission in self.get_region_permissions(user):
+            if normalized.startswith(permission.region_code):
+                return
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+    def ensure_region_in_scope(self, user: User, region_code: str | None, *, detail: str = "当前区域不在可操作范围内") -> None:
+        self.ensure_code_in_scope(user, region_code, detail=detail)
 
     def derive_request_scope(
         self,
@@ -65,23 +151,34 @@ class DataAccessService:
         fallback_region_code: str | None,
     ) -> tuple[str | None, str | None]:
         scope_code = issuer_code or contractor_code or contract_code or fallback_region_code
-        tenant_code = scope_code[:6] if scope_code else None
-        region_source = issuer_code or contractor_code or fallback_region_code
-        region_code = region_source[:12] if region_source else None
+        region_code = self.normalize_region_code(scope_code)
+        tenant_code = self.derive_tenant_code(region_code)
         return tenant_code, region_code
+
+    def build_code_scope_filters(self, column, user: User) -> list:
+        if user.role.data_scope == "all":
+            return []
+        permissions = self.get_region_permissions(user)
+        if not permissions:
+            return [false()]
+        return [or_(*[column.like(f"{item.region_code}%") for item in permissions])]
+
+    def get_allowed_workflow_steps(self, user: User) -> list[str]:
+        user_permissions = {item.code for item in user.role.permissions}
+        return [
+            step_name
+            for step_name, permission_code in self.workflow_step_permissions.items()
+            if permission_code in user_permissions
+        ]
 
     def build_request_case_filters(self, user: User) -> list:
         if user.role.data_scope == "all":
             return []
 
         filters = []
-        tenant_code = self.get_tenant_code(user)
-        if tenant_code:
-            filters.append(RequestCase.tenant_code == tenant_code)
-
-        region_prefix = self.get_region_scope_prefix(user)
-        if region_prefix:
-            filters.append(RequestCase.region_code.like(f"{region_prefix}%"))
+        scope_filter = self.build_scoped_filter(RequestCase, user)
+        if scope_filter is not None:
+            filters.append(scope_filter)
 
         allowed_steps = self.get_allowed_workflow_steps(user)
         visibility_conditions = [
@@ -108,11 +205,14 @@ class DataAccessService:
     def can_access_request_case(self, user: User, record: RequestCase) -> bool:
         if user.role.data_scope == "all":
             return True
-        tenant_code = self.get_tenant_code(user)
-        if tenant_code and record.tenant_code and record.tenant_code != tenant_code:
+        tenant_code = self.derive_tenant_code(record.region_code or record.tenant_code)
+        region_code = self.normalize_region_code(record.region_code)
+        if not region_code:
             return False
-        region_prefix = self.get_region_scope_prefix(user)
-        if region_prefix and record.region_code and not record.region_code.startswith(region_prefix):
+        if not any(
+            tenant_code == permission.tenant_code and region_code.startswith(permission.region_code)
+            for permission in self.get_region_permissions(user)
+        ):
             return False
         if record.created_by_id == user.id:
             return True

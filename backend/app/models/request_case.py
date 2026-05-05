@@ -3,18 +3,16 @@ from datetime import datetime
 from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin
+from app.models.base import Base, TenantScopedMixin, TimestampMixin
 
 
-class RequestCase(Base, TimestampMixin):
+class RequestCase(TenantScopedMixin, Base, TimestampMixin):
     __tablename__ = "request_cases"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     serial_no: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
     request_title: Mapped[str | None] = mapped_column(String(120), nullable=True)
     request_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    tenant_code: Mapped[str | None] = mapped_column(ForeignKey("tenants.code"), nullable=True, index=True)
-    region_code: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
     issuer_code: Mapped[str | None] = mapped_column(String(14), nullable=True, index=True)
     issuer_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
     contractor_code: Mapped[str | None] = mapped_column(String(18), nullable=True, index=True)

@@ -11,7 +11,6 @@ from fastapi import HTTPException, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.cbf import Cbf
 from app.models.cbht import Cbht
 from app.models.fbf import Fbf
 from app.models.issuer import Issuer
@@ -20,6 +19,7 @@ from app.models.request_case import RequestCase
 from app.models.request_case_attachment import RequestCaseAttachment
 from app.models.request_case_participant import RequestCaseParticipant
 from app.models.role import Role
+from app.models.survey import SurveyCbfResult
 from app.models.user import User
 from app.repositories.request_case_repository import request_case_repository
 from app.services.data_access_service import data_access_service
@@ -339,6 +339,7 @@ class RequestCaseService:
         attachment = RequestCaseAttachment(
             case_id=record.id,
             tenant_code=record.tenant_code,
+            region_code=record.region_code,
             category=normalized_category,
             stage_code=workflow_snapshot.current_task_code,
             original_name=upload_file.filename or stored_name,
@@ -519,10 +520,14 @@ class RequestCaseService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="发包方代码不存在")
         return issuer
 
-    def _get_contractor(self, db: Session, contractor_code: str | None) -> Cbf | None:
+    def _get_contractor(self, db: Session, contractor_code: str | None) -> SurveyCbfResult | None:
         if not contractor_code:
             return None
-        contractor = db.get(Cbf, contractor_code)
+        contractor = db.scalars(
+            select(SurveyCbfResult)
+            .where(SurveyCbfResult.cbfbm == contractor_code)
+            .order_by(SurveyCbfResult.id.desc())
+        ).first()
         if contractor is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="承包方代码不存在")
         return contractor
@@ -710,6 +715,7 @@ class RequestCaseService:
             case_id=case_id,
             user_id=user_id,
             tenant_code=case_record.tenant_code if case_record else None,
+            region_code=case_record.region_code if case_record else None,
             action=action,
             step_name=step_name,
             comment=(comment or "").strip() or None,

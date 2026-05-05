@@ -3,10 +3,10 @@ from datetime import date
 from sqlalchemy import Date, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin
+from app.models.base import Base, TenantScopedMixin, TimestampMixin
 
 
-class Issuer(Base, TimestampMixin):
+class Issuer(TenantScopedMixin, Base, TimestampMixin):
     __tablename__ = "issuers"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)

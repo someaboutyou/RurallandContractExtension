@@ -5,21 +5,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.core.config import settings
-from app.db.base import Base
-from app.db.init_db import seed_initial_data
-from app.db.migrations import upgrade_schema
-from app.db.session import SessionLocal, engine
+from app.db.bootstrap import bootstrap_database
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    Base.metadata.create_all(bind=engine)
-    upgrade_schema(engine)
-    db = SessionLocal()
-    try:
-        seed_initial_data(db)
-    finally:
-        db.close()
+    bootstrap_database()
     yield
 
 

@@ -17,6 +17,11 @@ def list_contractors(
     page_size: int = Query(default=20, ge=1, le=200),
     keyword: str | None = Query(default=None),
     type_code: str | None = Query(default=None, alias="typeCode"),
+    name: str | None = Query(default=None),
+    member_name: str | None = Query(default=None, alias="memberName"),
+    id_no: str | None = Query(default=None, alias="idNo"),
+    address: str | None = Query(default=None),
+    region_code: str | None = Query(default=None, alias="regionCode"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contractors.view")),
 ):
@@ -28,6 +33,11 @@ def list_contractors(
             current_user=current_user,
             keyword=keyword,
             type_code=type_code,
+            name=name,
+            member_name=member_name,
+            id_no=id_no,
+            address=address,
+            region_code=region_code,
         )
     }
 

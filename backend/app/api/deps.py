@@ -5,7 +5,7 @@ from fastapi import Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, set_current_user
 from app.models.auth import TokenDep
 from app.models.user import User
 from app.services.auth_service import auth_service
@@ -33,7 +33,9 @@ def get_current_user(token: TokenDep, db: Session = Depends(get_db)) -> User:
         user_id = int(subject)
     except (jwt.InvalidTokenError, ValueError):
         raise credentials_error
-    return auth_service.get_current_user(db, user_id)
+    user = auth_service.get_current_user(db, user_id)
+    set_current_user(db, user)
+    return user
 
 
 def require_platform_admin(current_user: User = Depends(get_current_user)) -> User:

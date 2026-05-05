@@ -1,15 +1,14 @@
 from sqlalchemy import ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin
+from app.models.base import Base, TenantScopedMixin, TimestampMixin
 
 
-class RequestCaseAttachment(Base, TimestampMixin):
+class RequestCaseAttachment(TenantScopedMixin, Base, TimestampMixin):
     __tablename__ = "request_case_attachments"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     case_id: Mapped[int] = mapped_column(ForeignKey("request_cases.id"), nullable=False, index=True)
-    tenant_code: Mapped[str | None] = mapped_column(String(12), nullable=True, index=True)
     category: Mapped[str | None] = mapped_column(String(64), nullable=True)
     stage_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     original_name: Mapped[str] = mapped_column(String(255), nullable=False)

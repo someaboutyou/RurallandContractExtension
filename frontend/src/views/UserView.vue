@@ -57,7 +57,23 @@
                     </div>
                   </template>
                 </el-table-column>
-                <el-table-column prop="region" label="管理区域" min-width="260" show-overflow-tooltip />
+                <el-table-column label="数据权限区域" min-width="300">
+                  <template #default="{ row }">
+                    <div class="permission-tags">
+                      <el-tag
+                        v-for="item in (row.regionPermissions || []).slice(0, 3)"
+                        :key="item.regionCode"
+                        size="small"
+                        effect="plain"
+                      >
+                        {{ getRegionPermissionLabel(item) }}
+                      </el-tag>
+                      <el-tag v-if="(row.regionPermissions || []).length > 3" size="small" type="info" effect="light">
+                        +{{ row.regionPermissions.length - 3 }}
+                      </el-tag>
+                    </div>
+                  </template>
+                </el-table-column>
                 <el-table-column prop="status" label="状态" min-width="100">
                   <template #default="{ row }">
                     <el-tag :type="row.status === 'active' ? 'success' : 'danger'" effect="light">
@@ -195,17 +211,27 @@
           <el-input v-model="userForm.mobile" placeholder="请输入手机号" />
         </el-form-item>
         <el-form-item label="所属租户">
-          <el-input :model-value="selectedTenantName" disabled placeholder="根据管理区域自动确定" />
+          <el-input :model-value="selectedTenantName" disabled placeholder="根据数据权限区域自动确定" />
         </el-form-item>
         <el-form-item label="角色" prop="roleId">
           <el-select v-model="userForm.roleId" placeholder="请选择角色">
             <el-option v-for="item in roleOptions" :key="item.id" :label="item.name" :value="item.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="管理区域" prop="regionId">
-          <el-select v-model="userForm.regionId" filterable placeholder="请选择管理区域">
-            <el-option v-for="item in regionOptions" :key="item.id" :label="item.fullName" :value="item.id" />
-          </el-select>
+        <el-form-item class="form-span-2" label="数据权限区域" prop="regionCodes">
+          <el-tree-select
+            v-model="userForm.regionCodes"
+            multiple
+            show-checkbox
+            filterable
+            collapse-tags
+            collapse-tags-tooltip
+            check-strictly
+            :data="assignableRegionPermissionTree"
+            :props="regionTreeProps"
+            node-key="code"
+            placeholder="请选择可操作区域"
+          />
         </el-form-item>
         <el-form-item v-if="!editingUserId" label="用户状态" prop="status">
           <el-select v-model="userForm.status" placeholder="请选择用户状态">
@@ -298,7 +324,7 @@ import { computed, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
 import { fetchPermissions } from "../api/permission";
-import { fetchRegions } from "../api/region";
+import { fetchRegions, fetchRegionTree } from "../api/region";
 import { createRole, deleteRole, fetchRoles, updateRole } from "../api/role";
 import { fetchTenants } from "../api/tenant";
 import { createUser, deleteUser, fetchUsers, resetUserPassword, updateUser } from "../api/user";
@@ -325,6 +351,8 @@ const userRows = ref([]);
 const roleRows = ref([]);
 const roleOptions = ref([]);
 const regionOptions = ref([]);
+const regionPermissionTree = ref([]);
+const regionTreeProps = { label: "fullName", children: "children", disabled: "disabled" };
 const tenantOptions = ref([]);
 const permissionsCatalog = ref([]);
 
@@ -375,13 +403,21 @@ const permissionLabelMap = computed(() =>
   }, {}),
 );
 
+const assignableRegionPermissionTree = computed(() =>
+  markAssignedGroupNodes(regionPermissionTree.value, editingUserId.value),
+);
+
 const selectedTenantName = computed(() => {
-  const selectedRegion = regionOptions.value.find((item) => item.id === userForm.regionId);
-  if (!selectedRegion?.tenantCode) {
+  const firstRegionCode = userForm.regionCodes[0];
+  if (!firstRegionCode) {
     return "";
   }
-  const tenant = tenantOptions.value.find((item) => item.code === selectedRegion.tenantCode);
-  return tenant?.name || selectedRegion.tenantCode;
+  const selectedRegion =
+    regionOptions.value.find((item) => item.code === firstRegionCode) ||
+    findRegionTreeNode(regionPermissionTree.value, firstRegionCode);
+  const tenantCode = selectedRegion?.tenantCode || firstRegionCode.slice(0, 6);
+  const tenant = tenantOptions.value.find((item) => item.code === tenantCode);
+  return tenant?.name || tenantCode;
 });
 
 const createEmptyUserFilters = () => ({
@@ -397,7 +433,7 @@ const createEmptyUserForm = () => ({
   password: "",
   mobile: "",
   roleId: undefined,
-  regionId: undefined,
+  regionCodes: [],
   status: "active",
 });
 
@@ -449,7 +485,7 @@ const userRules = {
   password: [{ required: true, message: "请输入初始密码", trigger: "blur" }],
   mobile: [{ validator: validateMobileField, trigger: "blur" }],
   roleId: [{ required: true, message: "请选择角色", trigger: "change" }],
-  regionId: [{ required: true, message: "请选择管理区域", trigger: "change" }],
+  regionCodes: [{ required: true, type: "array", min: 1, message: "请选择数据权限区域", trigger: "change" }],
   status: [{ required: true, message: "请选择用户状态", trigger: "change" }],
 };
 
@@ -534,6 +570,9 @@ async function loadBaseOptions() {
       fetchRegions().then(({ data }) => {
         regionOptions.value = data.data;
       }),
+      fetchRegionTree(null, { includeGroups: true }).then(({ data }) => {
+        regionPermissionTree.value = data.data;
+      }),
       fetchTenants().then(({ data }) => {
         tenantOptions.value = data.data;
       }),
@@ -592,6 +631,36 @@ function openCreateUserDialog() {
   userDialogVisible.value = true;
 }
 
+function getRegionPermissionLabel(item) {
+  const region = regionOptions.value.find((option) => option.code === item.regionCode);
+  return region?.fullName || findRegionTreeNode(regionPermissionTree.value, item.regionCode)?.fullName || item.regionCode;
+}
+
+function findRegionTreeNode(nodes, code) {
+  for (const node of nodes) {
+    if (node.code === code) {
+      return node;
+    }
+    const matched = findRegionTreeNode(node.children || [], code);
+    if (matched) {
+      return matched;
+    }
+  }
+  return null;
+}
+
+function markAssignedGroupNodes(nodes, currentUserId) {
+  return nodes.map((node) => {
+    const assignedToOtherUser = node.level === "group" && node.assignedUserId && node.assignedUserId !== currentUserId;
+    return {
+      ...node,
+      disabled: assignedToOtherUser,
+      fullName: assignedToOtherUser ? `${node.fullName}（已分配）` : node.fullName,
+      children: markAssignedGroupNodes(node.children || [], currentUserId),
+    };
+  });
+}
+
 function openEditUserDialog(row) {
   editingUserId.value = row.id;
   Object.assign(userForm, {
@@ -600,7 +669,7 @@ function openEditUserDialog(row) {
     password: "",
     mobile: row.mobile || "",
     roleId: row.roleId,
-    regionId: row.regionId,
+    regionCodes: (row.regionPermissions || []).map((item) => item.regionCode),
     status: row.status,
   });
   userFormRef.value?.clearValidate();
@@ -619,7 +688,7 @@ async function handleSubmitUser() {
     realName: userForm.realName.trim(),
     mobile: userForm.mobile.trim() || null,
     roleId: userForm.roleId,
-    regionId: userForm.regionId,
+    regionCodes: [...userForm.regionCodes],
     status: userForm.status,
   };
 

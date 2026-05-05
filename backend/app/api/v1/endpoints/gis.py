@@ -3,9 +3,9 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
-from app.models.cbf import Cbf
 from app.models.fbf import Fbf
 from app.models.request_case import RequestCase
+from app.models.survey import SurveyCbfResult
 from app.models.user import User
 from app.schemas.response import ApiResponse
 from app.services.data_access_service import data_access_service
@@ -59,17 +59,17 @@ def gis_search(
     issuer_rows = db.scalars(issuer_stmt).all()
 
     contractor_stmt = (
-        select(Cbf)
+        select(SurveyCbfResult)
         .where(
             or_(
-                Cbf.cbfbm.ilike(like_keyword),
-                Cbf.cbfmc.ilike(like_keyword),
-                Cbf.cbfzjhm.ilike(like_keyword),
-                Cbf.lxdh.ilike(like_keyword),
+                SurveyCbfResult.cbfbm.ilike(like_keyword),
+                SurveyCbfResult.cbfmc.ilike(like_keyword),
+                SurveyCbfResult.cbfzjhm.ilike(like_keyword),
+                SurveyCbfResult.lxdh.ilike(like_keyword),
             ),
-            *data_access_service.build_code_scope_filters(Cbf.cbfbm, current_user),
+            *data_access_service.build_code_scope_filters(SurveyCbfResult.cbfbm, current_user),
         )
-        .order_by(Cbf.cbfbm.asc())
+        .order_by(SurveyCbfResult.cbfbm.asc(), SurveyCbfResult.id.desc())
         .limit(limit)
     )
     contractor_rows = db.scalars(contractor_stmt).all()
