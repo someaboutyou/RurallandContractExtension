@@ -36,13 +36,53 @@ if [[ -f "$INIT_MARKER" && "$FORCE" -ne 1 ]]; then
   exit 0
 fi
 
+if [[ -f "$RUNTIME_ENV_FILE" ]]; then
+  while IFS='=' read -r key value; do
+    key="${key//[$'\r\n']/}"
+    value="${value//[$'\r\n']/}"
+    [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+    case "$key" in
+      DATABASE_PASSWORD) DATABASE_PASSWORD="$value" ;;
+      DATABASE_USER)     DATABASE_USER="$value" ;;
+      DATABASE_NAME)     DATABASE_NAME="$value" ;;
+      DATABASE_PORT)     DATABASE_PORT="$value" ;;
+      DATABASE_HOST)     DATABASE_HOST="$value" ;;
+    esac
+  done < "$RUNTIME_ENV_FILE"
+fi
+
+PG_DATA_DIR="$RUNTIME_ROOT/data/pgdata"
+NEEDS_PASSWORD_ROTATION=0
+if [[ "${DATABASE_PASSWORD:-RurallandContractExtension}" == "RurallandContractExtension" && -f "$PG_DATA_DIR/PG_VERSION" ]]; then
+  NEEDS_PASSWORD_ROTATION=1
+fi
+
 "$SCRIPT_DIR/start-postgres.sh"
+
+if [[ -f "$STATE_DIR/.db-password" ]]; then
+  DATABASE_PASSWORD=$(cat "$STATE_DIR/.db-password")
+  rm -f "$STATE_DIR/.db-password"
+fi
 
 TARGET_DB_HOST="${DATABASE_HOST:-127.0.0.1}"
 TARGET_DB_PORT="${DATABASE_PORT:-15432}"
 TARGET_DB_NAME="${DATABASE_NAME:-erlunyanbao}"
 TARGET_DB_USER="${DATABASE_USER:-RurallandContractExtension}"
 TARGET_DB_PASSWORD="${DATABASE_PASSWORD:-RurallandContractExtension}"
+
+if [[ "$NEEDS_PASSWORD_ROTATION" -eq 1 && "$TARGET_DB_PASSWORD" == "RurallandContractExtension" ]]; then
+  echo "Database password is still the default value. Rotating to a random password (data preserved)..."
+  NEW_PASSWORD=$(tr -dc 'A-Za-z0-9!#$%&*' < /dev/urandom | head -c24)
+  ESCAPED_PASSWORD="${NEW_PASSWORD//\'/\'\'}"
+  PGPASSWORD="$TARGET_DB_PASSWORD" "$PG_BIN/psql" -h "$TARGET_DB_HOST" -p "$TARGET_DB_PORT" -U "$TARGET_DB_USER" -d "$TARGET_DB_NAME" -c "ALTER ROLE \"$TARGET_DB_USER\" PASSWORD '$ESCAPED_PASSWORD'"
+  if [[ $? -ne 0 ]]; then
+    echo "Failed to rotate database password." >&2
+    exit 1
+  fi
+  TARGET_DB_PASSWORD="$NEW_PASSWORD"
+  export DATABASE_PASSWORD="$NEW_PASSWORD"
+  echo "Password rotated. New password stored in runtime/.state/runtime.env"
+fi
 
 psql_scalar() {
   local host="$1"
@@ -109,9 +149,9 @@ if [[ -f "$SQL_INIT_FILE" ]]; then
     -p "$TARGET_DB_PORT" \
     -U "$TARGET_DB_USER" \
     -d "$TARGET_DB_NAME" \
-    -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'DK3213242017'" 2>/dev/null | tr -d '[:space:]')"
+    -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'cbdkxx'" 2>/dev/null | tr -d '[:space:]')"
   if [[ "${EXISTING_FEATURE_TABLE:-0}" != "0" ]]; then
-    echo "PostGIS schema initialization skipped; public.DK3213242017 already exists."
+    echo "PostGIS schema initialization skipped; public.cbdkxx already exists."
   else
     echo "Running SQL initialization file: $SQL_INIT_FILE"
     PGPASSWORD="$TARGET_DB_PASSWORD" "$PG_BIN/psql" \
@@ -137,7 +177,7 @@ if ! "$PYTHON_CMD" -c "import fastapi, sqlalchemy, psycopg, pydantic_settings, f
 fi
 
 (
-  cd "$PROJECT_ROOT/backend"
+  cd "$PROJECT_ROOT/backend/dist"
   DATABASE_HOST="$TARGET_DB_HOST" \
   DATABASE_PORT="$TARGET_DB_PORT" \
   DATABASE_NAME="$TARGET_DB_NAME" \

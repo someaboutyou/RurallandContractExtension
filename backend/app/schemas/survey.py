@@ -136,6 +136,110 @@ class SurveyAuthorizationRevoke(BaseModel):
     revokeReason: str = Field(min_length=1, max_length=500)
 
 
+# ── 合同信息 ──────────────────────────────────────────
+
+class SurveyContractRead(BaseModel):
+    cbhtbm: str
+    ycbhtbm: str | None = None
+    fbfbm: str | None = None
+    fbfmc: str | None = None
+    cbfbm: str | None = None
+    cbfs: str | None = None
+    cbqxq: str | None = None
+    cbqxz: str | None = None
+    htzmj: float | None = None
+    htzmjm: float | None = None
+    cbdkzs: int | None = None
+    qdsj: str | None = None
+    renderedHtml: str | None = None
+
+
+# ── 调查操作请求 ──────────────────────────────────────
+
+class SurveyChangeHeadRequest(BaseModel):
+    newHeadMemberUid: str = Field(min_length=1, max_length=36)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class SurveyDeregisterRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class SurveyAddParcelRequest(BaseModel):
+    dkbm: str = Field(min_length=1, max_length=19)
+    dkmc: str = Field(min_length=1, max_length=50)
+    scmj: float = Field(gt=0)
+    dklb: str = Field(min_length=1, max_length=2)
+    tdyt: str = Field(min_length=1, max_length=1)
+    sfjbnt: str = Field(min_length=1, max_length=1)
+    dldj: str = Field(min_length=1, max_length=2)
+    syqxz: str | None = Field(default=None, max_length=2)
+    tdlylx: str | None = Field(default=None, max_length=3)
+    dkdz: str | None = Field(default=None, max_length=50)
+    dkxz: str | None = Field(default=None, max_length=50)
+    dknz: str | None = Field(default=None, max_length=50)
+    dkbz: str | None = Field(default=None, max_length=50)
+    dkbzxx: str | None = Field(default=None, max_length=300)
+    cbjyqqdfs: str = Field(default="001", max_length=3)
+    cbhtbm: str | None = Field(default=None, max_length=19)
+    lzhtbm: str | None = Field(default=None, max_length=20)
+    cbjyqzbm: str | None = Field(default=None, max_length=19)
+    htmj: float | None = None
+    yhtmj: float | None = None
+    htmjm: float | None = None
+    yhtmjm: float | None = None
+    sfqqqg: str | None = Field(default=None, max_length=1)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class SurveySplitParcelRequest(BaseModel):
+    dkbm: str = Field(min_length=1, max_length=19)
+    newDkbm: str = Field(min_length=1, max_length=19)
+    newDkmc: str = Field(min_length=1, max_length=50)
+    newScmj: float = Field(gt=0)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class SurveySwapParcelsRequest(BaseModel):
+    targetContractorUid: str = Field(min_length=1, max_length=36)
+    sourceDkbms: list[str] = Field(min_length=1)
+    targetDkbms: list[str] = Field(min_length=1)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class SurveySplitHouseholdRequest(BaseModel):
+    newCbfbm: str = Field(min_length=1, max_length=18)
+    newCbfmc: str = Field(min_length=1, max_length=50)
+    memberUids: list[str] = Field(min_length=1)
+    parcelDkbms: list[str] = []
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class SurveyMergeHouseholdRequest(BaseModel):
+    targetContractorUid: str = Field(min_length=1, max_length=36)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class SurveyMemberEntry(BaseModel):
+    memberUid: str | None = None
+    name: str = Field(min_length=1, max_length=50)
+    gender: str = Field(min_length=1, max_length=1)
+    idType: str = Field(min_length=1, max_length=1)
+    idNo: str = Field(min_length=1, max_length=20)
+    relationToHead: str = Field(min_length=1, max_length=2)
+    noteCode: str | None = Field(default=None, max_length=1)
+    isCoOwner: str | None = Field(default=None, max_length=1)
+    note: str | None = Field(default=None, max_length=254)
+    isHouseholdHead: bool = False
+
+
+class SurveyMaintainMembersRequest(BaseModel):
+    membersToAdd: list[SurveyMemberEntry] = []
+    membersToUpdate: list[SurveyMemberEntry] = []
+    membersToDelete: list[str] = []  # member_uids
+    reason: str | None = Field(default=None, max_length=500)
+
+
 class SurveyGenerateRequest(BaseModel):
     requestType: str | None = Field(default=None, max_length=32)
     requestTitle: str | None = Field(default=None, max_length=120)

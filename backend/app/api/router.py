@@ -5,6 +5,7 @@ from app.api.v1.endpoints import (
     contractor,
     data_import,
     dashboard,
+    dictionary,
     gis,
     issuer,
     land_parcel,
@@ -27,6 +28,7 @@ api_router.include_router(contractor.router, prefix="/contractors", tags=["Contr
 api_router.include_router(land_parcel.router, prefix="/contractors", tags=["Contractors"])
 api_router.include_router(data_import.router, prefix="/data-imports", tags=["DataImports"])
 api_router.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
+api_router.include_router(dictionary.router, prefix="/dictionaries", tags=["Dictionaries"])
 api_router.include_router(gis.router, prefix="/gis", tags=["GIS"])
 api_router.include_router(region.router, prefix="/regions", tags=["Regions"])
 api_router.include_router(permission.router, prefix="/permissions", tags=["Permissions"])

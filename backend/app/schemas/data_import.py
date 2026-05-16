@@ -60,3 +60,25 @@ class DataImportRowRead(BaseModel):
     rawData: dict | None = None
     normalizedData: dict | None = None
     createdAt: datetime
+
+
+class DataImportJobRead(BaseModel):
+    batchId: int
+    jobId: str
+    status: str
+
+
+class DataImportProgressRead(BaseModel):
+    batchId: int
+    jobId: str | None = None
+    status: str
+    currentLayer: str | None = None
+    totalRows: int = 0
+    processedRows: int = 0
+    successRows: int = 0
+    failedRows: int = 0
+    percent: float = 0
+    message: str | None = None
+    cancelRequested: bool = False
+    startedAt: str | None = None
+    updatedAt: str | None = None

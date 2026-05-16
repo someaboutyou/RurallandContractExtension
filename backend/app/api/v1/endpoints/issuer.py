@@ -3,10 +3,12 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db, require_permission
 from app.models.user import User
-from app.schemas.issuer import IssuerCreate, IssuerRead, IssuerUpdate
+from app.schemas.issuer import IssuerContractorRead, IssuerCreate, IssuerRead, IssuerUpdate
+from app.schemas.land_parcel import LandParcelItem
 from app.schemas.pagination import PageResponse
 from app.schemas.response import ApiResponse
 from app.services.issuer_service import issuer_service
+from app.services.land_parcel_service import land_parcel_service
 
 router = APIRouter()
 
@@ -49,6 +51,24 @@ def update_issuer(
     current_user: User = Depends(require_permission("issuers.manage")),
 ):
     return {"data": issuer_service.update_issuer(db, issuer_code, payload.model_dump(), current_user)}
+
+
+@router.get("/{issuer_code}/contractors", response_model=ApiResponse[list[IssuerContractorRead]])
+def list_issuer_contractors(
+    issuer_code: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("issuers.view")),
+):
+    return {"data": issuer_service.list_contractors(db, issuer_code, current_user)}
+
+
+@router.get("/{issuer_code}/parcels", response_model=ApiResponse[list[LandParcelItem]])
+def list_issuer_parcels(
+    issuer_code: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("issuers.view")),
+):
+    return {"data": land_parcel_service.get_parcels_for_issuer(db, issuer_code, current_user)}
 
 
 @router.delete("/{issuer_code}", status_code=status.HTTP_204_NO_CONTENT)

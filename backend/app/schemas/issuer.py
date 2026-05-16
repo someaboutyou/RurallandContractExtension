@@ -40,3 +40,17 @@ class IssuerRead(BaseModel):
     regionId: int | None = None
     region: str | None = None
     status: str | None = None
+
+
+class IssuerContractorRead(BaseModel):
+    code: str
+    typeCode: str | None = None
+    name: str
+    idType: str | None = None
+    idNo: str | None = None
+    mobile: str | None = None
+    address: str | None = None
+    memberCount: int | None = None
+    surveyDate: str | None = None
+    surveyorName: str | None = None
+    groupRegionName: str | None = None

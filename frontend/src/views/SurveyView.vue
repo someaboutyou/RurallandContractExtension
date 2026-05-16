@@ -3,6 +3,18 @@
     <div class="toolbar">
       <div class="panel-title">串户调查成果</div>
       <div class="toolbar-actions">
+        <el-tree-select
+          v-model="activeRegionId"
+          clearable
+          filterable
+          check-strictly
+          :data="regionTree"
+          :props="regionTreeProps"
+          node-key="id"
+          placeholder="按区域筛选成果"
+          style="width: 260px"
+          @change="handleActiveRegionChange"
+        />
         <el-input v-model="batchKeyword" clearable placeholder="搜索调查批次" style="width: 220px" @keyup.enter="loadBatches" />
         <el-button plain @click="loadBatches">刷新</el-button>
         <el-button :disabled="!activeBatch" plain type="primary" @click="handleExportResults">导出成果</el-button>
@@ -16,6 +28,7 @@
     <el-table v-loading="batchLoading" :data="batches" border highlight-current-row @current-change="handleBatchSelect">
       <el-table-column prop="batchNo" label="批次号" min-width="160" />
       <el-table-column prop="batchName" label="批次名称" min-width="220" />
+      <el-table-column prop="regionName" label="调查区域" min-width="180" show-overflow-tooltip />
       <el-table-column prop="status" label="状态" min-width="100" />
       <el-table-column prop="taskCount" label="应调查" min-width="90" />
       <el-table-column prop="surveyedCount" label="已调查" min-width="90" />
@@ -28,7 +41,7 @@
 
   <section class="panel table-page survey-task-panel">
     <div class="toolbar">
-      <div class="panel-title">{{ activeBatch ? `${activeBatch.batchName} - 调查任务` : "调查任务" }}</div>
+      <div class="panel-title">{{ taskPanelTitle }}</div>
       <div class="toolbar-actions">
         <el-input v-model="taskKeyword" :disabled="!activeBatch" clearable placeholder="搜索承包方" style="width: 220px" @keyup.enter="loadTasks" />
         <el-select v-model="taskStatus" :disabled="!activeBatch" clearable placeholder="调查状态" style="width: 160px" @change="loadTasks">
@@ -135,324 +148,53 @@
   </el-dialog>
 
   <el-dialog v-model="resultVisible" :title="`调查录入 - ${resultForm.name || ''}`" width="92vw" top="3vh" destroy-on-close>
-    <el-tabs v-model="activeTab">
-      <el-tab-pane label="调查前快照" name="snapshot">
-        <el-descriptions v-if="resultForm.baseContractor" :column="2" border>
-          <el-descriptions-item label="承包方代码">{{ resultForm.baseContractor.code }}</el-descriptions-item>
-          <el-descriptions-item label="承包方名称">{{ resultForm.baseContractor.name }}</el-descriptions-item>
-          <el-descriptions-item label="证件号码">{{ resultForm.baseContractor.idNo }}</el-descriptions-item>
-          <el-descriptions-item label="联系电话">{{ resultForm.baseContractor.mobile || "-" }}</el-descriptions-item>
-          <el-descriptions-item :span="2" label="承包方地址">{{ resultForm.baseContractor.address }}</el-descriptions-item>
-          <el-descriptions-item label="家庭成员数">{{ resultForm.baseContractor.memberCount }}</el-descriptions-item>
-          <el-descriptions-item label="调查员">{{ resultForm.baseContractor.surveyorName || "-" }}</el-descriptions-item>
-        </el-descriptions>
+    <!-- 操作工具栏 -->
+    <div class="survey-toolbar">
+      <el-button type="danger" plain size="small" @click="handleOpDeregister">注销承包方</el-button>
+      <el-button plain size="small" @click="handleOpSplitHousehold">分户</el-button>
+      <el-button plain size="small" @click="handleOpMergeHousehold">合户</el-button>
+      <el-divider direction="vertical" />
+      <el-button type="warning" plain size="small" @click="handleOpSwapParcels">地块互换</el-button>
+      <el-button type="success" plain size="small" @click="handleOpAddParcel">新增地块</el-button>
+      <el-button plain size="small" @click="handleOpSplitParcel">切割地块</el-button>
+      <span v-if="!canManage || isResultLocked" class="toolbar-lock-hint">（当前为只读模式）</span>
+    </div>
 
-        <div class="snapshot-member-title">调查前家庭成员</div>
-        <el-table :data="resultForm.baseContractor?.familyMembers || []" border>
-          <el-table-column prop="name" label="姓名" min-width="120" />
-          <el-table-column prop="gender" label="性别" min-width="80">
-            <template #default="{ row }">{{ row.gender === "1" ? "男" : row.gender === "2" ? "女" : row.gender }}</template>
-          </el-table-column>
-          <el-table-column prop="idNo" label="身份证号" min-width="180" />
-          <el-table-column prop="relationToHead" label="与户主关系" min-width="120" />
-          <el-table-column prop="isCoOwner" label="是否共有人" min-width="110" />
-          <el-table-column prop="note" label="备注" min-width="220" />
-        </el-table>
+    <!-- 4 个信息 Tab -->
+    <el-tabs v-model="activeTab">
+      <el-tab-pane :label="`承包方及家庭成员（${resultForm.familyMembers.length}人）`" name="contractor">
+        <ContractorMemberPanel
+          ref="contractorMemberPanel"
+          :batch-id="activeBatch?.id"
+          :contractor-uid="resultForm.contractorUid"
+          :result="resultForm"
+          :changed-fields="computedChangedFields"
+        />
       </el-tab-pane>
 
       <el-tab-pane label="地块信息" name="parcels">
-        <div class="parcel-tab-shell">
-          <div class="parcel-map-panel">
-            <div class="parcel-map-toolbar">
-              <span class="parcel-map-toolbar-label">底图</span>
-              <el-segmented
-                :model-value="parcelBasemap"
-                :options="basemapOptions"
-                size="small"
-                @change="switchParcelBasemap"
-              />
-              <el-button size="small" plain @click="fitToParcels">缩放到全部地块</el-button>
-            </div>
-            <div ref="parcelTabMapRoot" class="parcel-map-container"></div>
-          </div>
-          <div class="parcel-list-panel">
-            <div class="parcel-list-header">
-              <span class="parcel-list-title">地块列表（{{ parcels.length }}）</span>
-              <el-button size="small" plain :loading="parcelsLoading" @click="loadSurveyParcels">刷新</el-button>
-            </div>
-            <div class="parcel-list-body" v-loading="parcelsLoading">
-              <button
-                v-for="(parcel, idx) in parcels"
-                :key="parcel.dkbm"
-                type="button"
-                class="parcel-list-item"
-                :class="{
-                  'is-selected': selectedParcelDkbm === parcel.dkbm,
-                  'is-flash': flashDkbm === parcel.dkbm,
-                }"
-                @click="selectParcel(parcel)"
-              >
-                <span class="parcel-list-index">{{ idx + 1 }}</span>
-                <span class="parcel-list-code">{{ parcel.dkbm }}</span>
-                <span class="parcel-list-name">{{ parcel.dkmc || "-" }}</span>
-              </button>
-              <el-empty v-if="!parcelsLoading && !parcels.length" description="暂无地块数据" />
-            </div>
-          </div>
-          <div class="parcel-detail-panel" v-if="selectedParcel">
-            <div class="parcel-detail-title">地块详情</div>
-            <div class="parcel-detail-body">
-              <div
-                v-for="key in detailFields"
-                :key="key"
-                class="parcel-detail-row"
-                :class="{ 'is-highlight': key === 'dkbm' || key === 'dkmc' }"
-              >
-                <span class="parcel-detail-label">{{ parcelFieldLabel(key) }}</span>
-                <span class="parcel-detail-value">{{ parcelFieldValue(selectedParcel, key) }}</span>
-              </div>
-            </div>
-          </div>
-          <div v-else class="parcel-detail-empty">
-            <el-empty description="点击地块查看详情" :image-size="60" />
-          </div>
-        </div>
+        <ParcelInfoPanel
+          :batch-id="activeBatch?.id"
+          :contractor-uid="resultForm.contractorUid"
+          :parcels="parcels"
+          :parcels-loading="parcelsLoading"
+        />
       </el-tab-pane>
 
-      <el-tab-pane label="户调查结果" name="base">
-        <el-form :model="resultForm" :disabled="isResultLocked" class="compact-form" label-position="top">
-          <div class="form-grid">
-            <el-form-item label="承包方代码"><el-input v-model="resultForm.code" /></el-form-item>
-            <el-form-item label="承包方类型">
-              <el-select v-model="resultForm.typeCode">
-                <el-option label="农户" value="1" />
-                <el-option label="个人" value="2" />
-                <el-option label="单位" value="3" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="承包方名称"><el-input v-model="resultForm.name" /></el-form-item>
-            <el-form-item label="证件类型"><el-input v-model="resultForm.idType" /></el-form-item>
-            <el-form-item label="证件号码"><el-input v-model="resultForm.idNo" /></el-form-item>
-            <el-form-item label="联系电话"><el-input v-model="resultForm.mobile" /></el-form-item>
-            <el-form-item class="form-span-2" label="承包方地址"><el-input v-model="resultForm.address" /></el-form-item>
-            <el-form-item label="邮政编码"><el-input v-model="resultForm.postcode" /></el-form-item>
-            <el-form-item label="调查状态">
-              <el-select v-model="resultForm.surveyStatus">
-                <el-option label="未调查" value="not_surveyed" />
-                <el-option label="已调查" value="surveyed" />
-                <el-option label="已确认" value="confirmed" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="结果状态">
-              <el-select v-model="resultForm.resultStatus">
-                <el-option label="正常" value="normal" />
-                <el-option label="分户待处理" value="split" />
-                <el-option label="合户待处理" value="merged" />
-                <el-option label="整户消亡" value="extinct" />
-                <el-option label="注销" value="cancelled" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="变化类型">
-              <el-select v-model="resultForm.changeType">
-                <el-option label="无变化" value="none" />
-                <el-option label="户信息变化" value="info_change" />
-                <el-option label="成员变化" value="member_change" />
-                <el-option label="分户" value="split" />
-                <el-option label="合户" value="merge" />
-                <el-option label="整户消亡" value="extinct" />
-                <el-option label="全家进城落户" value="urbanized" />
-              </el-select>
-            </el-form-item>
-            <el-form-item class="form-span-2" label="变更原因"><el-input v-model="resultForm.changeReason" type="textarea" :rows="3" /></el-form-item>
-            <el-form-item class="form-span-2" label="政策依据"><el-input v-model="resultForm.policyBasis" type="textarea" :rows="3" /></el-form-item>
-            <el-form-item class="form-span-2" label="依据材料摘要"><el-input v-model="resultForm.evidenceSummary" type="textarea" :rows="2" /></el-form-item>
-          </div>
-        </el-form>
+      <el-tab-pane label="合同信息" name="contract">
+        <ContractInfoPanel
+          :batch-id="activeBatch?.id"
+          :contractor-uid="resultForm.contractorUid"
+        />
       </el-tab-pane>
+    </el-tabs>
 
-      <el-tab-pane :label="`家庭成员（${resultForm.familyMembers.length}）`" name="members">
-        <div class="member-tab-actions">
-          <div class="member-tab-title">成员调查结果</div>
-          <el-button v-if="canManage && !isResultLocked" type="primary" plain @click="appendMember">新增调查成员</el-button>
-        </div>
-        <el-table :data="resultForm.familyMembers" border>
-          <el-table-column prop="name" label="姓名" min-width="120">
-            <template #default="{ row }"><el-input v-model="row.name" :disabled="isResultLocked" /></template>
-          </el-table-column>
-          <el-table-column prop="idNo" label="身份证号" min-width="180">
-            <template #default="{ row }"><el-input v-model="row.idNo" :disabled="isResultLocked" /></template>
-          </el-table-column>
-          <el-table-column prop="relationToHead" label="关系" width="90">
-            <template #default="{ row }"><el-input v-model="row.relationToHead" :disabled="isResultLocked" /></template>
-          </el-table-column>
-          <el-table-column prop="memberResultStatus" label="成员状态" min-width="150">
-            <template #default="{ row }">
-              <el-select v-model="row.memberResultStatus" :disabled="isResultLocked">
-                <el-option label="正常" value="normal" />
-                <el-option label="新增" value="added" />
-                <el-option label="迁出" value="moved_out" />
-                <el-option label="迁入" value="moved_in" />
-                <el-option label="死亡" value="deceased" />
-                <el-option label="外嫁" value="married_out" />
-                <el-option label="进城落户" value="urbanized" />
-              </el-select>
-            </template>
-          </el-table-column>
-          <el-table-column label="调查标记" min-width="260">
-            <template #default="{ row }">
-              <el-checkbox v-model="row.isHouseholdHead" :disabled="isResultLocked">户主</el-checkbox>
-              <el-checkbox v-model="row.isUrbanSettled" :disabled="isResultLocked">进城落户</el-checkbox>
-              <el-checkbox v-model="row.isMarriedOutWoman" :disabled="isResultLocked">外嫁女</el-checkbox>
-              <el-checkbox v-model="row.isDeceased" :disabled="isResultLocked">死亡</el-checkbox>
-              <el-checkbox v-model="row.isFiveGuarantees" :disabled="isResultLocked">五保</el-checkbox>
-            </template>
-          </el-table-column>
-          <el-table-column prop="changeReason" label="变化原因" min-width="220">
-            <template #default="{ row }"><el-input v-model="row.changeReason" :disabled="isResultLocked" /></template>
-          </el-table-column>
-          <el-table-column label="操作" width="80">
-            <template #default="{ $index }">
-              <el-button v-if="!isResultLocked" link type="danger" @click="resultForm.familyMembers.splice($index, 1)">删除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-      </el-tab-pane>
-
-      <el-tab-pane :label="`字段差异（${diffRows.length}）`" name="diffs">
-        <el-table v-loading="diffLoading" :data="diffRows" border>
-          <el-table-column prop="entityType" label="对象" width="110">
-            <template #default="{ row }">{{ row.entityType === "contractor" ? "户" : "成员" }}</template>
-          </el-table-column>
-          <el-table-column prop="entityName" label="对象名称" min-width="140" />
-          <el-table-column prop="fieldLabel" label="变化字段" min-width="140" />
-          <el-table-column prop="beforeValue" label="调查前" min-width="180" />
-          <el-table-column prop="afterValue" label="调查后" min-width="180" />
-          <el-table-column prop="changeReason" label="变化原因" min-width="220" />
-        </el-table>
-      </el-tab-pane>
-
-      <el-tab-pane :label="`农户标签（${phase2.tags.length}）`" name="tags">
-        <div class="phase2-actions">
-          <el-button :disabled="!activeBatch" plain @click="loadPhase2">刷新</el-button>
-          <el-button v-if="canManage && !isResultLocked" type="primary" plain @click="handleRefreshTags">重算自动标签</el-button>
-        </div>
-        <el-table v-loading="phase2Loading" :data="phase2.tags" border>
-          <el-table-column prop="tagName" label="标签" min-width="150" />
-          <el-table-column prop="tagSource" label="来源" width="90">
-            <template #default="{ row }">{{ row.tagSource === "auto" ? "自动" : "人工" }}</template>
-          </el-table-column>
-          <el-table-column prop="isActive" label="状态" width="90">
-            <template #default="{ row }"><el-tag :type="row.isActive ? 'success' : 'info'">{{ row.isActive ? "有效" : "停用" }}</el-tag></template>
-          </el-table-column>
-          <el-table-column prop="reason" label="原因/规则" min-width="240" />
-          <el-table-column prop="policyBasis" label="政策依据" min-width="220" />
-          <el-table-column label="操作" width="90">
-            <template #default="{ row }">
-              <el-button v-if="canManage && !isResultLocked && row.isActive" link type="warning" @click="handleDisableTag(row)">停用</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-        <el-form v-if="canManage && !isResultLocked" :model="tagForm" class="compact-form phase2-form" label-position="top">
-          <div class="form-grid">
-            <el-form-item label="人工标签">
-              <el-select v-model="tagForm.tagCode">
-                <el-option label="全家进城落户户" value="whole_family_urbanized" />
-                <el-option label="整户消亡户" value="household_extinct" />
-                <el-option label="五保户" value="five_guarantees" />
-                <el-option label="无地少地户" value="little_or_no_land" />
-              </el-select>
-            </el-form-item>
-            <el-form-item class="form-span-2" label="标记原因"><el-input v-model="tagForm.reason" /></el-form-item>
-            <el-form-item class="form-span-2" label="政策依据"><el-input v-model="tagForm.policyBasis" /></el-form-item>
-          </div>
-          <el-button type="success" plain @click="handleCreateTag">新增人工标签</el-button>
-        </el-form>
-      </el-tab-pane>
-
-      <el-tab-pane :label="`分户合户（${phase2.restructures.length}）`" name="restructures">
-        <div class="phase2-actions">
-          <el-button :disabled="!activeBatch" plain @click="loadPhase2">刷新</el-button>
-          <el-button v-if="canManage && !isResultLocked" type="primary" plain @click="fillRestructureMembers">带入当前成员</el-button>
-        </div>
-        <el-form v-if="canManage && !isResultLocked" :model="restructureForm" class="compact-form phase2-form" label-position="top">
-          <div class="form-grid">
-            <el-form-item label="类型">
-              <el-select v-model="restructureForm.restructureType">
-                <el-option label="分户" value="split" />
-                <el-option label="合户" value="merge" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="目标承包方代码"><el-input v-model="restructureForm.targetCbfbm" /></el-form-item>
-            <el-form-item label="新承包方代码"><el-input v-model="restructureForm.newCbfbm" /></el-form-item>
-            <el-form-item label="合同处理"><el-input v-model="restructureForm.contractDisposition" /></el-form-item>
-            <el-form-item label="权证处理"><el-input v-model="restructureForm.certificateDisposition" /></el-form-item>
-            <el-form-item class="form-span-2" label="原因"><el-input v-model="restructureForm.reason" /></el-form-item>
-            <el-form-item class="form-span-2" label="政策依据"><el-input v-model="restructureForm.policyBasis" /></el-form-item>
-            <el-form-item class="form-span-2" label="权益处置摘要"><el-input v-model="restructureForm.rightsSummary" type="textarea" :rows="2" /></el-form-item>
-          </div>
-          <el-table :data="restructureForm.members" border>
-            <el-table-column prop="memberName" label="成员" min-width="120" />
-            <el-table-column prop="memberIdNo" label="证件号码" min-width="180" />
-            <el-table-column label="去向承包方" min-width="180">
-              <template #default="{ row }"><el-input v-model="row.toCbfbm" /></template>
-            </el-table-column>
-            <el-table-column label="权益处置" min-width="160">
-              <template #default="{ row }"><el-input v-model="row.rightsDisposition" /></template>
-            </el-table-column>
-            <el-table-column label="操作" width="80">
-              <template #default="{ $index }"><el-button link type="danger" @click="restructureForm.members.splice($index, 1)">移除</el-button></template>
-            </el-table-column>
-          </el-table>
-          <el-button class="phase2-submit" type="success" plain @click="handleSaveRestructure">保存分合户专项</el-button>
-        </el-form>
-        <el-table v-loading="phase2Loading" :data="phase2.restructures" border>
-          <el-table-column prop="restructureNo" label="编号" min-width="150" />
-          <el-table-column prop="restructureType" label="类型" width="90" />
-          <el-table-column prop="sourceCbfbm" label="源户" min-width="170" />
-          <el-table-column prop="targetCbfbm" label="目标户" min-width="170" />
-          <el-table-column prop="newCbfbm" label="新户" min-width="170" />
-          <el-table-column prop="reason" label="原因" min-width="220" />
-          <el-table-column label="操作" width="90">
-            <template #default="{ row }">
-              <el-button v-if="canManage && !isResultLocked" link type="danger" @click="handleDeleteRestructure(row)">删除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-      </el-tab-pane>
-
-      <el-tab-pane :label="`授权委托（${phase2.authorizations.length}）`" name="authorizations">
-        <el-form v-if="canManage && !isResultLocked" :model="authorizationForm" class="compact-form phase2-form" label-position="top">
-          <div class="form-grid">
-            <el-form-item label="委托人"><el-input v-model="authorizationForm.principalName" /></el-form-item>
-            <el-form-item label="委托人证件号"><el-input v-model="authorizationForm.principalIdNo" /></el-form-item>
-            <el-form-item label="受托人"><el-input v-model="authorizationForm.agentName" /></el-form-item>
-            <el-form-item label="受托人证件号"><el-input v-model="authorizationForm.agentIdNo" /></el-form-item>
-            <el-form-item label="联系电话"><el-input v-model="authorizationForm.agentPhone" /></el-form-item>
-            <el-form-item class="form-span-2" label="委托事项"><el-input v-model="authorizationForm.authorizedMatters" type="textarea" :rows="2" /></el-form-item>
-          </div>
-          <el-button type="success" plain @click="handleSaveAuthorization">保存授权委托</el-button>
-        </el-form>
-        <input ref="authorizationFileInput" type="file" style="display:none" @change="handleAuthorizationFileChange" />
-        <el-table v-loading="phase2Loading" :data="phase2.authorizations" border>
-          <el-table-column prop="authorizationNo" label="编号" min-width="150" />
-          <el-table-column prop="principalName" label="委托人" min-width="120" />
-          <el-table-column prop="agentName" label="受托人" min-width="120" />
-          <el-table-column prop="status" label="状态" width="90" />
-          <el-table-column prop="originalName" label="上传文件" min-width="180" />
-          <el-table-column label="操作" min-width="230">
-            <template #default="{ row }">
-              <el-button link type="primary" @click="handleDownloadAuthorizationTemplate(row)">模板</el-button>
-              <el-button v-if="canManage && !isResultLocked" link type="primary" @click="openAuthorizationFile(row)">上传</el-button>
-              <el-button v-if="row.originalName" link type="primary" @click="handleDownloadAuthorizationFile(row)">下载</el-button>
-              <el-button v-if="canManage && !isResultLocked && row.status !== 'revoked'" link type="warning" @click="handleRevokeAuthorization(row)">作废</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-      </el-tab-pane>
-
-      <el-tab-pane :label="`调查附件（${phase2.attachments.length}）`" name="attachments">
+    <!-- 辅助功能面板 -->
+    <el-collapse class="survey-aux-panel">
+      <el-collapse-item title="调查附件 & 转业务申请" name="aux">
+        <!-- 附件上传 -->
         <div v-if="canManage && !isResultLocked" class="phase2-upload">
-          <el-select v-model="attachmentCategory" style="width: 180px">
+          <el-select v-model="attachmentCategory" style="width: 160px" size="small">
             <el-option label="身份证" value="id_card" />
             <el-option label="户口簿" value="household_register" />
             <el-option label="死亡证明" value="death_certificate" />
@@ -460,47 +202,47 @@
             <el-option label="进城落户证明" value="urban_settlement" />
             <el-option label="政策依据" value="policy_basis" />
             <el-option label="授权委托书" value="authorization" />
+            <el-option label="合同扫描件" value="contract" />
           </el-select>
-          <el-input v-model="attachmentDescription" placeholder="附件说明" style="width: 240px" />
+          <el-input v-model="attachmentDescription" placeholder="附件说明" style="width: 200px" size="small" />
           <input type="file" @change="handleAttachmentFileChange" />
-          <el-button type="success" plain @click="handleUploadAttachment">上传附件</el-button>
+          <el-button type="success" size="small" plain @click="handleUploadAttachment">上传</el-button>
         </div>
-        <el-table v-loading="phase2Loading" :data="phase2.attachments" border>
-          <el-table-column prop="category" label="类型" min-width="130" />
-          <el-table-column prop="originalName" label="文件名" min-width="220" />
-          <el-table-column prop="description" label="说明" min-width="220" />
-          <el-table-column prop="uploadedByName" label="上传人" min-width="110" />
+        <el-table v-loading="phase2Loading" :data="phase2.attachments" border size="small">
+          <el-table-column prop="category" label="类型" width="120" />
+          <el-table-column prop="originalName" label="文件名" min-width="200" />
+          <el-table-column prop="description" label="说明" min-width="160" show-overflow-tooltip />
           <el-table-column label="操作" width="130">
             <template #default="{ row }">
-              <el-button link type="primary" @click="handleDownloadAttachment(row)">下载</el-button>
-              <el-button v-if="canManage && !isResultLocked" link type="danger" @click="handleDeleteAttachment(row)">删除</el-button>
+              <el-button link type="primary" size="small" @click="handleDownloadAttachment(row)">下载</el-button>
+              <el-button v-if="canManage && !isResultLocked" link type="danger" size="small" @click="handleDeleteAttachment(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
-      </el-tab-pane>
 
-      <el-tab-pane label="转业务申请" name="request">
-        <el-descriptions :column="2" border>
+        <el-divider />
+
+        <!-- 转业务申请 -->
+        <el-descriptions :column="2" border size="small">
           <el-descriptions-item label="已生成申请">{{ resultForm.generatedRequestNo || "-" }}</el-descriptions-item>
           <el-descriptions-item label="建议业务类型">{{ inferRequestType(resultForm) }}</el-descriptions-item>
         </el-descriptions>
-        <el-form v-if="canManage && !resultForm.generatedRequestId" :model="requestForm" class="compact-form phase2-form" label-position="top">
+        <el-form v-if="canManage && !resultForm.generatedRequestId" :model="requestForm" class="compact-form" label-position="top" style="margin-top:8px">
           <div class="form-grid">
             <el-form-item label="业务类型">
-              <el-select v-model="requestForm.requestType">
+              <el-select v-model="requestForm.requestType" size="small">
                 <el-option label="变更登记" value="变更登记" />
                 <el-option label="注销登记" value="注销登记" />
                 <el-option label="首次登记" value="首次登记" />
               </el-select>
             </el-form-item>
-            <el-form-item label="申请标题"><el-input v-model="requestForm.requestTitle" /></el-form-item>
-            <el-form-item class="form-span-2" label="申请原因"><el-input v-model="requestForm.reason" type="textarea" :rows="3" /></el-form-item>
-            <el-form-item class="form-span-2" label="备注"><el-input v-model="requestForm.note" type="textarea" :rows="2" /></el-form-item>
+            <el-form-item label="申请标题"><el-input v-model="requestForm.requestTitle" size="small" /></el-form-item>
+            <el-form-item class="form-span-2" label="申请原因"><el-input v-model="requestForm.reason" type="textarea" :rows="2" size="small" /></el-form-item>
           </div>
-          <el-button type="success" @click="handleGenerateRequest">生成业务申请</el-button>
+          <el-button type="success" size="small" @click="handleGenerateRequest">生成业务申请</el-button>
         </el-form>
-      </el-tab-pane>
-    </el-tabs>
+      </el-collapse-item>
+    </el-collapse>
 
     <template #footer>
       <el-button @click="resultVisible = false">取消</el-button>
@@ -522,11 +264,29 @@
       </el-button>
     </template>
   </el-dialog>
+
+  <!-- 操作对话框 -->
+  <DeregisterDialog ref="deregisterDialog" @done="handleDeregisterDone" />
+  <AddParcelDialog ref="addParcelDialog" @done="reloadSurveyResult" />
+  <SplitParcelDialog ref="splitParcelDialog" @done="reloadSurveyResult" />
+  <SwapParcelsDialog ref="swapParcelsDialog" @done="reloadSurveyResult" />
+  <SplitHouseholdDialog ref="splitHouseholdDialog" @done="reloadSurveyResult" />
+  <MergeHouseholdDialog ref="mergeHouseholdDialog" @done="handleMergeDone" />
 </template>
 
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+
+import ContractorMemberPanel from "../components/survey/ContractorMemberPanel.vue";
+import ParcelInfoPanel from "../components/survey/ParcelInfoPanel.vue";
+import ContractInfoPanel from "../components/survey/ContractInfoPanel.vue";
+import DeregisterDialog from "../components/survey/DeregisterDialog.vue";
+import AddParcelDialog from "../components/survey/AddParcelDialog.vue";
+import SplitParcelDialog from "../components/survey/SplitParcelDialog.vue";
+import SwapParcelsDialog from "../components/survey/SwapParcelsDialog.vue";
+import SplitHouseholdDialog from "../components/survey/SplitHouseholdDialog.vue";
+import MergeHouseholdDialog from "../components/survey/MergeHouseholdDialog.vue";
 
 import {
   confirmSurveyResult,
@@ -560,9 +320,13 @@ import {
 import { fetchRegionTree } from "../api/region";
 import { useAuthStore } from "../stores/auth";
 import { useDialogMap } from "../composables/useDialogMap";
+import { useDictionary } from "../composables/useDictionary";
 
 const authStore = useAuthStore();
 const canManage = computed(() => authStore.hasPermission("contractors.manage"));
+const { labelOf: genderLabel } = useDictionary("nyt2539_c17_gender");
+const { labelOf: yesNoLabel } = useDictionary("nyt2539_c19_yes_no");
+const { labelOf: relationDictionaryLabel } = useDictionary("nyt2539_c20_relation_to_head");
 const batchLoading = ref(false);
 const taskLoading = ref(false);
 const changeLoading = ref(false);
@@ -578,12 +342,15 @@ const phase2Loading = ref(false);
 const phase2 = reactive({ tags: [], restructures: [], authorizations: [], attachments: [] });
 const activeBatch = ref(null);
 const activeTask = ref(null);
+const activeRegionId = ref(undefined);
+const activeRegionCode = ref("");
+const activeRegionLabel = ref("");
 const batchKeyword = ref("");
 const taskKeyword = ref("");
 const taskStatus = ref("");
 const batchDialogVisible = ref(false);
 const resultVisible = ref(false);
-const activeTab = ref("base");
+const activeTab = ref("contractor");
 const regionTree = ref([]);
 const regionTreeProps = { label: "fullName", children: "children" };
 const batchForm = reactive({ batchName: "", regionId: undefined, regionCode: "", regionName: "", remark: "" });
@@ -597,7 +364,94 @@ const attachmentDescription = ref("");
 const selectedAttachmentFile = ref(null);
 const authorizationFileInput = ref(null);
 const authorizationUploadTarget = ref(null);
+const contractorMemberPanel = ref(null);
+const deregisterDialog = ref(null);
+const addParcelDialog = ref(null);
+const splitParcelDialog = ref(null);
+const swapParcelsDialog = ref(null);
+const splitHouseholdDialog = ref(null);
+const mergeHouseholdDialog = ref(null);
 const isResultLocked = computed(() => activeBatch.value?.status === "finished" || resultForm.surveyStatus === "confirmed");
+
+// 计算变化字段列表（供 ContractorInfoPanel 高亮用）
+const computedChangedFields = computed(() => {
+  const fields = [];
+  const base = resultForm.baseContractor;
+  if (!base) return fields;
+  const keyMap = [
+    { f: "code", b: "code" }, { f: "name", b: "name" }, { f: "typeCode", b: "typeCode" },
+    { f: "idType", b: "idType" }, { f: "idNo", b: "idNo" }, { f: "mobile", b: "mobile" },
+    { f: "address", b: "address" }, { f: "postcode", b: "postcode" },
+    { f: "memberCount", b: "memberCount" }, { f: "surveyorName", b: "surveyorName" },
+    { f: "surveyDate", b: "surveyDate" }, { f: "surveyNote", b: "surveyNote" },
+    { f: "groupRegionCode", b: "groupRegionCode" }, { f: "groupRegionName", b: "groupRegionName" },
+  ];
+  for (const { f, b } of keyMap) {
+    if (String(resultForm[f] ?? "") !== String(base[b] ?? "")) {
+      fields.push(f);
+    }
+  }
+  return fields;
+});
+
+// ── 操作入口（Phase 3-8 实现） ──────────────────────
+
+function handleOpDeregister() {
+  const validCount = (resultForm.familyMembers || []).filter((m) => !m._deleted).length;
+  deregisterDialog.value.open(
+    activeBatch.value.id,
+    activeTask.value.contractorUid,
+    resultForm.name,
+    resultForm.code,
+    validCount,
+  );
+}
+function handleOpSplitHousehold() {
+  const validMembers = (resultForm.familyMembers || []).filter((m) => !m._deleted);
+  splitHouseholdDialog.value.open(
+    activeBatch.value.id,
+    activeTask.value.contractorUid,
+    validMembers,
+    parcels.value,
+  );
+}
+function handleOpMergeHousehold() {
+  const validMembers = (resultForm.familyMembers || []).filter((m) => !m._deleted);
+  mergeHouseholdDialog.value.open(
+    activeBatch.value.id,
+    activeTask.value.contractorUid,
+    resultForm.name,
+    resultForm.code,
+    validMembers,
+    parcels.value,
+    tasks.value,
+  );
+}
+function handleOpSwapParcels() {
+  swapParcelsDialog.value.open(
+    activeBatch.value.id,
+    activeTask.value.contractorUid,
+    tasks.value,
+    parcels.value,
+  );
+}
+function handleOpAddParcel() {
+  addParcelDialog.value.open(
+    activeBatch.value.id,
+    activeTask.value.contractorUid,
+  );
+}
+function handleOpSplitParcel() {
+  splitParcelDialog.value.open(
+    activeBatch.value.id,
+    activeTask.value.contractorUid,
+    parcels.value,
+  );
+}
+const taskPanelTitle = computed(() => {
+  const batchName = activeBatch.value?.batchName || "调查任务";
+  return activeRegionLabel.value ? `${batchName} - ${activeRegionLabel.value}` : batchName;
+});
 
 // ---- 地块信息 tab ----
 const parcelTabMapRoot = ref(null);
@@ -781,18 +635,109 @@ function taskStatusLabel(value) {
   return { not_started: "未调查", surveyed: "已调查", changed: "有变化", unchanged: "无变化", confirmed: "已确认", skipped: "已跳过" }[value] || value;
 }
 
+const relationToHeadFallback = {
+  "01": "户主",
+  "02": "配偶",
+  "03": "子",
+  "04": "女",
+  "05": "孙子、孙女或外孙子、外孙女",
+  "06": "父母",
+  "07": "祖父母或外祖父母",
+  "08": "兄弟姐妹",
+  "09": "其他",
+};
+
+function relationToHeadLabel(value) {
+  return relationDictionaryLabel(value, relationToHeadFallback[value] || value || "-");
+}
+
+function normalizeCompareValue(value) {
+  if (value == null) return "";
+  return String(value).trim();
+}
+
+function isChangedValue(before, after) {
+  return normalizeCompareValue(before) !== normalizeCompareValue(after);
+}
+
+function snapshotFieldClass(field) {
+  return {
+    "snapshot-changed-value": isChangedValue(resultForm.baseContractor?.[field], resultForm[field]),
+  };
+}
+
+function findSurveyMember(baseMember) {
+  if (!baseMember) return null;
+  if (baseMember.memberUid) {
+    const byUid = resultForm.familyMembers.find((item) => item.memberUid && item.memberUid === baseMember.memberUid);
+    if (byUid) return byUid;
+  }
+  return resultForm.familyMembers.find((item) => item.idNo && item.idNo === baseMember.idNo) || null;
+}
+
+function snapshotMemberFieldClass(baseMember, field) {
+  const surveyMember = findSurveyMember(baseMember);
+  return {
+    "snapshot-changed-value": !surveyMember || isChangedValue(baseMember?.[field], surveyMember?.[field]),
+  };
+}
+
 async function loadBatches() {
   batchLoading.value = true;
   try {
-    const { data } = await fetchSurveyBatches({ page: 1, page_size: 50, keyword: batchKeyword.value || undefined });
+    const { data } = await fetchSurveyBatches({
+      page: 1,
+      page_size: 50,
+      keyword: batchKeyword.value || undefined,
+      regionCode: activeRegionCode.value || undefined,
+    });
     batches.value = data.data.items;
-    if (!activeBatch.value && batches.value.length) {
-      activeBatch.value = batches.value[0];
+    const previousBatchId = activeBatch.value?.id;
+    activeBatch.value = batches.value.find((item) => item.id === previousBatchId) || batches.value[0] || null;
+    if (activeBatch.value) {
       await loadTasks();
       await loadChanges();
+    } else {
+      tasks.value = [];
+      changes.value = [];
     }
   } finally {
     batchLoading.value = false;
+  }
+}
+
+async function reloadBatchesForRegion() {
+  activeBatch.value = null;
+  tasks.value = [];
+  changes.value = [];
+  await loadBatches();
+}
+
+function buildRegionParams() {
+  return activeRegionCode.value ? { regionCode: activeRegionCode.value } : {};
+}
+
+async function handleActiveRegionChange(value) {
+  const selected = flattenRegions(regionTree.value).find((item) => item.id === value);
+  activeRegionCode.value = selected?.code || "";
+  activeRegionLabel.value = selected?.fullName || "";
+  activeRegionId.value = selected?.id;
+  await reloadBatchesForRegion();
+}
+
+function applyDefaultRegionFilter() {
+  if (activeRegionId.value) {
+    return;
+  }
+  const userRegionCode = authStore.user?.regionCode;
+  if (!userRegionCode) {
+    return;
+  }
+  const selected = flattenRegions(regionTree.value).find((item) => item.code === userRegionCode);
+  if (selected) {
+    activeRegionId.value = selected.id;
+    activeRegionCode.value = selected.code;
+    activeRegionLabel.value = selected.fullName;
   }
 }
 
@@ -808,6 +753,7 @@ async function loadTasks() {
       page_size: 100,
       keyword: taskKeyword.value || undefined,
       taskStatus: taskStatus.value || undefined,
+      ...buildRegionParams(),
     });
     tasks.value = data.data.items;
   } finally {
@@ -822,7 +768,7 @@ async function loadChanges() {
   }
   changeLoading.value = true;
   try {
-    const { data } = await fetchSurveyChanges(activeBatch.value.id, { page: 1, page_size: 100 });
+    const { data } = await fetchSurveyChanges(activeBatch.value.id, { page: 1, page_size: 100, ...buildRegionParams() });
     changes.value = data.data.items;
   } finally {
     changeLoading.value = false;
@@ -836,7 +782,14 @@ function handleBatchSelect(row) {
 }
 
 function openCreateBatch() {
-  Object.assign(batchForm, { batchName: "", regionId: undefined, regionCode: "", regionName: "", remark: "" });
+  const selectedRegion = flattenRegions(regionTree.value).find((item) => item.code === activeRegionCode.value);
+  Object.assign(batchForm, {
+    batchName: "",
+    regionId: selectedRegion?.id,
+    regionCode: selectedRegion?.code || "",
+    regionName: selectedRegion?.fullName || "",
+    remark: "",
+  });
   batchDialogVisible.value = true;
 }
 
@@ -880,6 +833,12 @@ function handleBatchRegionChange(value) {
 async function loadRegionTree() {
   const { data } = await fetchRegionTree();
   regionTree.value = data.data;
+  applyDefaultRegionFilter();
+}
+
+async function loadInitialData() {
+  await loadRegionTree();
+  await loadBatches();
 }
 
 async function handleFinishBatch() {
@@ -907,7 +866,7 @@ async function handleExportResults() {
   if (!activeBatch.value) {
     return;
   }
-  const { data } = await exportSurveyResults(activeBatch.value.id);
+  const { data } = await exportSurveyResults(activeBatch.value.id, buildRegionParams());
   const url = URL.createObjectURL(data);
   const link = document.createElement("a");
   link.href = url;
@@ -925,7 +884,7 @@ async function openResult(row) {
     familyMembers: (data.data.familyMembers || []).map((item) => ({ ...item })),
   });
   resetPhase2Forms();
-  activeTab.value = "snapshot";
+  activeTab.value = "contractor";
   resultVisible.value = true;
   await loadDiffs();
   await loadPhase2();
@@ -1158,40 +1117,17 @@ function downloadBlob(data, filename) {
   URL.revokeObjectURL(url);
 }
 
-function appendMember() {
-  resultForm.familyMembers.push({
-    memberUid: "",
-    name: "",
-    gender: "1",
-    idType: "1",
-    idNo: "",
-    relationToHead: "",
-    noteCode: "",
-    isCoOwner: "1",
-    note: "",
-    memberResultStatus: "added",
-    surveyStatus: "surveyed",
-    isHouseholdHead: false,
-    isUrbanSettled: false,
-    isMarriedOutWoman: false,
-    isDeceased: false,
-    isFiveGuarantees: false,
-    changeReason: "",
-    policyBasis: "",
-    rightsDisposition: "pending",
-    remark: "",
-  });
-}
-
 async function handleSaveResult() {
   if (!activeBatch.value || !activeTask.value) {
     return;
   }
   savingResult.value = true;
   try {
+    const validMembers = (resultForm.familyMembers || []).filter((m) => !m._deleted);
+    const cleanMembers = validMembers.map(({ _deleted, _isNew, ...rest }) => rest);
     await updateSurveyResult(activeBatch.value.id, activeTask.value.contractorUid, {
       ...resultForm,
-      familyMembers: resultForm.familyMembers,
+      familyMembers: cleanMembers,
     });
     ElMessage.success("调查结果已保存");
     resultVisible.value = false;
@@ -1257,6 +1193,37 @@ async function handleConfirmCurrent() {
   }
 }
 
+async function reloadSurveyResult() {
+  if (!activeBatch.value || !activeTask.value) return;
+  try {
+    const { data } = await fetchSurveyResult(activeBatch.value.id, activeTask.value.contractorUid);
+    Object.assign(resultForm, createEmptyResult(), data.data, {
+      familyMembers: (data.data.familyMembers || []).map((item) => ({ ...item })),
+    });
+    await loadDiffs();
+    await loadChanges();
+    await loadTasks();
+    await loadBatches();
+    await loadSurveyParcels();
+  } catch (e) {
+    // silently ignore reload errors
+  }
+}
+
+async function handleDeregisterDone() {
+  resultVisible.value = false;
+  await loadTasks();
+  await loadBatches();
+  await loadChanges();
+}
+
+async function handleMergeDone() {
+  resultVisible.value = false;
+  await loadTasks();
+  await loadBatches();
+  await loadChanges();
+}
+
 watch(activeTab, (tab) => {
   if (tab === "parcels") {
     handleParcelTabEnter();
@@ -1280,8 +1247,7 @@ watch(resultVisible, (visible) => {
   }
 });
 
-loadRegionTree();
-loadBatches();
+loadInitialData();
 </script>
 
 <style scoped>
@@ -1298,6 +1264,17 @@ loadBatches();
   font-size: 14px;
   font-weight: 700;
   margin: 16px 0 10px;
+}
+
+.snapshot-changed-value {
+  background: #fef3c7;
+  border: 1px solid #f59e0b;
+  border-radius: 4px;
+  color: #92400e;
+  display: inline-block;
+  font-weight: 600;
+  line-height: 1.5;
+  padding: 0 6px;
 }
 
 .phase2-actions,

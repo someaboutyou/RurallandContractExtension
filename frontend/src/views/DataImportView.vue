@@ -33,6 +33,7 @@
                 <el-button v-if="canManage" link type="primary" @click="openUploadDialog(row)">上传数据</el-button>
                 <el-button link type="primary" @click="openRows(row)">行明细</el-button>
                 <el-button link type="warning" @click="handleDownloadFailedRows(row)">失败行</el-button>
+                <el-button v-if="canRollback(row)" link type="danger" @click="handleRollback(row)">回滚</el-button>
               </div>
             </template>
           </el-table-column>
@@ -93,12 +94,21 @@
         title="请上传包含 FileGDB（.gdb 目录）的 ZIP 压缩包，系统会自动导入 FBF、CBF、CBF_JTCY、CBDKXX、DK 图层。"
       />
       <el-form-item label="GDB ZIP 文件">
-        <input type="file" :accept="uploadAccept" @change="handleFileChange" />
+        <input type="file" :accept="uploadAccept" :disabled="uploading" @change="handleFileChange" />
       </el-form-item>
+      <div v-if="importProgress" class="import-progress">
+        <div class="progress-meta">
+          <span>{{ progressStatusLabel(importProgress.status) }}</span>
+          <span>{{ importProgress.processedRows || 0 }}/{{ importProgress.totalRows || 0 }}</span>
+        </div>
+        <el-progress :percentage="Number(importProgress.percent || 0)" :status="progressBarStatus" />
+        <div class="progress-message">{{ importProgress.message || importProgress.currentLayer || "" }}</div>
+      </div>
     </el-form>
     <template #footer>
-      <el-button @click="uploadVisible = false">取消</el-button>
-      <el-button :loading="uploading" type="success" @click="handleUpload">上传并导入</el-button>
+      <el-button @click="uploadVisible = false">关闭</el-button>
+      <el-button v-if="canCancelImport" type="warning" plain @click="handleCancelImport">取消导入</el-button>
+      <el-button :loading="uploading" :disabled="uploading" type="success" @click="handleUpload">上传并导入</el-button>
     </template>
   </el-dialog>
 
@@ -128,14 +138,17 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref } from "vue";
-import { ElMessage } from "element-plus";
+import { computed, onUnmounted, reactive, ref } from "vue";
+import { ElMessage, ElMessageBox } from "element-plus";
 
 import {
   createImportBatch,
+  cancelImport,
   downloadFailedImportRows,
   fetchImportBatches,
+  fetchImportProgress,
   fetchImportRows,
+  rollbackImport,
   uploadImportGdb,
 } from "../api/dataImport";
 import { fetchRegionTree } from "../api/region";
@@ -157,15 +170,52 @@ const uploadVisible = ref(false);
 const rowsVisible = ref(false);
 const activeBatch = ref(null);
 const selectedFile = ref(null);
+const importProgress = ref(null);
 const detailRows = ref([]);
 const rowStatusFilter = ref("");
 const regionTree = ref([]);
 const regionTreeProps = { label: "fullName", children: "children" };
 const form = reactive({ importName: "", sourceOrg: "", regionId: undefined, regionCode: "", regionName: "", remark: "" });
 const uploadAccept = ".zip,application/zip";
+const importDoneStatuses = ["success", "partial_success", "failed", "canceled"];
+const importActiveBatchStatuses = ["processing"];
+let progressTimer = null;
+
+const progressBarStatus = computed(() => {
+  if (!importProgress.value) return undefined;
+  if (importProgress.value.status === "failed" || importProgress.value.status === "canceled") return "exception";
+  if (importDoneStatuses.includes(importProgress.value.status)) return "success";
+  return undefined;
+});
+
+const canCancelImport = computed(() => {
+  return importProgress.value && !importDoneStatuses.includes(importProgress.value.status) && importProgress.value.status !== "cancel_requested";
+});
 
 function importStatusLabel(value) {
-  return { uploaded: "已创建", success: "成功", partial_success: "部分成功", failed: "失败" }[value] || value;
+  return { uploaded: "已创建", processing: "处理中", canceled: "已取消", rolled_back: "已回滚", success: "成功", partial_success: "部分成功", failed: "失败" }[value] || value;
+}
+
+function progressStatusLabel(value) {
+  return {
+    queued: "等待导入",
+    running: "正在导入",
+    processing: "处理中",
+    cancel_requested: "正在取消",
+    canceled: "已取消",
+    rolled_back: "已回滚",
+    success: "导入成功",
+    partial_success: "部分成功",
+    failed: "导入失败",
+  }[value] || value;
+}
+
+function canRollback(row) {
+  return canManage.value && ["success", "partial_success", "failed", "canceled"].includes(row.status);
+}
+
+function isActiveImportBatch(row) {
+  return row && importActiveBatchStatuses.includes(row.status);
 }
 
 async function loadBatches() {
@@ -224,9 +274,33 @@ function handleRegionChange(value) {
 }
 
 function openUploadDialog(row) {
+  stopProgressPolling();
   activeBatch.value = row;
   selectedFile.value = null;
+  importProgress.value = null;
   uploadVisible.value = true;
+  uploading.value = false;
+  if (isActiveImportBatch(row)) {
+    importProgress.value = buildProgressFromBatch(row);
+    uploading.value = true;
+    startProgressPolling();
+  }
+}
+
+function buildProgressFromBatch(row) {
+  const totalRows = row.totalCount || 0;
+  const processedRows = (row.successCount || 0) + (row.failedCount || 0);
+  return {
+    batchId: row.id,
+    jobId: null,
+    status: row.status,
+    totalRows,
+    processedRows,
+    successRows: row.successCount || 0,
+    failedRows: row.failedCount || 0,
+    percent: totalRows ? Number(((processedRows * 100) / totalRows).toFixed(2)) : 0,
+    message: "正在获取导入进度",
+  };
 }
 
 function handleFileChange(event) {
@@ -242,14 +316,83 @@ async function handleUpload() {
   formData.append("file", selectedFile.value);
   uploading.value = true;
   try {
-    await uploadImportGdb(activeBatch.value.id, formData);
-    ElMessage.success("导入完成");
-    uploadVisible.value = false;
-    await loadBatches();
+    const { data } = await uploadImportGdb(activeBatch.value.id, formData);
+    importProgress.value = {
+      batchId: activeBatch.value.id,
+      jobId: data.data.jobId,
+      status: data.data.status,
+      totalRows: 0,
+      processedRows: 0,
+      percent: 0,
+      message: "后台导入任务已提交",
+    };
+    ElMessage.success("导入任务已提交");
+    startProgressPolling();
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || "导入失败");
-  } finally {
     uploading.value = false;
+  }
+}
+
+function startProgressPolling() {
+  stopProgressPolling();
+  pollImportProgress();
+  progressTimer = window.setInterval(pollImportProgress, 1500);
+}
+
+function stopProgressPolling() {
+  if (progressTimer) {
+    window.clearInterval(progressTimer);
+    progressTimer = null;
+  }
+}
+
+async function pollImportProgress() {
+  if (!activeBatch.value) return;
+  try {
+    const { data } = await fetchImportProgress(activeBatch.value.id);
+    importProgress.value = data.data;
+    if (importDoneStatuses.includes(importProgress.value.status)) {
+      stopProgressPolling();
+      uploading.value = false;
+      await loadBatches();
+    }
+  } catch (error) {
+    stopProgressPolling();
+    uploading.value = false;
+    ElMessage.error(error.response?.data?.detail || "获取导入进度失败");
+  }
+}
+
+async function handleCancelImport() {
+  if (!activeBatch.value) return;
+  try {
+    const { data } = await cancelImport(activeBatch.value.id);
+    importProgress.value = data.data;
+    ElMessage.info("已请求取消导入");
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || "取消导入失败");
+  } finally {
+    await loadBatches();
+  }
+}
+
+async function handleRollback(row) {
+  try {
+    await ElMessageBox.confirm(`确认回滚导入批次「${row.importName}」吗？`, "回滚导入", {
+      type: "warning",
+      confirmButtonText: "回滚",
+      cancelButtonText: "取消",
+    });
+  } catch {
+    return;
+  }
+  try {
+    await rollbackImport(row.id);
+    ElMessage.success("批次已回滚");
+    await loadBatches();
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || "回滚失败");
   }
 }
 
@@ -304,10 +447,30 @@ async function loadRegionTree() {
 
 loadRegionTree();
 loadBatches();
+onUnmounted(stopProgressPolling);
 </script>
 
 <style scoped>
 .upload-tip {
   margin-bottom: 16px;
+}
+
+.import-progress {
+  margin-top: 12px;
+}
+
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+}
+
+.progress-message {
+  min-height: 20px;
+  margin-top: 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 </style>

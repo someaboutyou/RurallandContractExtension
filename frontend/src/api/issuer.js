@@ -4,6 +4,14 @@ export function fetchIssuers(params) {
   return http.get("/issuers", { params });
 }
 
+export function fetchIssuerContractors(code) {
+  return http.get(`/issuers/${code}/contractors`);
+}
+
+export function fetchIssuerParcels(code) {
+  return http.get(`/issuers/${code}/parcels`);
+}
+
 export function createIssuer(payload) {
   return http.post("/issuers", payload);
 }

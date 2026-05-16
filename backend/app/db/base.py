@@ -1,6 +1,7 @@
 from app.models.base import Base
 from app.models.cbht import Cbht
 from app.models.data_import import DataImportBatch, DataImportFile, DataImportRow
+from app.models.dictionary import DictionaryItem
 from app.models.fbf import Fbf
 from app.models.issuer import Issuer
 from app.models.map_layer import MapLayer
@@ -40,6 +41,7 @@ from app.models.workflow_definition_version import WorkflowDefinitionVersion
 
 __all__ = [
     "Base",
+    "DictionaryItem",
     "Tenant",
     "Region",
     "RequestAttachmentTemplate",

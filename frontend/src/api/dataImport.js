@@ -38,6 +38,18 @@ export function uploadImportGdb(batchId, formData) {
   });
 }
 
+export function fetchImportProgress(batchId) {
+  return http.get(`/data-imports/${batchId}/progress`);
+}
+
+export function cancelImport(batchId) {
+  return http.post(`/data-imports/${batchId}/cancel`);
+}
+
+export function rollbackImport(batchId) {
+  return http.post(`/data-imports/${batchId}/rollback`);
+}
+
 export function fetchImportRows(batchId, params) {
   return http.get(`/data-imports/${batchId}/rows`, { params });
 }

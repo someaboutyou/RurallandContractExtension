@@ -2,18 +2,21 @@ import csv
 import hashlib
 import io
 import json
+import logging
 import tempfile
 import zipfile
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, inspect as sa_inspect, or_, select, text
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.sqltypes import Date as SADate, DateTime as SADateTime, Integer as SAInteger, Numeric as SANumeric
 
-from app.models.data_import import DataImportBatch, DataImportFile, DataImportRow
+from app.db.session import SessionLocal, set_current_user
+from app.models.data_import import DataImportBatch, DataImportFile, DataImportOperation, DataImportRow
 from app.models.fbf import Fbf
 from app.models.region import Region
 from app.models.survey import (
@@ -32,9 +35,20 @@ from app.models.survey import (
 )
 from app.models.user import User
 from app.services.data_access_service import data_access_service
+from app.services.data_import_progress import data_import_progress
+from app.services.geoserver_service import geoserver_service
+
+
+logger = logging.getLogger(__name__)
+
+
+class ImportCanceled(Exception):
+    pass
 
 
 class DataImportService:
+    chunk_size = 5000
+    progress_update_interval = 100
     cbf_field_map = {
         "cbfbm": ["cbfbm", "承包方代码", "code"],
         "region_code": ["region_code", "区域代码", "regionCode"],
@@ -360,12 +374,106 @@ class DataImportService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="上传文件为空")
 
         filename = upload_file.filename or "import_gdb.zip"
+        return self._process_gdb_archive_content(db, batch, filename, content, upload_file.content_type, current_user)
+
+    async def start_gdb_import_job(self, db: Session, batch_id: int, upload_file: UploadFile, current_user: User, background_tasks) -> dict:
+        batch = db.get(DataImportBatch, batch_id)
+        if batch is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导入批次不存在")
+        if not batch.region_code:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="导入 GDB 前请先选择导入区域")
+
+        content = await upload_file.read()
+        if not content:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="上传文件为空")
+
+        filename = upload_file.filename or "import_gdb.zip"
+        if not filename.lower().endswith(".zip"):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请上传包含 .gdb 目录的 ZIP 压缩包")
+
+        storage_dir = Path(__file__).resolve().parents[1] / "storage" / "data_imports" / str(batch.id)
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        stored_path = storage_dir / f"{datetime.now():%Y%m%d%H%M%S}_{Path(filename).name}"
+        stored_path.write_bytes(content)
+
+        job_id = f"gdb:{batch.id}:{datetime.now(timezone.utc).timestamp()}"
+        batch.status = "processing"
+        batch.source_type = "gdb"
+        batch.source_name = filename
+        batch.imported_by = current_user.id
+        batch.imported_by_name = current_user.real_name
+        batch.imported_at = datetime.now(timezone.utc)
+        db.commit()
+        data_import_progress.init(
+            batch.id,
+            job_id,
+            {
+                "status": "queued",
+                "message": "文件已上传，等待后台导入",
+                "filename": filename,
+                "fileSize": len(content),
+            },
+        )
+        background_tasks.add_task(self.run_gdb_import_job, batch.id, str(stored_path), filename, upload_file.content_type, current_user.id, job_id)
+        return {"batchId": batch.id, "jobId": job_id, "status": "queued"}
+
+    def run_gdb_import_job(self, batch_id: int, stored_path: str, filename: str, content_type: str | None, user_id: int, job_id: str) -> None:
+        db = SessionLocal()
+        try:
+            current_user = db.get(User, user_id)
+            batch = db.get(DataImportBatch, batch_id)
+            if current_user is None or batch is None:
+                data_import_progress.update(batch_id, status="failed", message="导入批次或用户不存在")
+                return
+            set_current_user(db, current_user)
+            data_import_progress.update(batch_id, status="running", message="后台导入已开始")
+            content = Path(stored_path).read_bytes()
+            self._process_gdb_archive_content(db, batch, filename, content, content_type, current_user, job_id=job_id)
+        except ImportCanceled:
+            db.rollback()
+            batch = db.get(DataImportBatch, batch_id)
+            if batch is not None:
+                batch.status = "canceled"
+                db.commit()
+            data_import_progress.update(batch_id, status="canceled", message="导入已取消")
+            logger.info("GDB import canceled: batch_id=%s", batch_id)
+        except Exception:
+            db.rollback()
+            batch = db.get(DataImportBatch, batch_id)
+            if batch is not None:
+                batch.status = "failed"
+                db.commit()
+            data_import_progress.update(batch_id, status="failed", message="导入失败，详见后端日志")
+            logger.exception("GDB import job failed: batch_id=%s filename=%s", batch_id, filename)
+        finally:
+            db.close()
+
+    def _process_gdb_archive_content(
+        self,
+        db: Session,
+        batch: DataImportBatch,
+        filename: str,
+        content: bytes,
+        content_type: str | None,
+        current_user: User,
+        job_id: str | None = None,
+    ) -> dict:
         if not filename.lower().endswith(".zip"):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请上传包含 .gdb 目录的 ZIP 压缩包")
 
         try:
+            logger.info(
+                "GDB import started: batch_id=%s import_no=%s filename=%s size=%s user_id=%s region_code=%s",
+                batch.id,
+                batch.import_no,
+                filename,
+                len(content),
+                current_user.id,
+                batch.region_code,
+            )
             archive = zipfile.ZipFile(io.BytesIO(content))
         except zipfile.BadZipFile as exc:
+            logger.warning("GDB import rejected: invalid zip batch_id=%s filename=%s", batch.id, filename)
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无法读取 ZIP 压缩包") from exc
 
         now = datetime.now(timezone.utc)
@@ -374,7 +482,7 @@ class DataImportService:
             import_batch_id=batch.id,
             file_type="gdb_archive",
             original_name=filename,
-            content_type=upload_file.content_type,
+            content_type=content_type,
             file_size=len(content),
             file_hash=hashlib.sha256(content).hexdigest(),
             parse_status="success",
@@ -389,6 +497,7 @@ class DataImportService:
         with tempfile.TemporaryDirectory(prefix="rural_gdb_") as temp_dir:
             self._extract_zip_safely(archive, temp_dir)
             gdb_path = self._find_gdb_path(temp_dir)
+            logger.info("GDB extracted: batch_id=%s gdb_path=%s", batch.id, gdb_path)
             stats_list = self._process_gdb_layers(db, batch, gdb_path, current_user, now)
 
         archive_file.row_count = sum(item["row_count"] for item in stats_list)
@@ -403,6 +512,15 @@ class DataImportService:
             current_user=current_user,
             now=now,
         )
+        geoserver_service.recalculate_default_bounds()
+        logger.info(
+            "GDB import finished: batch_id=%s total=%s success=%s failed=%s",
+            batch.id,
+            batch.total_count,
+            batch.success_count,
+            batch.failed_count,
+        )
+        data_import_progress.update(batch.id, status=batch.status, message="导入完成")
         return self._serialize_batch(batch)
 
     def _extract_zip_safely(self, archive: zipfile.ZipFile, target_dir: str) -> None:
@@ -440,11 +558,21 @@ class DataImportService:
         except Exception as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"无法读取 GDB 图层：{exc}") from exc
 
+        logger.info("GDB layers discovered: gdb_path=%s layers=%s", gdb_path, available_layers)
         layer_map: dict[str, str] = {}
         for layer_name in available_layers:
             file_type = self._infer_gdb_layer_type(layer_name)
             if file_type and file_type not in layer_map:
                 layer_map[file_type] = layer_name
+
+        total_rows = 0
+        for layer_name in layer_map.values():
+            try:
+                with fiona.open(gdb_path, layer=layer_name) as source:
+                    total_rows += len(source)
+            except Exception:
+                logger.exception("Failed to count GDB layer rows: gdb_path=%s layer=%s", gdb_path, layer_name)
+        data_import_progress.update(batch.id, totalRows=total_rows, processedRows=0, successRows=0, failedRows=0, status="running", message="开始读取 GDB 图层")
 
         stats_list = []
         for file_type in self.gdb_layer_order:
@@ -489,52 +617,173 @@ class DataImportService:
         warning_count = 0
         seen_keys: set[str] = set()
         affected_contractors: set[str] = set()
-        with fiona_module.open(gdb_path, layer=layer_name) as source:
-            row_count = len(source)
-            for index, feature in enumerate(source, start=1):
-                raw = self._json_safe(dict(feature.get("properties") or {}))
-                normalized = self._normalize_row(raw, field_map)
-                self._apply_gdb_region_defaults(batch, normalized)
-                entity_key = self._entity_key(file_type, normalized)
+        survey_batch = self._ensure_import_survey_batch(db, batch, current_user, now)
+        existing_state = self._build_import_existing_state(db, survey_batch, file_type)
+        progress = data_import_progress.get(batch.id) or {}
+        progress_state = {
+            "processedRows": int(progress.get("processedRows") or 0),
+            "successRows": int(progress.get("successRows") or 0),
+            "failedRows": int(progress.get("failedRows") or 0),
+        }
+
+        def update_progress(current_layer: str, *, force: bool = False) -> None:
+            if not force and progress_state["processedRows"] % self.progress_update_interval != 0:
+                return
+            data_import_progress.update(
+                batch.id,
+                currentLayer=current_layer,
+                processedRows=progress_state["processedRows"],
+                successRows=progress_state["successRows"],
+                failedRows=progress_state["failedRows"],
+                message=f"正在导入 {current_layer}",
+            )
+
+        def process_items(items: list[dict]) -> None:
+            nonlocal success_count, failed_count
+            if not items:
+                return
+            if self._can_bulk_insert_new_items(file_type, existing_state):
+                try:
+                    with db.begin_nested():
+                        bulk_success, bulk_failed, bulk_affected = self._bulk_insert_new_items(
+                            db,
+                            batch,
+                            import_file,
+                            survey_batch,
+                            file_type,
+                            items,
+                            current_user,
+                            now,
+                            seen_keys,
+                        )
+                    success_count += bulk_success
+                    failed_count += bulk_failed
+                    affected_contractors.update(bulk_affected)
+                    progress_state["processedRows"] += len(items)
+                    progress_state["successRows"] += bulk_success
+                    progress_state["failedRows"] += bulk_failed
+                    db.commit()
+                    update_progress(layer_name, force=True)
+                    return
+                except Exception:
+                    logger.exception(
+                        "Bulk new GDB import failed, falling back to row import: batch_id=%s file_type=%s layer=%s rows=%s",
+                        batch.id,
+                        file_type,
+                        layer_name,
+                        len(items),
+                    )
+
+            context = self._build_import_context(db, batch, survey_batch, file_type, items, existing_state)
+            for item in items:
                 row_record = DataImportRow(
                     import_batch_id=batch.id,
                     import_file_id=import_file.id,
-                    row_no=index,
+                    row_no=item["row_no"],
                     entity_type=file_type,
-                    entity_key=entity_key,
+                    entity_key=item["entity_key"],
                     operation_type="insert",
                     status="pending",
                     target_table=f"survey_{file_type}_base" if file_type not in {"cbf", "cbf_jtcy"} else file_type,
-                    raw_data=raw,
-                    normalized_data=normalized,
+                    raw_data=item["raw"],
+                    normalized_data=item["normalized"],
                 )
-                db.add(row_record)
-                db.flush()
+                row_status = "pending"
                 try:
-                    if not entity_key:
-                        raise ValueError("无法识别业务主键")
-                    if entity_key in seen_keys:
-                        raise ValueError(f"同一图层内业务主键重复：{entity_key}")
-                    seen_keys.add(entity_key)
-                    geometry = self._json_safe(feature.get("geometry"))
-                    operation, target_id = self._import_row(db, batch, import_file, row_record, file_type, normalized, current_user, now, geometry)
+                    with db.begin_nested():
+                        if not item["entity_key"]:
+                            raise ValueError("无法识别业务主键")
+                        if item["entity_key"] in seen_keys:
+                            raise ValueError(f"同一图层内业务主键重复：{item['entity_key']}")
+                        operation, target_id = self._import_row(
+                            db,
+                            batch,
+                            import_file,
+                            row_record,
+                            file_type,
+                            item["normalized"],
+                            current_user,
+                            now,
+                            item.get("geometry"),
+                            context,
+                        )
+                    seen_keys.add(item["entity_key"])
                     row_record.operation_type = operation
-                    row_record.status = "success"
+                    row_status = "success"
                     row_record.target_id = target_id
-                    if normalized.get("cbfbm"):
-                        affected_contractors.add(normalized["cbfbm"])
+                    if item["normalized"].get("cbfbm"):
+                        affected_contractors.add(item["normalized"]["cbfbm"])
                     success_count += 1
                 except Exception as exc:
+                    row_status = "failed"
                     row_record.status = "failed"
                     row_record.operation_type = "error"
                     row_record.error_message = str(exc)
+                    db.add(row_record)
                     failed_count += 1
+                    logger.exception(
+                        "GDB row import failed: batch_id=%s file_type=%s layer=%s row_no=%s entity_key=%s normalized=%s raw=%s",
+                        batch.id,
+                        file_type,
+                        layer_name,
+                        item["row_no"],
+                        item["entity_key"],
+                        item["normalized"],
+                        item["raw"],
+                    )
+                finally:
+                    progress_state["processedRows"] += 1
+                    progress_state["successRows"] += 1 if row_status == "success" else 0
+                    progress_state["failedRows"] += 1 if row_status == "failed" else 0
+                    update_progress(layer_name)
+            db.commit()
+            update_progress(layer_name, force=True)
+
+        with fiona_module.open(gdb_path, layer=layer_name) as source:
+            row_count = len(source)
+            logger.info(
+                "GDB layer import started: batch_id=%s file_type=%s layer=%s rows=%s",
+                batch.id,
+                file_type,
+                layer_name,
+                row_count,
+            )
+            pending_items: list[dict] = []
+            for index, feature in enumerate(source, start=1):
+                if data_import_progress.is_cancel_requested(batch.id):
+                    raise ImportCanceled()
+                raw = self._json_safe(dict(feature.get("properties") or {}))
+                normalized = self._normalize_row(raw, field_map)
+                self._apply_gdb_region_defaults(batch, normalized)
+                pending_items.append(
+                    {
+                        "row_no": index,
+                        "raw": raw,
+                        "normalized": normalized,
+                        "entity_key": self._entity_key(file_type, normalized),
+                        "geometry": self._json_safe(feature.get("geometry")),
+                    }
+                )
+                if len(pending_items) >= self.chunk_size:
+                    process_items(pending_items)
+                    pending_items = []
+            process_items(pending_items)
+            update_progress(layer_name, force=True)
 
         if file_type == "cbf_jtcy":
             self._recount_member_counts(db, affected_contractors)
         import_file.row_count = row_count
         import_file.error_count = failed_count
         import_file.parse_status = "success" if failed_count == 0 else ("partial_success" if success_count else "failed")
+        logger.info(
+            "GDB layer import finished: batch_id=%s file_type=%s layer=%s rows=%s success=%s failed=%s",
+            batch.id,
+            file_type,
+            layer_name,
+            row_count,
+            success_count,
+            failed_count,
+        )
         return {
             "file_type": file_type,
             "import_file_id": import_file.id,
@@ -584,6 +833,8 @@ class DataImportService:
         warning_count = 0
         seen_keys: set[str] = set()
         affected_contractors: set[str] = set()
+        survey_batch = self._ensure_import_survey_batch(db, batch, current_user, now)
+        context = {"survey_batch": survey_batch}
         for index, raw in enumerate(rows, start=2):
             normalized = self._normalize_row(raw, self._field_map_for(file_type))
             entity_key = self._entity_key(file_type, normalized)
@@ -599,15 +850,13 @@ class DataImportService:
                 raw_data=raw,
                 normalized_data=normalized,
             )
-            db.add(row_record)
-            db.flush()
             try:
                 if not entity_key:
                     raise ValueError("无法识别业务主键")
                 if entity_key in seen_keys:
                     raise ValueError(f"同一文件内业务主键重复：{entity_key}")
                 seen_keys.add(entity_key)
-                operation, target_id = self._import_row(db, batch, import_file, row_record, file_type, normalized, current_user, now)
+                operation, target_id = self._import_row(db, batch, import_file, row_record, file_type, normalized, current_user, now, context=context)
                 row_record.operation_type = operation
                 row_record.status = "success"
                 row_record.target_id = target_id
@@ -618,6 +867,7 @@ class DataImportService:
                 row_record.status = "failed"
                 row_record.operation_type = "error"
                 row_record.error_message = str(exc)
+                db.add(row_record)
                 failed_count += 1
         if file_type == "cbf_jtcy":
             self._recount_member_counts(db, affected_contractors)
@@ -634,6 +884,731 @@ class DataImportService:
             "warning_count": warning_count,
             "affected_contractors": affected_contractors,
         }
+
+    def _chunks(self, items: list, size: int):
+        for start in range(0, len(items), size):
+            yield items[start : start + size]
+
+    def _has_any(self, db: Session, model, *conditions) -> bool:
+        primary_key = sa_inspect(model).primary_key[0]
+        stmt = select(primary_key).limit(1)
+        if conditions:
+            stmt = stmt.where(*conditions)
+        return db.scalar(stmt) is not None
+
+    def _build_import_existing_state(self, db: Session, survey_batch: SurveyBatch, file_type: str) -> dict[str, bool]:
+        if file_type == "cbf":
+            return {
+                "cbf_base": self._has_any(db, SurveyCbfBase, SurveyCbfBase.batch_id == survey_batch.id),
+                "cbf_result": self._has_any(db, SurveyCbfResult, SurveyCbfResult.batch_id == survey_batch.id),
+                "contractor_task": self._has_any(db, SurveyContractorTask, SurveyContractorTask.batch_id == survey_batch.id),
+            }
+        if file_type == "cbf_jtcy":
+            return {
+                "contractor_base": self._has_any(db, SurveyCbfBase, SurveyCbfBase.batch_id == survey_batch.id),
+                "member_base": self._has_any(db, SurveyCbfJtcyBase, SurveyCbfJtcyBase.batch_id == survey_batch.id),
+                "member_result": self._has_any(db, SurveyCbfJtcyResult, SurveyCbfJtcyResult.batch_id == survey_batch.id),
+            }
+        if file_type == "fbf":
+            return {
+                "fbf_base": self._has_any(db, SurveyFbfBase, SurveyFbfBase.batch_id == survey_batch.id),
+                "fbf_result": self._has_any(db, SurveyFbfResult, SurveyFbfResult.batch_id == survey_batch.id),
+                "legacy_fbf": self._has_any(db, Fbf),
+            }
+        if file_type == "cbdkxx":
+            return {
+                "cbdkxx_base": self._has_any(db, SurveyCbdkxxBase, SurveyCbdkxxBase.batch_id == survey_batch.id),
+                "cbdkxx_result": self._has_any(db, SurveyCbdkxxResult, SurveyCbdkxxResult.batch_id == survey_batch.id),
+            }
+        if file_type == "dk":
+            return {
+                "dk_base": self._has_any(db, SurveyDkBase, SurveyDkBase.batch_id == survey_batch.id),
+                "dk_result": self._has_any(db, SurveyDkResult, SurveyDkResult.batch_id == survey_batch.id),
+            }
+        return {}
+
+    def _can_bulk_insert_new_items(self, file_type: str, existing_state: dict[str, bool]) -> bool:
+        if file_type == "cbf_jtcy" and not existing_state.get("contractor_base", False):
+            return False
+        required_empty_tables = {
+            "cbf": ("cbf_base", "cbf_result", "contractor_task"),
+            "cbf_jtcy": ("member_base", "member_result"),
+            "fbf": ("fbf_base", "fbf_result", "legacy_fbf"),
+            "cbdkxx": ("cbdkxx_base", "cbdkxx_result"),
+            "dk": ("dk_base", "dk_result"),
+        }.get(file_type)
+        if not required_empty_tables:
+            return False
+        return not any(existing_state.get(key, True) for key in required_empty_tables)
+
+    def _validate_bulk_item_key(self, item: dict, seen_keys: set[str], local_seen: set[str]) -> str:
+        entity_key = item["entity_key"]
+        if not entity_key:
+            raise ValueError("无法识别业务主键")
+        if entity_key in seen_keys or entity_key in local_seen:
+            raise ValueError(f"同一图层内业务主键重复：{entity_key}")
+        return entity_key
+
+    def _add_failed_import_row(
+        self,
+        db: Session,
+        batch: DataImportBatch,
+        import_file: DataImportFile,
+        file_type: str,
+        item: dict,
+        exc: Exception,
+    ) -> None:
+        db.add(
+            DataImportRow(
+                import_batch_id=batch.id,
+                import_file_id=import_file.id,
+                row_no=item["row_no"],
+                entity_type=file_type,
+                entity_key=item["entity_key"],
+                operation_type="error",
+                status="failed",
+                target_table=f"survey_{file_type}_base" if file_type not in {"cbf", "cbf_jtcy"} else file_type,
+                raw_data=item["raw"],
+                normalized_data=item["normalized"],
+                error_message=str(exc),
+            )
+        )
+
+    def _bulk_insert_new_items(
+        self,
+        db: Session,
+        batch: DataImportBatch,
+        import_file: DataImportFile,
+        survey_batch: SurveyBatch,
+        file_type: str,
+        items: list[dict],
+        current_user: User,
+        now: datetime,
+        seen_keys: set[str],
+    ) -> tuple[int, int, set[str]]:
+        if file_type == "cbf":
+            return self._bulk_insert_new_cbf(db, batch, import_file, survey_batch, items, current_user, now, seen_keys)
+        if file_type == "cbf_jtcy":
+            return self._bulk_insert_new_members(db, batch, import_file, survey_batch, items, current_user, now, seen_keys)
+        if file_type == "fbf":
+            return self._bulk_insert_new_fbf(db, batch, import_file, survey_batch, items, current_user, now, seen_keys)
+        if file_type == "cbdkxx":
+            return self._bulk_insert_new_cbdkxx(db, batch, import_file, survey_batch, items, current_user, now, seen_keys)
+        if file_type == "dk":
+            return self._bulk_insert_new_dk(db, batch, import_file, survey_batch, items, current_user, now, seen_keys)
+        raise ValueError(f"不支持的数据类型：{file_type}")
+
+    def _bulk_insert_new_cbf(
+        self,
+        db: Session,
+        batch: DataImportBatch,
+        import_file: DataImportFile,
+        survey_batch: SurveyBatch,
+        items: list[dict],
+        current_user: User,
+        now: datetime,
+        seen_keys: set[str],
+    ) -> tuple[int, int, set[str]]:
+        bases: list[SurveyCbfBase] = []
+        tasks: list[SurveyContractorTask] = []
+        local_seen: set[str] = set()
+        failed_count = 0
+        for item in items:
+            data = item["normalized"]
+            try:
+                entity_key = self._validate_bulk_item_key(item, seen_keys, local_seen)
+                required = ["cbfbm", "region_code", "cbflx", "cbfmc", "cbfzjlx", "cbfzjhm", "cbfdz", "yzbm", "cbfdcy"]
+                self._ensure_required(data, required)
+                data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="承包方不在当前数据权限范围内")
+                region_code, _region_name = self._resolve_import_region(db, data, current_user)
+                tenant_code = data_access_service.derive_tenant_code(region_code)
+                group_region_code, group_region_name = self._resolve_group_region(db, data, current_user)
+                contractor_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:cbf:{data['cbfbm']}"))
+                bases.append(
+                    SurveyCbfBase(
+                        tenant_code=tenant_code,
+                        region_code=region_code,
+                        batch_id=survey_batch.id,
+                        contractor_uid=contractor_uid,
+                        source_cbfbm=data["cbfbm"],
+                        cbfbm=data["cbfbm"],
+                        cbflx=data["cbflx"],
+                        cbfmc=data["cbfmc"],
+                        cbfzjlx=data["cbfzjlx"],
+                        cbfzjhm=data["cbfzjhm"],
+                        cbfdz=data["cbfdz"],
+                        yzbm=data["yzbm"],
+                        lxdh=data.get("lxdh"),
+                        cbfcysl=self._parse_int(data.get("cbfcysl"), default=0),
+                        cbfdcrq=self._parse_datetime(data.get("cbfdcrq")) or datetime.now(),
+                        cbfdcy=data.get("cbfdcy") or current_user.real_name,
+                        cbfdcjs=data.get("cbfdcjs"),
+                        gsjs=data.get("gsjs"),
+                        gsjsr=data.get("gsjsr"),
+                        gsshrq=self._parse_datetime(data.get("gsshrq")),
+                        gsshr=data.get("gsshr"),
+                        group_region_code=group_region_code,
+                        group_region_name=group_region_name,
+                        source_import_batch_id=batch.id,
+                        last_import_batch_id=batch.id,
+                        initialized_from_table="import",
+                        initialized_from_key=data["cbfbm"],
+                        initialized_at=now,
+                        snapshot_at=now,
+                    )
+                )
+                tasks.append(
+                    SurveyContractorTask(
+                        tenant_code=tenant_code,
+                        region_code=region_code,
+                        batch_id=survey_batch.id,
+                        contractor_uid=contractor_uid,
+                        cbfbm=data["cbfbm"],
+                        cbfmc=data["cbfmc"],
+                        task_status="not_started",
+                    )
+                )
+                local_seen.add(entity_key)
+            except Exception as exc:
+                failed_count += 1
+                self._add_failed_import_row(db, batch, import_file, "cbf", item, exc)
+        if bases:
+            db.add_all(bases)
+            db.flush()
+            results = []
+            for base in bases:
+                result = SurveyCbfResult(
+                    batch_id=survey_batch.id,
+                    contractor_uid=base.contractor_uid,
+                    base_id=base.id,
+                    initialized_from_base_id=base.id,
+                    initialized_at=now,
+                )
+                self._copy_base_to_contractor_result(result, base)
+                results.append(result)
+            db.add_all(results)
+            db.add_all(tasks)
+            db.flush()
+        seen_keys.update(local_seen)
+        return len(bases), failed_count, {base.cbfbm for base in bases}
+
+    def _bulk_insert_new_members(
+        self,
+        db: Session,
+        batch: DataImportBatch,
+        import_file: DataImportFile,
+        survey_batch: SurveyBatch,
+        items: list[dict],
+        current_user: User,
+        now: datetime,
+        seen_keys: set[str],
+    ) -> tuple[int, int, set[str]]:
+        cbfbms = {item["normalized"].get("cbfbm") for item in items if item["normalized"].get("cbfbm")}
+        contractor_bases = db.scalars(
+            select(SurveyCbfBase).where(SurveyCbfBase.batch_id == survey_batch.id, SurveyCbfBase.source_cbfbm.in_(cbfbms))
+        ).all() if cbfbms else []
+        contractor_by_code = {item.source_cbfbm: item for item in contractor_bases}
+        bases: list[SurveyCbfJtcyBase] = []
+        local_seen: set[str] = set()
+        failed_count = 0
+        for item in items:
+            data = item["normalized"]
+            try:
+                entity_key = self._validate_bulk_item_key(item, seen_keys, local_seen)
+                required = ["cbfbm", "cyxm", "cyzjlx", "cyzjhm", "cyxb", "yhzgx"]
+                self._ensure_required(data, required)
+                data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="家庭成员不在当前数据权限范围内")
+                contractor_base = contractor_by_code.get(data["cbfbm"])
+                if contractor_base is None:
+                    raise ValueError(f"家庭成员对应承包方不存在：{data['cbfbm']}")
+                member_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:member:{data['cbfbm']}:{data['cyzjhm']}"))
+                bases.append(
+                    SurveyCbfJtcyBase(
+                        tenant_code=contractor_base.tenant_code,
+                        region_code=contractor_base.region_code,
+                        batch_id=survey_batch.id,
+                        contractor_uid=contractor_base.contractor_uid,
+                        member_uid=member_uid,
+                        base_contractor_code=data["cbfbm"],
+                        base_member_id_no=data["cyzjhm"],
+                        cbfbm=data["cbfbm"],
+                        cyxm=data["cyxm"],
+                        cyzjlx=data["cyzjlx"],
+                        cyzjhm=data["cyzjhm"],
+                        cyxb=data["cyxb"],
+                        yhzgx=data["yhzgx"],
+                        cybz=data.get("cybz"),
+                        sfgyr=data.get("sfgyr"),
+                        cybzsm=data.get("cybzsm"),
+                        source_import_batch_id=batch.id,
+                        last_import_batch_id=batch.id,
+                        initialized_from_table="import",
+                        initialized_from_key=f"{data['cbfbm']}:{data['cyzjhm']}",
+                        initialized_at=now,
+                        snapshot_at=now,
+                    )
+                )
+                local_seen.add(entity_key)
+            except Exception as exc:
+                failed_count += 1
+                self._add_failed_import_row(db, batch, import_file, "cbf_jtcy", item, exc)
+        if bases:
+            db.add_all(bases)
+            db.flush()
+            results = []
+            for base in bases:
+                result = SurveyCbfJtcyResult(
+                    batch_id=survey_batch.id,
+                    contractor_uid=base.contractor_uid,
+                    member_uid=base.member_uid,
+                    base_id=base.id,
+                    initialized_from_base_id=base.id,
+                    initialized_at=now,
+                )
+                self._copy_base_to_member_result(result, base)
+                results.append(result)
+            db.add_all(results)
+            db.flush()
+        seen_keys.update(local_seen)
+        return len(bases), failed_count, {base.cbfbm for base in bases}
+
+    def _bulk_insert_new_fbf(
+        self,
+        db: Session,
+        batch: DataImportBatch,
+        import_file: DataImportFile,
+        survey_batch: SurveyBatch,
+        items: list[dict],
+        current_user: User,
+        now: datetime,
+        seen_keys: set[str],
+    ) -> tuple[int, int, set[str]]:
+        bases: list[SurveyFbfBase] = []
+        legacy_rows: list[Fbf] = []
+        local_seen: set[str] = set()
+        failed_count = 0
+        for item in items:
+            data = item["normalized"]
+            try:
+                entity_key = self._validate_bulk_item_key(item, seen_keys, local_seen)
+                required = ["fbfbm", "fbfmc", "fbffzrxm", "fzrzjlx", "fzrzjhm", "fbfdz", "yzbm", "fbfdcy", "fbfdcrq"]
+                self._ensure_required(data, required)
+                data_access_service.ensure_code_in_scope(current_user, data["fbfbm"], detail="发包方不在当前数据权限范围内")
+                region_code = self._resolve_code_region(data.get("region_code") or batch.region_code or data["fbfbm"], current_user)
+                tenant_code = data_access_service.derive_tenant_code(region_code)
+                issuer_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:fbf:{data['fbfbm']}"))
+                survey_date = self._parse_datetime(data.get("fbfdcrq")) or datetime.now()
+                bases.append(
+                    SurveyFbfBase(
+                        tenant_code=tenant_code,
+                        region_code=region_code,
+                        batch_id=survey_batch.id,
+                        issuer_uid=issuer_uid,
+                        source_fbfbm=data["fbfbm"],
+                        fbfbm=data["fbfbm"],
+                        fbfmc=data["fbfmc"],
+                        fbffzrxm=data["fbffzrxm"],
+                        fzrzjlx=data["fzrzjlx"],
+                        fzrzjhm=data["fzrzjhm"],
+                        lxdh=data.get("lxdh"),
+                        fbfdz=data["fbfdz"],
+                        yzbm=data["yzbm"],
+                        fbfdcy=data["fbfdcy"],
+                        fbfdcrq=survey_date,
+                        fbfdcjs=data.get("fbfdcjs"),
+                        source_import_batch_id=batch.id,
+                        last_import_batch_id=batch.id,
+                        initialized_from_table="import",
+                        initialized_from_key=data["fbfbm"],
+                        initialized_at=now,
+                        snapshot_at=now,
+                    )
+                )
+                legacy_rows.append(
+                    Fbf(
+                        tenant_code=tenant_code,
+                        region_code=region_code,
+                        fbfbm=data["fbfbm"],
+                        fbfmc=data["fbfmc"],
+                        fbffzrxm=data["fbffzrxm"],
+                        fzrzjlx=data["fzrzjlx"],
+                        fzrzjhm=data["fzrzjhm"],
+                        lxdh=data.get("lxdh"),
+                        fbfdz=data["fbfdz"],
+                        yzbm=data["yzbm"],
+                        fbfdcy=data["fbfdcy"],
+                        fbfdcrq=survey_date,
+                        fbfdcjs=data.get("fbfdcjs"),
+                    )
+                )
+                local_seen.add(entity_key)
+            except Exception as exc:
+                failed_count += 1
+                self._add_failed_import_row(db, batch, import_file, "fbf", item, exc)
+        if bases:
+            db.add_all(bases)
+            db.flush()
+            results = []
+            for base in bases:
+                result = SurveyFbfResult(
+                    batch_id=survey_batch.id,
+                    issuer_uid=base.issuer_uid,
+                    base_id=base.id,
+                    initialized_from_base_id=base.id,
+                    initialized_at=now,
+                )
+                self._copy_base_to_fbf_result(result, base)
+                results.append(result)
+            db.add_all(results)
+            db.add_all(legacy_rows)
+            db.flush()
+        seen_keys.update(local_seen)
+        return len(bases), failed_count, set()
+
+    def _bulk_insert_new_cbdkxx(
+        self,
+        db: Session,
+        batch: DataImportBatch,
+        import_file: DataImportFile,
+        survey_batch: SurveyBatch,
+        items: list[dict],
+        current_user: User,
+        now: datetime,
+        seen_keys: set[str],
+    ) -> tuple[int, int, set[str]]:
+        bases: list[SurveyCbdkxxBase] = []
+        local_seen: set[str] = set()
+        failed_count = 0
+        for item in items:
+            data = item["normalized"]
+            try:
+                entity_key = self._validate_bulk_item_key(item, seen_keys, local_seen)
+                required = ["dkbm", "fbfbm", "cbfbm", "cbjyqqdfs", "htmj", "cbhtbm", "cbjyqzbm"]
+                self._ensure_required(data, required)
+                data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="承包地块信息不在当前数据权限范围内")
+                region_code = self._resolve_code_region(data.get("region_code") or batch.region_code or data["cbfbm"], current_user)
+                tenant_code = data_access_service.derive_tenant_code(region_code)
+                parcel_info_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:cbdkxx:{data['dkbm']}:{data['cbfbm']}"))
+                bases.append(
+                    SurveyCbdkxxBase(
+                        tenant_code=tenant_code,
+                        region_code=region_code,
+                        batch_id=survey_batch.id,
+                        parcel_info_uid=parcel_info_uid,
+                        source_dkbm=data["dkbm"],
+                        dkbm=data["dkbm"],
+                        fbfbm=data["fbfbm"],
+                        cbfbm=data["cbfbm"],
+                        cbjyqqdfs=data["cbjyqqdfs"],
+                        htmj=self._parse_decimal(data.get("htmj"), required=True),
+                        cbhtbm=data["cbhtbm"],
+                        lzhtbm=data.get("lzhtbm"),
+                        cbjyqzbm=data["cbjyqzbm"],
+                        yhtmj=self._parse_decimal(data.get("yhtmj")),
+                        htmjm=self._parse_decimal(data.get("htmjm")),
+                        yhtmjm=self._parse_decimal(data.get("yhtmjm")),
+                        sfqqqg=data.get("sfqqqg"),
+                        source_import_batch_id=batch.id,
+                        last_import_batch_id=batch.id,
+                        initialized_from_table="import",
+                        initialized_from_key=f"{data['dkbm']}:{data['cbfbm']}",
+                        initialized_at=now,
+                        snapshot_at=now,
+                    )
+                )
+                local_seen.add(entity_key)
+            except Exception as exc:
+                failed_count += 1
+                self._add_failed_import_row(db, batch, import_file, "cbdkxx", item, exc)
+        if bases:
+            db.add_all(bases)
+            db.flush()
+            results = []
+            for base in bases:
+                result = SurveyCbdkxxResult(
+                    batch_id=survey_batch.id,
+                    parcel_info_uid=base.parcel_info_uid,
+                    base_id=base.id,
+                    initialized_from_base_id=base.id,
+                    initialized_at=now,
+                )
+                self._copy_base_to_cbdkxx_result(result, base)
+                results.append(result)
+            db.add_all(results)
+            db.flush()
+        seen_keys.update(local_seen)
+        return len(bases), failed_count, {base.cbfbm for base in bases}
+
+    def _bulk_insert_new_dk(
+        self,
+        db: Session,
+        batch: DataImportBatch,
+        import_file: DataImportFile,
+        survey_batch: SurveyBatch,
+        items: list[dict],
+        current_user: User,
+        now: datetime,
+        seen_keys: set[str],
+    ) -> tuple[int, int, set[str]]:
+        bases: list[SurveyDkBase] = []
+        base_geometries: list[dict | None] = []
+        local_seen: set[str] = set()
+        failed_count = 0
+        for item in items:
+            data = item["normalized"]
+            try:
+                entity_key = self._validate_bulk_item_key(item, seen_keys, local_seen)
+                required = ["ysdm", "dkbm", "dkmc", "dklb", "dldj", "tdyt", "sfjbnt", "scmj"]
+                self._ensure_required(data, required)
+                data_access_service.ensure_code_in_scope(current_user, data["dkbm"], detail="地块不在当前数据权限范围内")
+                region_code = self._resolve_code_region(data.get("region_code") or batch.region_code or data["dkbm"], current_user)
+                tenant_code = data_access_service.derive_tenant_code(region_code)
+                parcel_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:dk:{data['dkbm']}"))
+                bases.append(
+                    SurveyDkBase(
+                        tenant_code=tenant_code,
+                        region_code=region_code,
+                        batch_id=survey_batch.id,
+                        parcel_uid=parcel_uid,
+                        source_dkbm=data["dkbm"],
+                        bsm=self._parse_int(data.get("bsm"), default=0) if data.get("bsm") else None,
+                        ysdm=data["ysdm"],
+                        dkbm=data["dkbm"],
+                        dkmc=data["dkmc"],
+                        syqxz=data.get("syqxz"),
+                        dklb=data["dklb"],
+                        tdlylx=data.get("tdlylx"),
+                        dldj=data["dldj"],
+                        tdyt=data["tdyt"],
+                        sfjbnt=data["sfjbnt"],
+                        scmj=self._parse_decimal(data.get("scmj"), required=True),
+                        dkdz=data.get("dkdz"),
+                        dkxz=data.get("dkxz"),
+                        dknz=data.get("dknz"),
+                        dkbz=data.get("dkbz"),
+                        dkbzxx=data.get("dkbzxx"),
+                        zjrxm=data.get("zjrxm"),
+                        source_import_batch_id=batch.id,
+                        last_import_batch_id=batch.id,
+                        initialized_from_table="import",
+                        initialized_from_key=data["dkbm"],
+                        initialized_at=now,
+                        snapshot_at=now,
+                    )
+                )
+                base_geometries.append(item.get("geometry"))
+                local_seen.add(entity_key)
+            except Exception as exc:
+                failed_count += 1
+                self._add_failed_import_row(db, batch, import_file, "dk", item, exc)
+        if bases:
+            db.add_all(bases)
+            db.flush()
+            self._write_dk_geometries(db, "survey_dk_base", {base.id: geometry for base, geometry in zip(bases, base_geometries)})
+            results = []
+            for base in bases:
+                result = SurveyDkResult(
+                    batch_id=survey_batch.id,
+                    parcel_uid=base.parcel_uid,
+                    base_id=base.id,
+                    initialized_from_base_id=base.id,
+                    initialized_at=now,
+                )
+                self._copy_base_to_dk_result(result, base)
+                results.append(result)
+            db.add_all(results)
+            db.flush()
+            self._copy_dk_result_geometries(db, [base.id for base in bases])
+        seen_keys.update(local_seen)
+        return len(bases), failed_count, set()
+
+    def _build_import_context(
+        self,
+        db: Session,
+        batch: DataImportBatch,
+        survey_batch: SurveyBatch,
+        file_type: str,
+        items: list[dict],
+        existing_state: dict[str, bool] | None = None,
+    ) -> dict:
+        context = {"survey_batch": survey_batch}
+        existing_state = existing_state or {}
+        values = [item["normalized"] for item in items]
+
+        if file_type == "cbf":
+            cbfbms = {item.get("cbfbm") for item in values if item.get("cbfbm")}
+            bases = (
+                db.scalars(
+                    select(SurveyCbfBase).where(SurveyCbfBase.batch_id == survey_batch.id, SurveyCbfBase.source_cbfbm.in_(cbfbms))
+                ).all()
+                if cbfbms and existing_state.get("cbf_base", True)
+                else []
+            )
+            base_by_key = {item.source_cbfbm: item for item in bases}
+            base_ids = [item.id for item in bases]
+            results = (
+                db.scalars(
+                    select(SurveyCbfResult).where(SurveyCbfResult.batch_id == survey_batch.id, SurveyCbfResult.base_id.in_(base_ids))
+                ).all()
+                if base_ids and existing_state.get("cbf_result", True)
+                else []
+            )
+            tasks = (
+                db.scalars(
+                    select(SurveyContractorTask).where(SurveyContractorTask.batch_id == survey_batch.id, SurveyContractorTask.cbfbm.in_(cbfbms))
+                ).all()
+                if cbfbms and existing_state.get("contractor_task", True)
+                else []
+            )
+            context.update(
+                {
+                    "cbf_base_by_source": base_by_key,
+                    "cbf_result_by_base_id": {item.base_id: item for item in results},
+                    "contractor_task_by_cbfbm": {item.cbfbm: item for item in tasks},
+                }
+            )
+            return context
+
+        if file_type == "cbf_jtcy":
+            cbfbms = {item.get("cbfbm") for item in values if item.get("cbfbm")}
+            member_ids = {item.get("cyzjhm") for item in values if item.get("cyzjhm")}
+            contractor_bases = (
+                db.scalars(
+                    select(SurveyCbfBase).where(SurveyCbfBase.batch_id == survey_batch.id, SurveyCbfBase.source_cbfbm.in_(cbfbms))
+                ).all()
+                if cbfbms and existing_state.get("contractor_base", True)
+                else []
+            )
+            member_bases = (
+                db.scalars(
+                    select(SurveyCbfJtcyBase).where(
+                        SurveyCbfJtcyBase.batch_id == survey_batch.id,
+                        SurveyCbfJtcyBase.base_contractor_code.in_(cbfbms),
+                        SurveyCbfJtcyBase.base_member_id_no.in_(member_ids),
+                    )
+                ).all()
+                if cbfbms and member_ids and existing_state.get("member_base", True)
+                else []
+            )
+            member_base_ids = [item.id for item in member_bases]
+            member_results = (
+                db.scalars(
+                    select(SurveyCbfJtcyResult).where(SurveyCbfJtcyResult.batch_id == survey_batch.id, SurveyCbfJtcyResult.base_id.in_(member_base_ids))
+                ).all()
+                if member_base_ids and existing_state.get("member_result", True)
+                else []
+            )
+            missing_cbfbms = cbfbms - {item.source_cbfbm for item in contractor_bases}
+            source_results = (
+                db.scalars(
+                    select(SurveyCbfResult)
+                    .where(SurveyCbfResult.cbfbm.in_(missing_cbfbms))
+                    .order_by(SurveyCbfResult.id.desc())
+                )
+                .all()
+                if missing_cbfbms
+                else []
+            )
+            latest_source_results = {}
+            for item in source_results:
+                latest_source_results.setdefault(item.cbfbm, item)
+            context.update(
+                {
+                    "contractor_base_by_cbfbm": {item.source_cbfbm: item for item in contractor_bases},
+                    "member_base_by_key": {(item.base_contractor_code, item.base_member_id_no): item for item in member_bases},
+                    "member_result_by_base_id": {item.base_id: item for item in member_results},
+                    "source_result_by_cbfbm": latest_source_results,
+                }
+            )
+            return context
+
+        if file_type == "fbf":
+            fbfbms = {item.get("fbfbm") for item in values if item.get("fbfbm")}
+            bases = (
+                db.scalars(
+                    select(SurveyFbfBase).where(SurveyFbfBase.batch_id == survey_batch.id, SurveyFbfBase.source_fbfbm.in_(fbfbms))
+                ).all()
+                if fbfbms and existing_state.get("fbf_base", True)
+                else []
+            )
+            base_ids = [item.id for item in bases]
+            results = (
+                db.scalars(
+                    select(SurveyFbfResult).where(SurveyFbfResult.batch_id == survey_batch.id, SurveyFbfResult.base_id.in_(base_ids))
+                ).all()
+                if base_ids and existing_state.get("fbf_result", True)
+                else []
+            )
+            legacy_rows = (
+                db.scalars(select(Fbf).where(Fbf.fbfbm.in_(fbfbms))).all()
+                if fbfbms and existing_state.get("legacy_fbf", True)
+                else []
+            )
+            context.update(
+                {
+                    "fbf_base_by_source": {item.source_fbfbm: item for item in bases},
+                    "fbf_result_by_base_id": {item.base_id: item for item in results},
+                    "legacy_fbf_by_code": {item.fbfbm: item for item in legacy_rows},
+                }
+            )
+            return context
+
+        if file_type == "cbdkxx":
+            parcel_keys = {(item.get("dkbm"), item.get("cbfbm")) for item in values if item.get("dkbm") and item.get("cbfbm")}
+            dkbms = {key[0] for key in parcel_keys}
+            cbfbms = {key[1] for key in parcel_keys}
+            bases = (
+                db.scalars(
+                    select(SurveyCbdkxxBase).where(
+                        SurveyCbdkxxBase.batch_id == survey_batch.id,
+                        SurveyCbdkxxBase.source_dkbm.in_(dkbms),
+                        SurveyCbdkxxBase.cbfbm.in_(cbfbms),
+                    )
+                )
+                .all()
+                if dkbms and cbfbms and existing_state.get("cbdkxx_base", True)
+                else []
+            )
+            base_ids = [item.id for item in bases]
+            results = (
+                db.scalars(
+                    select(SurveyCbdkxxResult).where(SurveyCbdkxxResult.batch_id == survey_batch.id, SurveyCbdkxxResult.base_id.in_(base_ids))
+                ).all()
+                if base_ids and existing_state.get("cbdkxx_result", True)
+                else []
+            )
+            context.update(
+                {
+                    "cbdkxx_base_by_key": {(item.source_dkbm, item.cbfbm): item for item in bases},
+                    "cbdkxx_result_by_base_id": {item.base_id: item for item in results},
+                }
+            )
+            return context
+
+        if file_type == "dk":
+            dkbms = {item.get("dkbm") for item in values if item.get("dkbm")}
+            bases = (
+                db.scalars(
+                    select(SurveyDkBase).where(SurveyDkBase.batch_id == survey_batch.id, SurveyDkBase.source_dkbm.in_(dkbms))
+                ).all()
+                if dkbms and existing_state.get("dk_base", True)
+                else []
+            )
+            base_ids = [item.id for item in bases]
+            results = (
+                db.scalars(
+                    select(SurveyDkResult).where(SurveyDkResult.batch_id == survey_batch.id, SurveyDkResult.base_id.in_(base_ids))
+                ).all()
+                if base_ids and existing_state.get("dk_result", True)
+                else []
+            )
+            context.update(
+                {
+                    "dk_base_by_source": {item.source_dkbm: item for item in bases},
+                    "dk_result_by_base_id": {item.base_id: item for item in results},
+                }
+            )
+        return context
 
     def _finish_batch_import(
         self,
@@ -730,23 +1705,75 @@ class DataImportService:
         return f"import_{batch_id}_failed_rows.csv", output.getvalue().encode("utf-8-sig")
 
     def list_rows(self, db: Session, batch_id: int, page: int, page_size: int, status_filter: str | None) -> dict:
+        if status_filter and status_filter != "failed":
+            return {
+                "items": [],
+                "total": 0,
+                "page": page,
+                "pageSize": page_size,
+            }
         stmt = (
             select(DataImportRow)
-            .where(DataImportRow.import_batch_id == batch_id)
+            .where(DataImportRow.import_batch_id == batch_id, DataImportRow.status == "failed")
             .order_by(DataImportRow.id.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
-        total_stmt = select(func.count(DataImportRow.id)).where(DataImportRow.import_batch_id == batch_id)
-        if status_filter:
-            stmt = stmt.where(DataImportRow.status == status_filter)
-            total_stmt = total_stmt.where(DataImportRow.status == status_filter)
+        total_stmt = select(func.count(DataImportRow.id)).where(DataImportRow.import_batch_id == batch_id, DataImportRow.status == "failed")
         return {
             "items": [self._serialize_row(item) for item in db.scalars(stmt).all()],
             "total": db.scalar(total_stmt) or 0,
             "page": page,
             "pageSize": page_size,
         }
+
+    def rollback_batch(self, db: Session, batch_id: int, current_user: User) -> dict:
+        batch = db.get(DataImportBatch, batch_id)
+        if batch is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导入批次不存在")
+        operations = db.scalars(
+            select(DataImportOperation)
+            .where(DataImportOperation.import_batch_id == batch_id)
+            .order_by(DataImportOperation.id.desc())
+        ).all()
+        if not operations:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该批次没有可回滚的操作流水")
+
+        model_map = self._rollback_model_map()
+        restored = 0
+        deleted = 0
+        skipped = 0
+        for operation in operations:
+            model = model_map.get(operation.table_name)
+            if model is None:
+                skipped += 1
+                continue
+            instance = self._get_by_primary_key(db, model, operation.primary_key or {})
+            if operation.operation_type == "insert":
+                if instance is not None:
+                    db.delete(instance)
+                    deleted += 1
+                else:
+                    skipped += 1
+                continue
+            if operation.operation_type == "update" and operation.before_snapshot:
+                if instance is None:
+                    skipped += 1
+                    continue
+                self._restore_snapshot(instance, operation.before_snapshot)
+                restored += 1
+                continue
+            skipped += 1
+
+        batch.status = "rolled_back"
+        batch.error_summary = {
+            **(batch.error_summary or {}),
+            "rollback": {"restored": restored, "deleted": deleted, "skipped": skipped, "by": current_user.id},
+        }
+        db.commit()
+        db.refresh(batch)
+        data_import_progress.update(batch.id, status="rolled_back", message="批次已回滚")
+        return self._serialize_batch(batch)
 
     def _import_row(
         self,
@@ -759,8 +1786,9 @@ class DataImportService:
         current_user: User,
         now: datetime,
         geometry: dict | None = None,
+        context: dict | None = None,
     ) -> tuple[str, str]:
-        survey_batch = self._ensure_import_survey_batch(db, batch, current_user, now)
+        survey_batch = context["survey_batch"] if context and context.get("survey_batch") else self._ensure_import_survey_batch(db, batch, current_user, now)
         if file_type == "cbf":
             required = ["cbfbm", "region_code", "cbflx", "cbfmc", "cbfzjlx", "cbfzjhm", "cbfdz", "yzbm", "cbfdcy"]
             self._ensure_required(data, required)
@@ -768,13 +1796,18 @@ class DataImportService:
             region_code, _region_name = self._resolve_import_region(db, data, current_user)
             tenant_code = data_access_service.derive_tenant_code(region_code)
             group_region_code, group_region_name = self._resolve_group_region(db, data, current_user)
-            base = db.scalar(
-                select(SurveyCbfBase).where(
-                    SurveyCbfBase.batch_id == survey_batch.id,
-                    SurveyCbfBase.source_cbfbm == data["cbfbm"],
+            if context and "cbf_base_by_source" in context:
+                base = context["cbf_base_by_source"].get(data["cbfbm"])
+            else:
+                base = db.scalar(
+                    select(SurveyCbfBase).where(
+                        SurveyCbfBase.batch_id == survey_batch.id,
+                        SurveyCbfBase.source_cbfbm == data["cbfbm"],
+                    )
                 )
-            )
             operation = "update" if base else "insert"
+            base_before = self._snapshot_model(base) if base else None
+            chunk_no = max(1, (row_record.row_no - 1) // self.chunk_size + 1)
             contractor_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:cbf:{data['cbfbm']}"))
             if base is None:
                 base = SurveyCbfBase(
@@ -816,13 +1849,18 @@ class DataImportService:
             base.initialized_from_key = data["cbfbm"]
             base.snapshot_at = now
             db.flush()
+            self._record_operation(db, batch, row_record, base, operation, base_before, chunk_no)
 
-            result = db.scalar(
-                select(SurveyCbfResult).where(
-                    SurveyCbfResult.batch_id == survey_batch.id,
-                    SurveyCbfResult.base_id == base.id,
+            if context and "cbf_result_by_base_id" in context:
+                result = context["cbf_result_by_base_id"].get(base.id)
+            else:
+                result = db.scalar(
+                    select(SurveyCbfResult).where(
+                        SurveyCbfResult.batch_id == survey_batch.id,
+                        SurveyCbfResult.base_id == base.id,
+                    )
                 )
-            )
+            result_before = self._snapshot_model(result) if result else None
             if result is None:
                 result = SurveyCbfResult(
                     batch_id=survey_batch.id,
@@ -835,13 +1873,18 @@ class DataImportService:
                 self._copy_base_to_contractor_result(result, base)
             elif not result.is_changed and result.survey_status == "not_surveyed":
                 self._copy_base_to_contractor_result(result, base)
+            db.flush()
+            self._record_operation(db, batch, row_record, result, "update" if result_before else "insert", result_before, chunk_no)
 
-            task = db.scalar(
-                select(SurveyContractorTask).where(
-                    SurveyContractorTask.batch_id == survey_batch.id,
-                    SurveyContractorTask.cbfbm == data["cbfbm"],
+            if context and "contractor_task_by_cbfbm" in context:
+                task = context["contractor_task_by_cbfbm"].get(data["cbfbm"])
+            else:
+                task = db.scalar(
+                    select(SurveyContractorTask).where(
+                        SurveyContractorTask.batch_id == survey_batch.id,
+                        SurveyContractorTask.cbfbm == data["cbfbm"],
+                    )
                 )
-            )
             if task is None:
                 db.add(
                     SurveyContractorTask(
@@ -862,29 +1905,36 @@ class DataImportService:
             return operation, base.cbfbm
 
         if file_type == "fbf":
-            return self._import_fbf_row(db, batch, survey_batch, row_record, data, current_user, now)
+            return self._import_fbf_row(db, batch, survey_batch, row_record, data, current_user, now, context)
         if file_type == "cbdkxx":
-            return self._import_cbdkxx_row(db, batch, survey_batch, row_record, data, current_user, now)
+            return self._import_cbdkxx_row(db, batch, survey_batch, row_record, data, current_user, now, context)
         if file_type == "dk":
-            return self._import_dk_row(db, batch, survey_batch, row_record, data, current_user, now, geometry)
+            return self._import_dk_row(db, batch, survey_batch, row_record, data, current_user, now, geometry, context)
         if file_type != "cbf_jtcy":
             raise ValueError(f"不支持的数据类型：{file_type}")
 
         required = ["cbfbm", "cyxm", "cyzjlx", "cyzjhm", "cyxb", "yhzgx"]
         self._ensure_required(data, required)
+        chunk_no = max(1, (row_record.row_no - 1) // self.chunk_size + 1)
         data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="家庭成员不在当前数据权限范围内")
-        contractor_base = db.scalar(
-            select(SurveyCbfBase).where(
-                SurveyCbfBase.batch_id == survey_batch.id,
-                SurveyCbfBase.source_cbfbm == data["cbfbm"],
+        if context and "contractor_base_by_cbfbm" in context and data["cbfbm"] in context["contractor_base_by_cbfbm"]:
+            contractor_base = context["contractor_base_by_cbfbm"].get(data["cbfbm"])
+        else:
+            contractor_base = db.scalar(
+                select(SurveyCbfBase).where(
+                    SurveyCbfBase.batch_id == survey_batch.id,
+                    SurveyCbfBase.source_cbfbm == data["cbfbm"],
+                )
             )
-        )
         if contractor_base is None:
-            source_result = db.scalars(
-                select(SurveyCbfResult)
-                .where(SurveyCbfResult.cbfbm == data["cbfbm"])
-                .order_by(SurveyCbfResult.id.desc())
-            ).first()
+            if context and "source_result_by_cbfbm" in context:
+                source_result = context["source_result_by_cbfbm"].get(data["cbfbm"])
+            else:
+                source_result = db.scalars(
+                    select(SurveyCbfResult)
+                    .where(SurveyCbfResult.cbfbm == data["cbfbm"])
+                    .order_by(SurveyCbfResult.id.desc())
+                ).first()
             if source_result is None:
                 raise ValueError(f"家庭成员对应承包方不存在：{data['cbfbm']}")
             contractor_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:cbf:{source_result.cbfbm}"))
@@ -923,6 +1973,7 @@ class DataImportService:
             )
             db.add(contractor_base)
             db.flush()
+            self._record_operation(db, batch, row_record, contractor_base, "insert", None, chunk_no)
             cloned_result = SurveyCbfResult(
                 tenant_code=contractor_base.tenant_code,
                 region_code=contractor_base.region_code,
@@ -934,26 +1985,34 @@ class DataImportService:
             )
             db.add(cloned_result)
             self._copy_base_to_contractor_result(cloned_result, contractor_base)
-            db.add(
-                SurveyContractorTask(
-                    tenant_code=contractor_base.tenant_code,
-                    region_code=contractor_base.region_code,
-                    batch_id=survey_batch.id,
-                    contractor_uid=contractor_base.contractor_uid,
-                    cbfbm=contractor_base.cbfbm,
-                    cbfmc=contractor_base.cbfmc,
-                    task_status="not_started",
+            db.flush()
+            self._record_operation(db, batch, row_record, cloned_result, "insert", None, chunk_no)
+            task = SurveyContractorTask(
+                tenant_code=contractor_base.tenant_code,
+                region_code=contractor_base.region_code,
+                batch_id=survey_batch.id,
+                contractor_uid=contractor_base.contractor_uid,
+                cbfbm=contractor_base.cbfbm,
+                cbfmc=contractor_base.cbfmc,
+                task_status="not_started",
+            )
+            db.add(task)
+            db.flush()
+            self._record_operation(db, batch, row_record, task, "insert", None, chunk_no)
+        member_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:member:{data['cbfbm']}:{data['cyzjhm']}"))
+        member_key = (data["cbfbm"], data["cyzjhm"])
+        if context and "member_base_by_key" in context:
+            base = context["member_base_by_key"].get(member_key)
+        else:
+            base = db.scalar(
+                select(SurveyCbfJtcyBase).where(
+                    SurveyCbfJtcyBase.batch_id == survey_batch.id,
+                    SurveyCbfJtcyBase.base_contractor_code == data["cbfbm"],
+                    SurveyCbfJtcyBase.base_member_id_no == data["cyzjhm"],
                 )
             )
-        member_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:member:{data['cbfbm']}:{data['cyzjhm']}"))
-        base = db.scalar(
-            select(SurveyCbfJtcyBase).where(
-                SurveyCbfJtcyBase.batch_id == survey_batch.id,
-                SurveyCbfJtcyBase.base_contractor_code == data["cbfbm"],
-                SurveyCbfJtcyBase.base_member_id_no == data["cyzjhm"],
-            )
-        )
         operation = "update" if base else "insert"
+        base_before = self._snapshot_model(base) if base else None
         if base is None:
             base = SurveyCbfJtcyBase(
                 batch_id=survey_batch.id,
@@ -989,13 +2048,18 @@ class DataImportService:
         base.initialized_from_key = f"{data['cbfbm']}:{data['cyzjhm']}"
         base.snapshot_at = now
         db.flush()
+        self._record_operation(db, batch, row_record, base, operation, base_before, chunk_no)
 
-        result = db.scalar(
-            select(SurveyCbfJtcyResult).where(
-                SurveyCbfJtcyResult.batch_id == survey_batch.id,
-                SurveyCbfJtcyResult.base_id == base.id,
+        if context and "member_result_by_base_id" in context:
+            result = context["member_result_by_base_id"].get(base.id)
+        else:
+            result = db.scalar(
+                select(SurveyCbfJtcyResult).where(
+                    SurveyCbfJtcyResult.batch_id == survey_batch.id,
+                    SurveyCbfJtcyResult.base_id == base.id,
+                )
             )
-        )
+        result_before = self._snapshot_model(result) if result else None
         if result is None:
             result = SurveyCbfJtcyResult(
                 batch_id=survey_batch.id,
@@ -1009,7 +2073,8 @@ class DataImportService:
             self._copy_base_to_member_result(result, base)
         elif not result.is_changed and result.survey_status == "not_surveyed":
             self._copy_base_to_member_result(result, base)
-        self._recount_member_counts(db, {data["cbfbm"]}, survey_batch.id)
+        db.flush()
+        self._record_operation(db, batch, row_record, result, "update" if result_before else "insert", result_before, chunk_no)
         return operation, f"{base.cbfbm}:{base.cyzjhm}"
 
     def _import_fbf_row(
@@ -1021,6 +2086,7 @@ class DataImportService:
         data: dict,
         current_user: User,
         now: datetime,
+        context: dict | None = None,
     ) -> tuple[str, str]:
         required = ["fbfbm", "fbfmc", "fbffzrxm", "fzrzjlx", "fzrzjhm", "fbfdz", "yzbm", "fbfdcy", "fbfdcrq"]
         self._ensure_required(data, required)
@@ -1028,13 +2094,17 @@ class DataImportService:
         region_code = self._resolve_code_region(data.get("region_code") or batch.region_code or data["fbfbm"], current_user)
         tenant_code = data_access_service.derive_tenant_code(region_code)
         issuer_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:fbf:{data['fbfbm']}"))
-        base = db.scalar(
-            select(SurveyFbfBase).where(
-                SurveyFbfBase.batch_id == survey_batch.id,
-                SurveyFbfBase.source_fbfbm == data["fbfbm"],
+        if context and "fbf_base_by_source" in context:
+            base = context["fbf_base_by_source"].get(data["fbfbm"])
+        else:
+            base = db.scalar(
+                select(SurveyFbfBase).where(
+                    SurveyFbfBase.batch_id == survey_batch.id,
+                    SurveyFbfBase.source_fbfbm == data["fbfbm"],
+                )
             )
-        )
         operation = "update" if base else "insert"
+        base_before = self._snapshot_model(base) if base else None
         if base is None:
             base = SurveyFbfBase(
                 batch_id=survey_batch.id,
@@ -1068,8 +2138,14 @@ class DataImportService:
         base.initialized_from_key = data["fbfbm"]
         base.snapshot_at = now
         db.flush()
+        chunk_no = max(1, (row_record.row_no - 1) // self.chunk_size + 1)
+        self._record_operation(db, batch, row_record, base, operation, base_before, chunk_no)
 
-        result = db.scalar(select(SurveyFbfResult).where(SurveyFbfResult.batch_id == survey_batch.id, SurveyFbfResult.base_id == base.id))
+        if context and "fbf_result_by_base_id" in context:
+            result = context["fbf_result_by_base_id"].get(base.id)
+        else:
+            result = db.scalar(select(SurveyFbfResult).where(SurveyFbfResult.batch_id == survey_batch.id, SurveyFbfResult.base_id == base.id))
+        result_before = self._snapshot_model(result) if result else None
         if result is None:
             result = SurveyFbfResult(
                 batch_id=survey_batch.id,
@@ -1082,8 +2158,14 @@ class DataImportService:
             self._copy_base_to_fbf_result(result, base)
         elif not result.is_changed and result.survey_status == "not_surveyed":
             self._copy_base_to_fbf_result(result, base)
+        db.flush()
+        self._record_operation(db, batch, row_record, result, "update" if result_before else "insert", result_before, chunk_no)
 
-        legacy = db.get(Fbf, data["fbfbm"])
+        if context and "legacy_fbf_by_code" in context:
+            legacy = context["legacy_fbf_by_code"].get(data["fbfbm"])
+        else:
+            legacy = db.get(Fbf, data["fbfbm"])
+        legacy_before = self._snapshot_model(legacy) if legacy else None
         if legacy is None:
             legacy = Fbf(fbfbm=data["fbfbm"])
             db.add(legacy)
@@ -1099,6 +2181,8 @@ class DataImportService:
         legacy.fbfdcy = data["fbfdcy"]
         legacy.fbfdcrq = base.fbfdcrq
         legacy.fbfdcjs = data.get("fbfdcjs")
+        db.flush()
+        self._record_operation(db, batch, row_record, legacy, "update" if legacy_before else "insert", legacy_before, chunk_no)
         return operation, base.fbfbm
 
     def _import_cbdkxx_row(
@@ -1110,6 +2194,7 @@ class DataImportService:
         data: dict,
         current_user: User,
         now: datetime,
+        context: dict | None = None,
     ) -> tuple[str, str]:
         required = ["dkbm", "fbfbm", "cbfbm", "cbjyqqdfs", "htmj", "cbhtbm", "cbjyqzbm"]
         self._ensure_required(data, required)
@@ -1117,14 +2202,20 @@ class DataImportService:
         region_code = self._resolve_code_region(data.get("region_code") or batch.region_code or data["cbfbm"], current_user)
         tenant_code = data_access_service.derive_tenant_code(region_code)
         parcel_info_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:cbdkxx:{data['dkbm']}:{data['cbfbm']}"))
-        base = db.scalar(
-            select(SurveyCbdkxxBase).where(
-                SurveyCbdkxxBase.batch_id == survey_batch.id,
-                SurveyCbdkxxBase.source_dkbm == data["dkbm"],
-                SurveyCbdkxxBase.cbfbm == data["cbfbm"],
+        parcel_key = (data["dkbm"], data["cbfbm"])
+        if context and "cbdkxx_base_by_key" in context:
+            base = context["cbdkxx_base_by_key"].get(parcel_key)
+        else:
+            base = db.scalar(
+                select(SurveyCbdkxxBase).where(
+                    SurveyCbdkxxBase.batch_id == survey_batch.id,
+                    SurveyCbdkxxBase.source_dkbm == data["dkbm"],
+                    SurveyCbdkxxBase.cbfbm == data["cbfbm"],
+                )
             )
-        )
         operation = "update" if base else "insert"
+        base_before = self._snapshot_model(base) if base else None
+        chunk_no = max(1, (row_record.row_no - 1) // self.chunk_size + 1)
         if base is None:
             base = SurveyCbdkxxBase(
                 batch_id=survey_batch.id,
@@ -1159,8 +2250,13 @@ class DataImportService:
         base.initialized_from_key = f"{data['dkbm']}:{data['cbfbm']}"
         base.snapshot_at = now
         db.flush()
+        self._record_operation(db, batch, row_record, base, operation, base_before, chunk_no)
 
-        result = db.scalar(select(SurveyCbdkxxResult).where(SurveyCbdkxxResult.batch_id == survey_batch.id, SurveyCbdkxxResult.base_id == base.id))
+        if context and "cbdkxx_result_by_base_id" in context:
+            result = context["cbdkxx_result_by_base_id"].get(base.id)
+        else:
+            result = db.scalar(select(SurveyCbdkxxResult).where(SurveyCbdkxxResult.batch_id == survey_batch.id, SurveyCbdkxxResult.base_id == base.id))
+        result_before = self._snapshot_model(result) if result else None
         if result is None:
             result = SurveyCbdkxxResult(
                 batch_id=survey_batch.id,
@@ -1173,6 +2269,8 @@ class DataImportService:
             self._copy_base_to_cbdkxx_result(result, base)
         elif not result.is_changed and result.survey_status == "not_surveyed":
             self._copy_base_to_cbdkxx_result(result, base)
+        db.flush()
+        self._record_operation(db, batch, row_record, result, "update" if result_before else "insert", result_before, chunk_no)
         return operation, f"{base.dkbm}:{base.cbfbm}"
 
     def _import_dk_row(
@@ -1185,6 +2283,7 @@ class DataImportService:
         current_user: User,
         now: datetime,
         geometry: dict | None,
+        context: dict | None = None,
     ) -> tuple[str, str]:
         required = ["ysdm", "dkbm", "dkmc", "dklb", "dldj", "tdyt", "sfjbnt", "scmj"]
         self._ensure_required(data, required)
@@ -1192,13 +2291,18 @@ class DataImportService:
         region_code = self._resolve_code_region(data.get("region_code") or batch.region_code or data["dkbm"], current_user)
         tenant_code = data_access_service.derive_tenant_code(region_code)
         parcel_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:dk:{data['dkbm']}"))
-        base = db.scalar(
-            select(SurveyDkBase).where(
-                SurveyDkBase.batch_id == survey_batch.id,
-                SurveyDkBase.source_dkbm == data["dkbm"],
+        if context and "dk_base_by_source" in context:
+            base = context["dk_base_by_source"].get(data["dkbm"])
+        else:
+            base = db.scalar(
+                select(SurveyDkBase).where(
+                    SurveyDkBase.batch_id == survey_batch.id,
+                    SurveyDkBase.source_dkbm == data["dkbm"],
+                )
             )
-        )
         operation = "update" if base else "insert"
+        base_before = self._snapshot_model(base) if base else None
+        chunk_no = max(1, (row_record.row_no - 1) // self.chunk_size + 1)
         if base is None:
             base = SurveyDkBase(
                 batch_id=survey_batch.id,
@@ -1230,7 +2334,6 @@ class DataImportService:
         base.dkbz = data.get("dkbz")
         base.dkbzxx = data.get("dkbzxx")
         base.zjrxm = data.get("zjrxm")
-        base.geometry = geometry
         base.source_import_batch_id = base.source_import_batch_id or batch.id
         base.source_import_row_id = base.source_import_row_id or row_record.id
         base.last_import_batch_id = batch.id
@@ -1239,8 +2342,14 @@ class DataImportService:
         base.initialized_from_key = data["dkbm"]
         base.snapshot_at = now
         db.flush()
+        self._write_dk_geometries(db, "survey_dk_base", {base.id: geometry})
+        self._record_operation(db, batch, row_record, base, operation, base_before, chunk_no)
 
-        result = db.scalar(select(SurveyDkResult).where(SurveyDkResult.batch_id == survey_batch.id, SurveyDkResult.base_id == base.id))
+        if context and "dk_result_by_base_id" in context:
+            result = context["dk_result_by_base_id"].get(base.id)
+        else:
+            result = db.scalar(select(SurveyDkResult).where(SurveyDkResult.batch_id == survey_batch.id, SurveyDkResult.base_id == base.id))
+        result_before = self._snapshot_model(result) if result else None
         if result is None:
             result = SurveyDkResult(
                 batch_id=survey_batch.id,
@@ -1253,43 +2362,105 @@ class DataImportService:
             self._copy_base_to_dk_result(result, base)
         elif not result.is_changed and result.survey_status == "not_surveyed":
             self._copy_base_to_dk_result(result, base)
+        db.flush()
+        self._copy_dk_result_geometries(db, [base.id])
+        self._record_operation(db, batch, row_record, result, "update" if result_before else "insert", result_before, chunk_no)
         return operation, base.dkbm
 
+    def _write_dk_geometries(self, db: Session, table_name: str, geometries_by_id: dict[int, dict | None]) -> None:
+        if not geometries_by_id:
+            return
+        stmt = text(
+            f"""
+            UPDATE {table_name}
+            SET geom = CASE
+                WHEN :geojson IS NULL THEN NULL
+                ELSE ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON(:geojson), 4527))
+            END
+            WHERE id = :row_id
+            """
+        )
+        for row_id, geometry in geometries_by_id.items():
+            db.execute(
+                stmt,
+                {
+                    "row_id": row_id,
+                    "geojson": json.dumps(geometry, ensure_ascii=False) if geometry else None,
+                },
+            )
+
+    def _copy_dk_result_geometries(self, db: Session, base_ids: list[int]) -> None:
+        if not base_ids:
+            return
+        db.execute(
+            text(
+                """
+                UPDATE survey_dk_result AS result
+                SET geom = base.geom
+                FROM survey_dk_base AS base
+                WHERE result.base_id = base.id
+                  AND base.id = ANY(:base_ids)
+                """
+            ),
+            {"base_ids": base_ids},
+        )
+
     def _recount_member_counts(self, db: Session, contractor_codes: set[str], survey_batch_id: int | None = None) -> None:
+        if not contractor_codes:
+            return
+        code_list = list(contractor_codes)
         if survey_batch_id is None:
-            batch_ids = [
-                batch_id
-                for batch_id in db.scalars(
-                    select(SurveyCbfBase.batch_id).where(SurveyCbfBase.source_cbfbm.in_(contractor_codes)).distinct()
-                ).all()
-            ]
+            batch_ids = set()
+            for code_chunk in self._chunks(code_list, self.chunk_size):
+                batch_ids.update(
+                    db.scalars(
+                        select(SurveyCbfBase.batch_id).where(SurveyCbfBase.source_cbfbm.in_(code_chunk)).distinct()
+                    ).all()
+                )
         else:
             batch_ids = [survey_batch_id]
         for batch_id in batch_ids:
-            for code in contractor_codes:
-                contractor = db.scalar(
+            for code_chunk in self._chunks(code_list, self.chunk_size):
+                contractors = db.scalars(
                     select(SurveyCbfBase).where(
                         SurveyCbfBase.batch_id == batch_id,
-                        SurveyCbfBase.source_cbfbm == code,
+                        SurveyCbfBase.source_cbfbm.in_(code_chunk),
                     )
-                )
-                if contractor is None:
+                ).all()
+                if not contractors:
                     continue
-                count = db.scalar(
-                    select(func.count(SurveyCbfJtcyBase.id)).where(
-                        SurveyCbfJtcyBase.batch_id == batch_id,
-                        SurveyCbfJtcyBase.base_contractor_code == code,
-                    )
-                ) or 0
-                contractor.cbfcysl = count
-                result = db.scalar(
-                    select(SurveyCbfResult).where(
-                        SurveyCbfResult.batch_id == batch_id,
-                        SurveyCbfResult.base_id == contractor.id,
-                    )
+                counts = dict(
+                    db.execute(
+                        select(SurveyCbfJtcyBase.base_contractor_code, func.count(SurveyCbfJtcyBase.id))
+                        .where(
+                            SurveyCbfJtcyBase.batch_id == batch_id,
+                            SurveyCbfJtcyBase.base_contractor_code.in_(code_chunk),
+                        )
+                        .group_by(SurveyCbfJtcyBase.base_contractor_code)
+                    ).all()
                 )
-                if result is not None and not result.is_changed and result.survey_status == "not_surveyed":
-                    result.cbfcysl = count
+                results = {}
+                contractor_ids = [contractor.id for contractor in contractors]
+                for id_chunk in self._chunks(contractor_ids, self.chunk_size):
+                    results.update(
+                        {
+                            result.base_id: result
+                            for result in db.scalars(
+                                select(SurveyCbfResult).where(
+                                    SurveyCbfResult.batch_id == batch_id,
+                                    SurveyCbfResult.base_id.in_(id_chunk),
+                                )
+                            ).all()
+                        }
+                    )
+                for contractor in contractors:
+                    count = counts.get(contractor.source_cbfbm, 0)
+                    contractor.cbfcysl = count
+                    result = results.get(contractor.id)
+                    if result is None:
+                        continue
+                    if not result.is_changed and result.survey_status == "not_surveyed":
+                        result.cbfcysl = count
 
     def _unused_legacy_recount_member_counts(self, db: Session, contractor_codes: set[str]) -> None:
         for code in contractor_codes:
@@ -1435,7 +2606,6 @@ class DataImportService:
         result.dkbz = base.dkbz
         result.dkbzxx = base.dkbzxx
         result.zjrxm = base.zjrxm
-        result.geometry = base.geometry
         result.source_import_batch_id = base.source_import_batch_id
         result.source_import_row_id = base.source_import_row_id
         result.last_import_batch_id = base.last_import_batch_id
@@ -1597,6 +2767,97 @@ class DataImportService:
         except (InvalidOperation, ValueError) as exc:
             raise ValueError(f"数值格式不正确：{value}") from exc
 
+    def _snapshot_model(self, instance) -> dict:
+        mapper = sa_inspect(instance).mapper
+        return {
+            column.key: self._json_safe(getattr(instance, column.key))
+            for column in mapper.column_attrs
+        }
+
+    def _primary_key_snapshot(self, instance) -> dict:
+        mapper = sa_inspect(instance).mapper
+        return {
+            column.key: self._json_safe(getattr(instance, column.key))
+            for column in mapper.primary_key
+        }
+
+    def _record_operation(
+        self,
+        db: Session,
+        batch: DataImportBatch,
+        row_record: DataImportRow,
+        instance,
+        operation_type: str,
+        before_snapshot: dict | None,
+        chunk_no: int,
+    ) -> None:
+        if operation_type != "update" or before_snapshot is None:
+            return
+        db.add(
+            DataImportOperation(
+                tenant_code=batch.tenant_code,
+                region_code=batch.region_code,
+                import_batch_id=batch.id,
+                import_file_id=row_record.import_file_id,
+                import_row_id=row_record.id,
+                chunk_no=chunk_no,
+                table_name=instance.__tablename__,
+                primary_key=self._primary_key_snapshot(instance),
+                operation_type=operation_type,
+                before_snapshot=before_snapshot,
+                after_snapshot=self._snapshot_model(instance),
+            )
+        )
+
+    def _rollback_model_map(self) -> dict[str, type]:
+        models = [
+            Fbf,
+            SurveyContractorTask,
+            SurveyCbfBase,
+            SurveyCbfResult,
+            SurveyCbfJtcyBase,
+            SurveyCbfJtcyResult,
+            SurveyFbfBase,
+            SurveyFbfResult,
+            SurveyCbdkxxBase,
+            SurveyCbdkxxResult,
+            SurveyDkBase,
+            SurveyDkResult,
+        ]
+        return {model.__tablename__: model for model in models}
+
+    def _get_by_primary_key(self, db: Session, model, primary_key: dict):
+        mapper = sa_inspect(model).mapper
+        values = []
+        for column in mapper.primary_key:
+            if column.key not in primary_key:
+                return None
+            values.append(self._restore_value(column, primary_key[column.key]))
+        return db.get(model, values[0] if len(values) == 1 else tuple(values))
+
+    def _restore_snapshot(self, instance, snapshot: dict) -> None:
+        mapper = sa_inspect(instance).mapper
+        columns = {column.key: column for column in mapper.column_attrs}
+        for key, value in snapshot.items():
+            column = columns.get(key)
+            if column is None:
+                continue
+            setattr(instance, key, self._restore_value(column, value))
+
+    def _restore_value(self, column_attr, value):
+        if value is None:
+            return None
+        column_type = column_attr.columns[0].type
+        if isinstance(column_type, SAInteger):
+            return int(value)
+        if isinstance(column_type, SANumeric):
+            return Decimal(str(value))
+        if isinstance(column_type, SADateTime):
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if isinstance(column_type, SADate):
+            return date.fromisoformat(str(value))
+        return value
+
     def _parse_datetime(self, value: str | None) -> datetime | None:
         if not value:
             return None
@@ -1606,7 +2867,13 @@ class DataImportService:
                 return datetime.combine(datetime.strptime(text, fmt).date(), datetime.min.time())
             except ValueError:
                 pass
-        return datetime.combine(date.fromisoformat(text), datetime.min.time())
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            return parsed
+        except ValueError:
+            return datetime.combine(date.fromisoformat(text), datetime.min.time())
 
     def _resolve_group_region(self, db: Session, data: dict, current_user: User) -> tuple[str | None, str | None]:
         code = (data.get("group_region_code") or "").strip()

@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RUNTIME_ROOT="$PROJECT_ROOT/runtime"
+STATE_DIR="$RUNTIME_ROOT/.state"
 PG_HOME="$RUNTIME_ROOT/linux/postgresql"
 PG_BIN="$PG_HOME/bin"
 PG_DATA="$RUNTIME_ROOT/data/pgdata"
@@ -28,12 +29,16 @@ require_file "$PG_BIN/psql" "psql not found: $PG_BIN/psql"
 require_file "$PG_BIN/createdb" "createdb not found: $PG_BIN/createdb"
 require_file "$PG_BIN/pg_isready" "pg_isready not found: $PG_BIN/pg_isready"
 
-mkdir -p "$PG_DATA" "$LOG_DIR"
+mkdir -p "$PG_DATA" "$LOG_DIR" "$STATE_DIR"
 
 if "$PG_BIN/pg_ctl" status -D "$PG_DATA" >/dev/null 2>&1; then
   echo "PostgreSQL is already running."
 else
   if [[ ! -f "$PG_DATA/PG_VERSION" ]]; then
+    DB_PASSWORD=$(tr -dc 'A-Za-z0-9!#$%&*' < /dev/urandom | head -c24)
+    echo "Generated random database password (stored in runtime/.state/runtime.env)"
+    echo "$DB_PASSWORD" > "$STATE_DIR/.db-password"
+
     PW_FILE="$LOG_DIR/.pgpass-init"
     printf '%s\n' "$DB_PASSWORD" > "$PW_FILE"
     "$PG_BIN/initdb" -D "$PG_DATA" -U "$DB_USER" --encoding=UTF8 --locale=C --auth-host=scram-sha-256 --auth-local=trust --pwfile="$PW_FILE"

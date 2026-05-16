@@ -4,6 +4,7 @@
       <div class="panel-title">{{ ui.title }}</div>
       <div class="toolbar-actions">
         <el-button plain @click="loadLayers">{{ ui.refresh }}</el-button>
+        <el-button v-if="canManage" plain :loading="bulkBboxLoading" @click="handleRecalculateAllBbox">{{ ui.recalculateAllBbox }}</el-button>
         <el-button v-if="canManage" type="success" @click="openCreateDialog">{{ ui.create }}</el-button>
       </div>
     </div>
@@ -51,14 +52,28 @@
                   </template>
                 </el-table-column>
                 <el-table-column prop="sortOrder" :label="ui.sortOrder" min-width="80" />
-                <el-table-column v-if="canManage" :label="ui.actions" min-width="280" fixed="right">
+                <el-table-column v-if="canManage" :label="ui.actions" width="190" fixed="right">
                   <template #default="{ row }">
                     <div class="table-actions">
                       <el-button link type="success" @click="testLayer(row)">{{ ui.test }}</el-button>
-                      <el-button link type="info" @click="moveLayer(row, -10)">{{ ui.moveUp }}</el-button>
-                      <el-button link type="info" @click="moveLayer(row, 10)">{{ ui.moveDown }}</el-button>
                       <el-button link type="primary" @click="openEditDialog(row)">{{ ui.edit }}</el-button>
-                      <el-button link type="danger" @click="handleDelete(row)">{{ ui.delete }}</el-button>
+                      <el-dropdown trigger="click" @command="(command) => handleLayerCommand(row, command)">
+                        <el-button link type="info">{{ ui.more }}</el-button>
+                        <template #dropdown>
+                          <el-dropdown-menu>
+                            <el-dropdown-item
+                              v-if="isGeoserverLayer(row)"
+                              command="bbox"
+                              :disabled="isRowBusy(row, 'bbox')"
+                            >
+                              {{ isRowBusy(row, "bbox") ? ui.processing : ui.recalculateBbox }}
+                            </el-dropdown-item>
+                            <el-dropdown-item command="up">{{ ui.moveUp }}</el-dropdown-item>
+                            <el-dropdown-item command="down">{{ ui.moveDown }}</el-dropdown-item>
+                            <el-dropdown-item command="delete" divided>{{ ui.delete }}</el-dropdown-item>
+                          </el-dropdown-menu>
+                        </template>
+                      </el-dropdown>
                     </div>
                   </template>
                 </el-table-column>
@@ -99,14 +114,21 @@
                   </template>
                 </el-table-column>
                 <el-table-column prop="sortOrder" :label="ui.sortOrder" min-width="80" />
-                <el-table-column v-if="canManage" :label="ui.actions" min-width="280" fixed="right">
+                <el-table-column v-if="canManage" :label="ui.actions" width="190" fixed="right">
                   <template #default="{ row }">
                     <div class="table-actions">
                       <el-button link type="success" @click="testLayer(row)">{{ ui.test }}</el-button>
-                      <el-button link type="info" @click="moveLayer(row, -10)">{{ ui.moveUp }}</el-button>
-                      <el-button link type="info" @click="moveLayer(row, 10)">{{ ui.moveDown }}</el-button>
                       <el-button link type="primary" @click="openEditDialog(row)">{{ ui.edit }}</el-button>
-                      <el-button link type="danger" @click="handleDelete(row)">{{ ui.delete }}</el-button>
+                      <el-dropdown trigger="click" @command="(command) => handleLayerCommand(row, command)">
+                        <el-button link type="info">{{ ui.more }}</el-button>
+                        <template #dropdown>
+                          <el-dropdown-menu>
+                            <el-dropdown-item command="up">{{ ui.moveUp }}</el-dropdown-item>
+                            <el-dropdown-item command="down">{{ ui.moveDown }}</el-dropdown-item>
+                            <el-dropdown-item command="delete" divided>{{ ui.delete }}</el-dropdown-item>
+                          </el-dropdown-menu>
+                        </template>
+                      </el-dropdown>
                     </div>
                   </template>
                 </el-table-column>
@@ -189,7 +211,25 @@
               <el-switch v-model="service.enabled" />
             </el-form-item>
             <el-form-item class="form-span-2" :label="ui.serviceUrl">
-              <el-input v-model="service.serviceUrl" :placeholder="ui.inputServiceUrl" />
+              <div style="display: flex; gap: 8px; width: 100%;">
+                <el-input v-model="service.serviceUrl" :placeholder="ui.inputServiceUrl" style="flex: 1;" />
+                <el-button
+                  v-if="service.serviceType === 'WMS' || service.serviceType === 'WMTS'"
+                  plain
+                  @click="openGeoserverPicker(service)"
+                >
+                  {{ ui.selectFromGeoserver }}
+                </el-button>
+                <el-button
+                  v-if="service.serviceType === 'WMS' || service.serviceType === 'WMTS'"
+                  plain
+                  type="warning"
+                  :disabled="!service.serviceUrl"
+                  @click="openServiceCacheDialog(service)"
+                >
+                  {{ ui.seedCache }}
+                </el-button>
+              </div>
             </el-form-item>
           </div>
         </el-tab-pane>
@@ -201,13 +241,99 @@
       <el-button :loading="submitting" type="success" @click="handleSubmit">{{ ui.save }}</el-button>
     </template>
   </el-dialog>
+
+  <!-- GeoServer 图层选择对话框 -->
+  <el-dialog v-model="geoserverPickerVisible" :title="ui.geoserverPickerTitle" width="720px" destroy-on-close>
+    <div style="margin-bottom: 16px; display: flex; gap: 8px;">
+      <el-input v-model="geoserverUrl" :placeholder="ui.geoserverUrlPlaceholder" style="flex: 1;" clearable />
+      <el-select v-model="geoserverServiceType" style="width: 100px;">
+        <el-option label="WMS" value="WMS" />
+        <el-option label="WMTS" value="WMTS" />
+      </el-select>
+      <el-button type="primary" :loading="geoserverLoading" @click="handleFetchGeoserverLayers">
+        {{ ui.queryLayers }}
+      </el-button>
+    </div>
+    <div style="margin-bottom: 12px; display: flex; gap: 12px; align-items: center;">
+      <el-input v-model="geoserverFilter" :placeholder="ui.filterLayers" style="width: 260px;" clearable size="small" />
+      <span style="font-size: 12px; color: #909399;">{{ ui.totalLayers }}: {{ filteredGeoserverLayers.length }}</span>
+    </div>
+    <el-table v-loading="geoserverLoading" :data="pagedGeoserverLayers" border max-height="380" size="small">
+      <el-table-column prop="workspace" :label="ui.workspace" width="130" />
+      <el-table-column prop="name" :label="ui.geoserverLayerName" min-width="200" show-overflow-tooltip />
+      <el-table-column prop="title" :label="ui.geoserverLayerTitle" min-width="180" show-overflow-tooltip />
+      <el-table-column :label="ui.select" width="80" fixed="right">
+        <template #default="{ row }">
+          <el-button link type="primary" size="small" @click="selectGeoserverLayer(row)">{{ ui.select }}</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+    <div style="margin-top: 12px; display: flex; justify-content: center;">
+      <el-pagination
+        v-model:current-page="geoserverPage"
+        :page-size="geoserverPageSize"
+        :total="filteredGeoserverLayers.length"
+        layout="prev, pager, next"
+        small
+      />
+    </div>
+    <template #footer>
+      <el-button @click="geoserverPickerVisible = false">{{ ui.cancel }}</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog v-model="cacheDialogVisible" :title="ui.cacheDialogTitle" width="520px" destroy-on-close>
+    <el-form :model="cacheForm" class="compact-form" label-position="top">
+      <div class="form-grid">
+        <el-form-item :label="ui.geoserverLayerName">
+          <el-input v-model="cacheForm.layerName" disabled />
+        </el-form-item>
+        <el-form-item :label="ui.gridSetId">
+          <el-select v-model="cacheForm.gridSetId">
+            <el-option label="EPSG:4326" value="EPSG:4326" />
+            <el-option label="EPSG:900913" value="EPSG:900913" />
+          </el-select>
+        </el-form-item>
+        <el-form-item :label="ui.zoomStart">
+          <el-input-number v-model="cacheForm.zoomStart" :min="0" :max="24" style="width: 100%" />
+        </el-form-item>
+        <el-form-item :label="ui.zoomStop">
+          <el-input-number v-model="cacheForm.zoomStop" :min="0" :max="24" style="width: 100%" />
+        </el-form-item>
+        <el-form-item :label="ui.cacheType">
+          <el-select v-model="cacheForm.type">
+            <el-option :label="ui.cacheTypeReseed" value="reseed" />
+            <el-option :label="ui.cacheTypeSeed" value="seed" />
+            <el-option :label="ui.cacheTypeTruncate" value="truncate" />
+          </el-select>
+        </el-form-item>
+        <el-form-item :label="ui.threadCount">
+          <el-input-number v-model="cacheForm.threadCount" :min="1" :max="8" style="width: 100%" />
+        </el-form-item>
+      </div>
+    </el-form>
+    <template #footer>
+      <el-button @click="cacheDialogVisible = false">{{ ui.cancel }}</el-button>
+      <el-button type="warning" :loading="cacheSubmitting" @click="handleSeedCache">{{ ui.seedCache }}</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup>
 import { computed, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
-import { createMapLayer, deleteMapLayer, fetchMapLayers, updateMapLayer, validateMapLayerService } from "../api/mapLayer";
+import {
+  createMapLayer,
+  deleteMapLayer,
+  fetchGeoserverLayers,
+  fetchMapLayers,
+  recalculateAllMapLayerBboxes,
+  recalculateMapLayerBbox,
+  seedMapLayerServiceCache,
+  updateMapLayer,
+  validateMapLayerService,
+} from "../api/mapLayer";
 import { basemapConfigs, vectorLayerConfigs } from "../config/mapLayers";
 import { useAuthStore } from "../stores/auth";
 
@@ -232,6 +358,8 @@ const ui = {
   disabled: "\u505c\u7528",
   sortOrder: "\u6392\u5e8f",
   actions: "\u64cd\u4f5c",
+  more: "\u66f4\u591a",
+  processing: "\u5904\u7406\u4e2d...",
   defaultBasemap: "\u9ed8\u8ba4\u5e95\u56fe",
   projection: "\u5750\u6807\u7cfb",
   minZoom: "\u6700\u5c0f Zoom",
@@ -240,6 +368,9 @@ const ui = {
   yes: "\u662f",
   no: "\u5426",
   test: "\u6d4b\u8bd5\u670d\u52a1",
+  recalculateAllBbox: "\u6279\u91cf\u91cd\u7b97bbox",
+  recalculateBbox: "\u91cd\u7b97bbox",
+  seedCache: "\u521b\u5efa\u7f13\u5b58",
   moveUp: "\u4e0a\u79fb",
   moveDown: "\u4e0b\u79fb",
   edit: "\u7f16\u8f91",
@@ -276,6 +407,32 @@ const ui = {
   requireServiceType: "\u8bf7\u9009\u62e9\u670d\u52a1\u7c7b\u578b",
   requireServiceUrl: "\u8bf7\u8f93\u5165\u670d\u52a1\u5730\u5740",
   invalidZoomRange: "\u670d\u52a1\u7f29\u653e\u8303\u56f4\u65e0\u6548",
+  selectFromGeoserver: "\u4eceGeoServer\u9009\u62e9",
+  geoserverPickerTitle: "\u9009\u62e9 GeoServer \u56fe\u5c42",
+  geoserverUrlPlaceholder: "GeoServer \u5730\u5740\uff0c\u5982 /geoserver",
+  queryLayers: "\u67e5\u8be2\u56fe\u5c42",
+  filterLayers: "\u8fc7\u6ee4\u56fe\u5c42\u540d\u79f0...",
+  totalLayers: "\u56fe\u5c42\u6570",
+  workspace: "\u5de5\u4f5c\u533a",
+  geoserverLayerName: "\u56fe\u5c42\u540d\u79f0",
+  geoserverLayerTitle: "\u6807\u9898",
+  select: "\u9009\u62e9",
+  geoserverFetchFailed: "\u65e0\u6cd5\u83b7\u53d6 GeoServer \u56fe\u5c42\u5217\u8868",
+  geoserverEmpty: "\u672a\u627e\u5230\u56fe\u5c42\uff0c\u8bf7\u68c0\u67e5 GeoServer \u5730\u5740\u548c\u670d\u52a1\u7c7b\u578b\u3002",
+  bboxSuccess: "bbox \u5df2\u91cd\u65b0\u8ba1\u7b97",
+  bboxFailed: "bbox \u91cd\u65b0\u8ba1\u7b97\u5931\u8d25",
+  bboxAllSuccess: "\u5df2\u91cd\u7b97 {0} \u4e2a\u56fe\u5c42 bbox",
+  cacheDialogTitle: "\u521b\u5efa GeoServer \u5207\u7247\u7f13\u5b58",
+  gridSetId: "\u7f51\u683c\u96c6",
+  zoomStart: "\u8d77\u59cb Zoom",
+  zoomStop: "\u7ed3\u675f Zoom",
+  cacheType: "\u4efb\u52a1\u7c7b\u578b",
+  cacheTypeSeed: "\u53ea\u521b\u5efa\u7f3a\u5931\u5207\u7247",
+  cacheTypeReseed: "\u91cd\u65b0\u751f\u6210\u5207\u7247",
+  cacheTypeTruncate: "\u6e05\u7a7a\u5207\u7247",
+  threadCount: "\u7ebf\u7a0b\u6570",
+  cacheSuccess: "\u7f13\u5b58\u4efb\u52a1\u5df2\u63d0\u4ea4",
+  cacheFailed: "\u7f13\u5b58\u4efb\u52a1\u521b\u5efa\u5931\u8d25",
 };
 
 function formatText(template, value) {
@@ -363,11 +520,11 @@ function normalizeLayerRow(item) {
 
 function ensurePrimaryGeoServerLayer(rows) {
   const normalizedRows = (Array.isArray(rows) ? rows : []).map(normalizeLayerRow);
-  if (normalizedRows.some((item) => item.key === "dk3213242017")) {
+  if (normalizedRows.some((item) => item.key === "survey_dk_result")) {
     return normalizedRows;
   }
 
-  const fallbackPrimary = vectorLayerConfigs.find((item) => item.key === "dk3213242017");
+  const fallbackPrimary = vectorLayerConfigs.find((item) => item.key === "survey_dk_result");
   if (!fallbackPrimary) {
     return normalizedRows;
   }
@@ -394,10 +551,38 @@ const canManage = computed(() => authStore.hasPermission("layers.manage"));
 const activeTab = ref("vector");
 const loading = ref(false);
 const submitting = ref(false);
+const bulkBboxLoading = ref(false);
 const dialogVisible = ref(false);
+const cacheDialogVisible = ref(false);
+const cacheSubmitting = ref(false);
 const editingId = ref(0);
 const formRef = ref();
 const activeServiceTab = ref("");
+const geoserverPickerVisible = ref(false);
+const geoserverUrl = ref("/geoserver");
+const geoserverServiceType = ref("WMS");
+const geoserverLoading = ref(false);
+const geoserverLayers = ref([]);
+const geoserverFilter = ref("");
+const geoserverPage = ref(1);
+const geoserverPageSize = 10;
+let pendingService = null;
+let pendingCacheService = null;
+
+const filteredGeoserverLayers = computed(() => {
+  const keyword = geoserverFilter.value.trim().toLowerCase();
+  if (!keyword) {
+    return geoserverLayers.value;
+  }
+  return geoserverLayers.value.filter(
+    (item) => item.name.toLowerCase().includes(keyword) || item.title.toLowerCase().includes(keyword),
+  );
+});
+
+const pagedGeoserverLayers = computed(() => {
+  const start = (geoserverPage.value - 1) * geoserverPageSize;
+  return filteredGeoserverLayers.value.slice(start, start + geoserverPageSize);
+});
 
 const vectorKeyword = ref("");
 const vectorType = ref("");
@@ -405,6 +590,16 @@ const vectorGroup = ref("");
 const basemapKeyword = ref("");
 const rows = ref([]);
 const form = reactive(createEmptyForm());
+const cacheForm = reactive({
+  layerId: 0,
+  layerName: "",
+  gridSetId: "EPSG:4326",
+  zoomStart: 0,
+  zoomStop: 15,
+  type: "reseed",
+  threadCount: 2,
+});
+const rowBusyKeys = ref(new Set());
 
 const rules = {
   category: [{ required: true, message: ui.ruleCategory, trigger: "change" }],
@@ -615,6 +810,24 @@ async function moveLayer(row, delta) {
   }
 }
 
+function handleLayerCommand(row, command) {
+  if (command === "bbox") {
+    handleRecalculateBbox(row);
+    return;
+  }
+  if (command === "up") {
+    moveLayer(row, -10);
+    return;
+  }
+  if (command === "down") {
+    moveLayer(row, 10);
+    return;
+  }
+  if (command === "delete") {
+    handleDelete(row);
+  }
+}
+
 function buildPayloadFromRow(row) {
   return {
     name: row.name,
@@ -634,6 +847,193 @@ function buildPayloadFromRow(row) {
       enabled: service.enabled,
     })),
   };
+}
+
+function getGeoServerLayerName(row) {
+  for (const service of row.serviceConfigs || []) {
+    const serviceUrl = service.serviceUrl || "";
+    if (!serviceUrl.includes("/geoserver")) {
+      continue;
+    }
+    const name = getGeoServerLayerNameFromUrl(serviceUrl);
+    if (name) {
+      return name;
+    }
+  }
+  if ((row.groupName || "").includes("GeoServer")) {
+    return `erlunyanbao:${row.key}`;
+  }
+  return "";
+}
+
+function isGeoserverLayer(row) {
+  return Boolean(getGeoServerLayerName(row));
+}
+
+function isRowBusy(row, action) {
+  return rowBusyKeys.value.has(`${row.id}:${action}`);
+}
+
+function setRowBusy(row, action, busy) {
+  const next = new Set(rowBusyKeys.value);
+  const key = `${row.id}:${action}`;
+  if (busy) {
+    next.add(key);
+  } else {
+    next.delete(key);
+  }
+  rowBusyKeys.value = next;
+}
+
+async function handleRecalculateBbox(row) {
+  if (!row.id) {
+    return;
+  }
+  setRowBusy(row, "bbox", true);
+  try {
+    await recalculateMapLayerBbox(row.id);
+    ElMessage.success(ui.bboxSuccess);
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.detail || ui.bboxFailed);
+  } finally {
+    setRowBusy(row, "bbox", false);
+  }
+}
+
+async function handleRecalculateAllBbox() {
+  bulkBboxLoading.value = true;
+  try {
+    const { data } = await recalculateAllMapLayerBboxes();
+    ElMessage.success(formatText(ui.bboxAllSuccess, data.data?.updatedCount ?? 0));
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.detail || ui.bboxFailed);
+  } finally {
+    bulkBboxLoading.value = false;
+  }
+}
+
+function getGeoServerLayerNameFromUrl(serviceUrl) {
+  if (!serviceUrl) {
+    return "";
+  }
+  try {
+    const url = new URL(serviceUrl, window.location.origin);
+    return url.searchParams.get("layers") || url.searchParams.get("layer") || "";
+  } catch (_error) {
+    return "";
+  }
+}
+
+function openServiceCacheDialog(service) {
+  pendingCacheService = service;
+  Object.assign(cacheForm, {
+    layerId: 0,
+    layerName: getGeoServerLayerNameFromUrl(service.serviceUrl),
+    gridSetId: service.projection === "EPSG:3857" || service.projection === "EPSG:900913" ? "EPSG:900913" : "EPSG:4326",
+    zoomStart: Number(service.minZoom ?? 0),
+    zoomStop: Math.min(Number(service.maxZoom ?? 15), 18),
+    type: "reseed",
+    threadCount: 2,
+  });
+  cacheDialogVisible.value = true;
+}
+
+async function handleSeedCache() {
+  if (Number(cacheForm.zoomStop) < Number(cacheForm.zoomStart)) {
+    ElMessage.warning(ui.invalidZoomRange);
+    return;
+  }
+  cacheSubmitting.value = true;
+  try {
+    const { data } = await seedMapLayerServiceCache({
+      serviceUrl: pendingCacheService?.serviceUrl || "",
+      gridSetId: cacheForm.gridSetId,
+      zoomStart: Number(cacheForm.zoomStart),
+      zoomStop: Number(cacheForm.zoomStop),
+      type: cacheForm.type,
+      threadCount: Number(cacheForm.threadCount),
+    });
+    const wmtsUrl = data.data?.wmtsUrl;
+    if (wmtsUrl) {
+      const nextConfig = {
+        serviceType: "WMTS",
+        serviceUrl: wmtsUrl,
+        projection: cacheForm.gridSetId,
+        minZoom: Number(cacheForm.zoomStart),
+        maxZoom: Number(cacheForm.zoomStop),
+        enabled: true,
+      };
+      const existingWmts = form.serviceConfigs.find(
+        (service) => service.serviceType === "WMTS" && getGeoServerLayerNameFromUrl(service.serviceUrl) === cacheForm.layerName,
+      );
+      if (existingWmts) {
+        Object.assign(existingWmts, nextConfig);
+      } else {
+        const service = { id: createServiceId(), ...nextConfig };
+        form.serviceConfigs.push(service);
+        activeServiceTab.value = service.id;
+      }
+    }
+    ElMessage.success(ui.cacheSuccess);
+    cacheDialogVisible.value = false;
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.detail || ui.cacheFailed);
+  } finally {
+    cacheSubmitting.value = false;
+    pendingCacheService = null;
+  }
+}
+
+function openGeoserverPicker(service) {
+  pendingService = service;
+  geoserverUrl.value = "/geoserver";
+  geoserverServiceType.value = service.serviceType || "WMS";
+  geoserverLayers.value = [];
+  geoserverFilter.value = "";
+  geoserverPage.value = 1;
+  geoserverPickerVisible.value = true;
+}
+
+async function handleFetchGeoserverLayers() {
+  geoserverLoading.value = true;
+  geoserverLayers.value = [];
+  geoserverPage.value = 1;
+  try {
+    const { data } = await fetchGeoserverLayers({
+      geoserverUrl: geoserverUrl.value,
+      serviceType: geoserverServiceType.value,
+    });
+    geoserverLayers.value = data.data || [];
+    if (!geoserverLayers.value.length) {
+      ElMessage.info(ui.geoserverEmpty);
+    }
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.detail || ui.geoserverFetchFailed);
+  } finally {
+    geoserverLoading.value = false;
+  }
+}
+
+function selectGeoserverLayer(row) {
+  if (!pendingService) {
+    geoserverPickerVisible.value = false;
+    return;
+  }
+  const { name, workspace: ws } = row;
+  const resolvedWorkspace = ws || name.split(":")[0] || "";
+  const basePath = geoserverUrl.value.startsWith("/") ? geoserverUrl.value : "/geoserver";
+
+  if (geoserverServiceType.value === "WMTS") {
+    const wmtsWorkspace = resolvedWorkspace || name;
+    pendingService.serviceUrl =
+      `${basePath}/${wmtsWorkspace}/gwc/service/wmts?layer=${name}&style=&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png`;
+  } else {
+    pendingService.serviceUrl =
+      `${basePath}/wms?service=WMS&version=1.1.1&request=GetMap&layers=${name}&styles=&format=image/png&transparent=true`;
+  }
+  pendingService.projection = pendingService.projection || "EPSG:4326";
+  geoserverPickerVisible.value = false;
+  ElMessage.success(`已选择图层：${name}`);
 }
 
 async function testLayer(row) {

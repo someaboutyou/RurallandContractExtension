@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   color-scheme: light;
   font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   --bg: #f6f9fd;
@@ -13,18 +13,18 @@
   --success: #37b26c;
   --warning: #ef9b2d;
   --danger: #ea5a69;
-  --shadow: 0 18px 40px rgba(25, 74, 128, 0.08);
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 10px;
-  --radius-xl: 12px;
+  --shadow: 0 12px 28px rgba(25, 74, 128, 0.08);
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
   --space-xs: 6px;
   --space-sm: 8px;
   --space-md: 10px;
   --space-lg: 12px;
-  --el-border-radius-base: 6px;
-  --el-border-radius-small: 4px;
-  --el-border-radius-round: 999px;
+  --el-border-radius-base: 4px;
+  --el-border-radius-small: 3px;
+  --el-border-radius-round: 8px;
   --el-border-radius-circle: 50%;
 }
 
@@ -42,10 +42,7 @@ body {
   margin: 0;
   overflow: hidden;
   color: var(--text);
-  background:
-    radial-gradient(circle at top left, rgba(73, 212, 255, 0.12), transparent 24%),
-    radial-gradient(circle at right center, rgba(47, 143, 255, 0.1), transparent 26%),
-    linear-gradient(180deg, #fbfdff 0%, #f3f8fd 46%, #edf4fb 100%);
+  background: linear-gradient(180deg, #fbfdff 0%, #f5f8fb 48%, #edf3f8 100%);
 }
 
 a {
@@ -55,172 +52,200 @@ a {
 
 .shell {
   height: 100vh;
-  display: grid;
-  grid-template-columns: 232px minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
+  --topbar-bg: rgba(232, 238, 225, 0.96);
+  --topbar-accent: #5f7f44;
+  --topbar-text: #243325;
 }
 
-.sidebar {
-  overflow: auto;
-  padding: 12px 10px;
-  border-right: 1px solid var(--line);
+.app-topbar {
+  position: relative;
+  flex: 0 0 auto;
+  color: var(--topbar-text, #243325);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(246, 250, 255, 0.94)),
-    linear-gradient(90deg, rgba(73, 212, 255, 0.04), transparent);
+    linear-gradient(90deg, color-mix(in srgb, var(--topbar-accent, #5f7f44) 9%, transparent), transparent 28%),
+    linear-gradient(180deg, color-mix(in srgb, var(--topbar-bg, rgba(232, 238, 225, 0.96)) 86%, #ffffff 14%), #f7fafc 100%);
+  border-bottom: 1px solid rgba(42, 61, 78, 0.1);
+  box-shadow: 0 16px 34px rgba(24, 45, 70, 0.08);
   backdrop-filter: blur(18px);
-  box-shadow: inset -1px 0 0 rgba(73, 212, 255, 0.08);
+  transition: background 0.28s ease, color 0.28s ease;
+}
+
+.app-topbar::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: linear-gradient(90deg, var(--topbar-accent, #5f7f44), color-mix(in srgb, var(--topbar-accent, #5f7f44) 18%, transparent), transparent 72%);
+  opacity: 0.72;
+}
+
+.app-topbar-inner,
+.secondary-nav-row {
+  width: min(80vw, 80%);
+  margin: 0 auto;
+}
+
+.app-topbar-inner {
+  min-height: 78px;
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) minmax(480px, 1fr) minmax(220px, auto);
+  gap: 30px;
+  align-items: center;
 }
 
 .brand {
+  position: relative;
   display: flex;
-  gap: 12px;
   align-items: center;
-  margin-bottom: 20px;
+  min-width: 0;
+  padding-left: 16px;
+  color: var(--topbar-text, #243325);
 }
 
-.brand-mark {
-  width: 42px;
-  height: 42px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-lg);
-  background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  color: white;
-  font-weight: 700;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 12px 28px rgba(47, 143, 255, 0.35);
+.brand::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 5px;
+  bottom: 5px;
+  width: 3px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--topbar-accent, #5f7f44), color-mix(in srgb, var(--topbar-accent, #5f7f44) 36%, #ffffff 64%));
 }
 
 .brand-title {
-  font-size: 18px;
-  font-weight: 700;
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: 0;
 }
 
 .brand-subtitle {
+  margin-top: 4px;
   font-size: 12px;
-  color: var(--muted);
+  font-weight: 600;
+  color: color-mix(in srgb, var(--topbar-text, #243325) 52%, transparent);
 }
 
-.nav {
-  display: grid;
-  gap: 8px;
-}
-
-.nav-tree {
-  gap: 10px;
-}
-
-.nav-tree-group {
-  display: grid;
-  gap: 6px;
-}
-
-.nav-tree-parent {
-  width: 100%;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 10px;
-  border-radius: var(--radius-md);
-  border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.72);
-  color: var(--muted);
-  cursor: pointer;
-  transition: 0.2s ease;
-}
-
-.nav-tree-parent:hover {
-  border-color: rgba(73, 212, 255, 0.24);
-  color: var(--text);
-  background: rgba(73, 212, 255, 0.08);
-}
-
-.nav-tree-parent.is-active,
-.nav-tree-parent.is-expanded {
-  color: #0f4f8b;
-  border-color: rgba(73, 212, 255, 0.36);
-  background: linear-gradient(135deg, rgba(47, 143, 255, 0.16), rgba(73, 212, 255, 0.12));
-  box-shadow: 0 10px 24px rgba(47, 143, 255, 0.1);
-}
-
-.nav-tree-parent-main {
-  display: inline-flex;
-  align-items: center;
+.primary-nav {
   min-width: 0;
-  font-weight: 700;
-  font-size: 15px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  padding: 6px;
+  border: 1px solid rgba(42, 61, 78, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.46);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.75),
+    0 10px 24px rgba(37, 61, 85, 0.05);
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
-.nav-tree-parent-arrow {
-  color: var(--muted);
-  font-size: 12px;
+.primary-nav::-webkit-scrollbar {
+  display: none;
 }
 
-.nav-tree-children {
-  display: grid;
-  gap: 6px;
-}
-
-.nav-link {
-  padding: 8px 10px;
-  border-radius: var(--radius-md);
-  color: var(--muted);
+.primary-nav-item {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 18px;
   border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.72);
+  border-radius: 7px;
+  color: color-mix(in srgb, var(--topbar-text, #243325) 68%, transparent);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.primary-nav-item:hover {
+  color: var(--topbar-text, #243325);
+  background: rgba(255, 255, 255, 0.64);
+  border-color: rgba(42, 61, 78, 0.08);
+}
+
+.primary-nav-item.is-active {
+  color: var(--topbar-text, #243325);
+  border-color: rgba(42, 61, 78, 0.1);
+  background: linear-gradient(180deg, #ffffff, color-mix(in srgb, var(--topbar-accent, #5f7f44) 8%, #f7fafc 92%));
+  box-shadow:
+    0 8px 18px rgba(31, 56, 81, 0.08),
+    inset 0 -2px 0 var(--topbar-accent, #5f7f44);
+}
+
+.secondary-nav-row {
+  min-height: 44px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 0;
+  border-top: 1px solid rgba(42, 61, 78, 0.06);
+}
+
+.secondary-nav-row.is-empty {
+  min-height: 0;
+  border-top: 0;
+}
+
+.secondary-nav {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.secondary-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.secondary-nav-item {
+  flex: 0 0 auto;
+  padding: 7px 13px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: color-mix(in srgb, var(--topbar-text, #243325) 62%, transparent);
+  font-size: 13px;
+  font-weight: 700;
   transition: 0.2s ease;
 }
 
-.nav-link:hover {
-  border-color: rgba(73, 212, 255, 0.24);
-  color: var(--text);
-  background: rgba(73, 212, 255, 0.08);
-}
-
-.nav-link.router-link-active {
-  color: #0f4f8b;
-  border-color: rgba(73, 212, 255, 0.36);
-  background: linear-gradient(135deg, rgba(47, 143, 255, 0.16), rgba(73, 212, 255, 0.12));
-  box-shadow: 0 10px 24px rgba(47, 143, 255, 0.1);
-}
-
-.nav-link-child {
-  padding: 8px 10px 8px 14px;
-}
-
-.nav-link.is-active {
-  color: #0f4f8b;
-  border-color: rgba(73, 212, 255, 0.36);
-  background: linear-gradient(135deg, rgba(47, 143, 255, 0.16), rgba(73, 212, 255, 0.12));
-  box-shadow: 0 10px 24px rgba(47, 143, 255, 0.1);
-}
-
-.nav-tree-leaf,
-.nav-tree-child {
-  display: inline-flex;
-  align-items: center;
-}
-
-.nav-tree-leaf {
-  font-weight: 700;
-}
-
-.nav-tree-child {
-  margin-left: 12px;
-  padding-left: 18px;
-  font-size: 14px;
-}
-
-.nav-link-text {
-  letter-spacing: 0.02em;
+.secondary-nav-item:hover,
+.secondary-nav-item.is-active {
+  color: var(--topbar-accent, #5f7f44);
+  background: color-mix(in srgb, var(--topbar-accent, #5f7f44) 10%, #ffffff 90%);
+  border-color: color-mix(in srgb, var(--topbar-accent, #5f7f44) 18%, transparent);
 }
 
 .main {
   min-width: 0;
-  height: 100vh;
+  width: min(80vw, 80%);
+  height: auto;
+  min-height: 0;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
   overflow: hidden;
-  padding: 10px 12px 12px;
+  flex: 1 1 auto;
+  padding: 0 0 14px;
+}
+
+.shell.is-map-page .main {
+  width: 100%;
 }
 
 .header {
@@ -248,27 +273,122 @@ a {
 
 .user-panel {
   display: flex;
+  justify-content: flex-end;
   gap: 10px;
   align-items: center;
-  padding: 5px 8px;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--line);
-  background: rgba(247, 251, 255, 0.92);
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
-.user-meta {
-  text-align: right;
+.topbar-icon-button,
+.avatar-button {
+  border: 1px solid rgba(42, 61, 78, 0.1);
+  background: rgba(255, 255, 255, 0.62);
+  color: var(--topbar-text, #243325);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.78),
+    0 8px 18px rgba(35, 66, 99, 0.06);
+  cursor: pointer;
+  transition: 0.18s ease;
 }
 
-.user-name {
+.topbar-icon-button {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  font-size: 17px;
+}
+
+.avatar-button {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.9), transparent 34%),
+    linear-gradient(135deg, color-mix(in srgb, var(--topbar-accent, #5f7f44) 90%, #ffffff 10%), color-mix(in srgb, var(--topbar-accent, #5f7f44) 72%, #243447 28%));
+  color: #ffffff;
+  font-weight: 800;
+}
+
+.topbar-icon-button:hover,
+.avatar-button:hover {
+  border-color: color-mix(in srgb, var(--topbar-accent, #5f7f44) 36%, transparent);
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.78),
+    0 12px 22px rgba(35, 66, 99, 0.1);
+}
+
+.avatar-button-text {
+  line-height: 1;
+}
+
+.topbar-dropdown,
+.profile-dropdown {
+  border-radius: var(--radius-xl);
+  border-color: rgba(42, 61, 78, 0.12);
+  box-shadow: 0 18px 40px rgba(24, 45, 70, 0.14);
+}
+
+.topbar-dropdown .el-dropdown-menu,
+.profile-dropdown .el-dropdown-menu {
+  padding: 6px;
+}
+
+.topbar-dropdown .el-dropdown-menu__item {
+  min-width: 148px;
+  border-radius: var(--radius-md);
   font-weight: 700;
+}
+
+.topbar-dropdown .el-dropdown-menu__item.is-current,
+.topbar-dropdown .el-dropdown-menu__item:hover {
+  color: var(--topbar-accent, #5f7f44);
+  background: color-mix(in srgb, var(--topbar-accent, #5f7f44) 10%, #ffffff 90%);
+}
+
+.profile-card {
+  min-width: 210px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid rgba(42, 61, 78, 0.08);
+}
+
+.profile-card-avatar {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--topbar-accent, #5f7f44), color-mix(in srgb, var(--topbar-accent, #5f7f44) 70%, #243447 30%));
+  color: #ffffff;
+  font-weight: 800;
+}
+
+.profile-card-main {
+  min-width: 0;
+}
+
+.profile-card-name {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 800;
   line-height: 1.2;
 }
 
-.user-role {
+.profile-card-role {
+  margin-top: 4px;
   color: var(--muted);
   font-size: 12px;
-  line-height: 1.1;
+  font-weight: 600;
 }
 
 .content {
@@ -656,9 +776,285 @@ a {
   pointer-events: none;
 }
 
-.gis-floating-toolbar {
+.gis-search-dock {
   position: absolute;
   top: 18px;
+  left: 18px;
+  z-index: 4;
+  width: min(720px, calc(100% - 330px));
+  display: grid;
+  gap: 10px;
+}
+
+.gis-search-bar {
+  display: grid;
+  grid-template-columns: 190px minmax(220px, 1fr) 104px;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: var(--radius-lg);
+  background: rgba(12, 35, 58, 0.28);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 16px 36px rgba(5, 18, 34, 0.24);
+}
+
+.gis-search-select,
+.gis-search-input,
+.gis-search-button {
+  height: 42px;
+  border-radius: var(--radius-md);
+  font: inherit;
+}
+
+.gis-search-select,
+.gis-search-input {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--text);
+  outline: 0;
+}
+
+.gis-search-select {
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.gis-search-input {
+  padding: 0 14px;
+}
+
+.gis-search-input::placeholder {
+  color: #8a98a8;
+}
+
+.gis-search-select:focus,
+.gis-search-input:focus {
+  border-color: rgba(64, 158, 255, 0.78);
+  box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.18);
+}
+
+.gis-search-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 0;
+  background: #409eff;
+  color: #ffffff;
+  font-weight: 700;
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+
+.gis-search-button:hover {
+  background: #2f8eed;
+  box-shadow: 0 10px 20px rgba(64, 158, 255, 0.22);
+}
+
+.gis-search-button:disabled {
+  opacity: 0.72;
+  cursor: wait;
+}
+
+.gis-search-button-icon,
+.gis-search-close,
+.gis-search-result-actions span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gis-search-button-icon,
+.gis-search-button-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.gis-search-panel {
+  width: min(560px, 100%);
+  max-height: min(560px, calc(100vh - 190px));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(224, 232, 238, 0.9);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--text);
+  box-shadow: 0 18px 46px rgba(5, 18, 34, 0.22);
+  overflow: hidden;
+}
+
+.gis-search-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 16px 10px;
+}
+
+.gis-search-counts {
+  display: grid;
+  gap: 8px;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.gis-search-counts div {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.gis-search-counts strong {
+  color: #1f7fc9;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.gis-search-close {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: #566273;
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+
+.gis-search-close:hover {
+  background: rgba(48, 65, 86, 0.08);
+  color: #1f2d3d;
+}
+
+.gis-search-close svg {
+  width: 19px;
+  height: 19px;
+}
+
+.gis-search-tabs {
+  display: flex;
+  gap: 18px;
+  padding: 0 16px;
+  border-bottom: 1px solid rgba(48, 65, 86, 0.12);
+}
+
+.gis-search-tab {
+  position: relative;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #4e5f72;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.gis-search-tab.is-active {
+  color: #1f7fc9;
+}
+
+.gis-search-tab.is-active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 999px;
+  background: #409eff;
+}
+
+.gis-search-message {
+  padding: 10px 16px 0;
+  color: #5d6b7a;
+  font-size: 13px;
+}
+
+.gis-search-list {
+  min-height: 0;
+  padding: 8px 0;
+  overflow: auto;
+}
+
+.gis-search-result {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 11px 16px;
+  border: 0;
+  border-bottom: 1px solid rgba(48, 65, 86, 0.1);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: 0.18s ease;
+}
+
+.gis-search-result:hover {
+  background: rgba(64, 158, 255, 0.07);
+}
+
+.gis-search-result-title {
+  margin-bottom: 6px;
+  color: #1f7fc9;
+  font-weight: 800;
+}
+
+.gis-search-result-lines {
+  display: grid;
+  gap: 4px;
+  color: #2c3e50;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.gis-search-result-lines span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.gis-search-result-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #6f95b7;
+}
+
+.gis-search-result-actions span {
+  gap: 4px;
+  min-width: 22px;
+}
+
+.gis-search-result-actions svg {
+  width: 15px;
+  height: 15px;
+}
+
+.gis-search-empty {
+  padding: 24px 16px;
+  color: #64748b;
+  text-align: center;
+}
+
+.gis-search-panel-enter-active,
+.gis-search-panel-leave-active {
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease;
+}
+
+.gis-search-panel-enter-from,
+.gis-search-panel-leave-to {
+  opacity: 0;
+  transform: translateY(-8px) scale(0.98);
+}
+
+.gis-floating-toolbar {
+  position: absolute;
+  top: 86px;
   left: 18px;
   z-index: 3;
   display: flex;
@@ -753,7 +1149,7 @@ a {
 }
 
 .gis-floating-panel--left {
-  top: 84px;
+  top: 150px;
   left: 18px;
 }
 
@@ -847,6 +1243,44 @@ a {
   font-size: 12px;
 }
 
+.gis-parcel-popup {
+  min-width: 240px;
+  max-width: 300px;
+  padding: 10px;
+  border: 1px solid rgba(255, 211, 77, 0.42);
+  border-radius: var(--radius-lg);
+  background: rgba(9, 27, 45, 0.92);
+  color: #f8fbff;
+  box-shadow: 0 18px 42px rgba(4, 12, 24, 0.34);
+  backdrop-filter: blur(16px);
+  pointer-events: none;
+}
+
+.gis-parcel-popup-title {
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.gis-parcel-popup-grid {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 5px 8px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.gis-parcel-popup-grid span {
+  color: rgba(232, 245, 255, 0.66);
+}
+
+.gis-parcel-popup-grid strong {
+  min-width: 0;
+  color: #ffffff;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
 .gis-layer-group {
   display: grid;
   gap: 8px;
@@ -890,6 +1324,19 @@ a {
   backdrop-filter: blur(20px);
   box-shadow: var(--shadow);
   overflow: auto;
+}
+
+.gis-property-panel-enter-active,
+.gis-property-panel-leave-active {
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease;
+}
+
+.gis-property-panel-enter-from,
+.gis-property-panel-leave-to {
+  opacity: 0;
+  transform: translateX(18px) scale(0.98);
 }
 
 .gis-attr-card {
@@ -1058,7 +1505,7 @@ a {
 .permission-group {
   padding: 14px 16px;
   border: 1px solid rgba(55, 67, 46, 0.12);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.72);
 }
 
@@ -1085,7 +1532,7 @@ a {
 .member-card {
   padding: 16px;
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.7);
 }
 
@@ -1197,7 +1644,7 @@ a {
   gap: 10px;
   padding: 14px 16px;
   border: 1px solid rgba(55, 67, 46, 0.12);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.72);
 }
 
@@ -1230,6 +1677,21 @@ a {
   font-size: 13px;
 }
 
+.member-tab-tools {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.member-view-switch .el-radio-button__inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+}
+
 .member-tab-title {
   margin-bottom: 4px;
   color: var(--text);
@@ -1248,7 +1710,7 @@ a {
 .member-tabs .el-tabs__item {
   height: 42px;
   padding: 0 18px;
-  border-radius: 12px 12px 0 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   color: var(--muted);
 }
 
@@ -1260,7 +1722,7 @@ a {
 
 .member-pane-card {
   border: 1px solid rgba(55, 67, 46, 0.12);
-  border-radius: 18px;
+  border-radius: var(--radius-xl);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(246, 249, 241, 0.96));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
@@ -1309,12 +1771,90 @@ a {
   grid-column: 1 / -1;
 }
 
+.member-table-wrap {
+  overflow: hidden;
+  border: 1px solid rgba(55, 67, 46, 0.12);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.member-table-wrap .el-table {
+  --el-table-header-bg-color: rgba(246, 249, 241, 0.96);
+}
+
+.member-table-wrap .el-table__cell {
+  padding: 9px 0;
+}
+
 .family-empty {
   padding: 14px;
   border: 1px dashed var(--line);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   color: var(--muted);
   background: rgba(255, 255, 255, 0.56);
+}
+
+.contract-vertical-tabs {
+  min-height: 460px;
+}
+
+.contract-vertical-tabs .el-tabs__header {
+  width: 190px;
+  margin-right: 14px;
+}
+
+.contract-vertical-tabs .el-tabs__item {
+  justify-content: flex-start;
+  height: 44px;
+  padding: 0 14px;
+  color: var(--muted);
+}
+
+.contract-vertical-tabs .el-tabs__item.is-active {
+  color: var(--accent);
+  font-weight: 700;
+  background: rgba(86, 115, 58, 0.08);
+}
+
+.contract-vertical-tabs .el-tabs__content {
+  min-width: 0;
+}
+
+.contract-pane-card {
+  min-height: 440px;
+  padding: 18px;
+  border: 1px solid rgba(55, 67, 46, 0.12);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.contract-pane-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.contract-pane-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.contract-pane-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.contract-descriptions .el-descriptions__label {
+  width: 150px;
+  color: var(--muted);
 }
 
 .contractor-dialog .el-dialog__body {
@@ -1352,7 +1892,7 @@ a {
 .login-card {
   padding: 18px;
   border: 1px solid var(--line);
-  border-radius: 18px;
+  border-radius: var(--radius-xl);
   background: rgba(255, 255, 255, 0.82);
   backdrop-filter: blur(16px);
   box-shadow: 0 24px 60px rgba(58, 70, 46, 0.12);
@@ -1509,7 +2049,7 @@ a {
 .attachment-requirement-card {
   padding: 18px;
   border: 1px solid var(--line);
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(245, 250, 255, 0.92));
   box-shadow: var(--shadow);
 }
@@ -1595,7 +2135,7 @@ a {
   gap: 12px;
   padding: 14px 16px;
   border: 1px solid rgba(55, 67, 46, 0.12);
-  border-radius: 18px;
+  border-radius: var(--radius-xl);
   background: rgba(255, 255, 255, 0.74);
 }
 
@@ -1615,7 +2155,7 @@ a {
   align-items: flex-start;
   padding: 10px 12px;
   border: 1px solid rgba(55, 67, 46, 0.1);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: rgba(250, 251, 247, 0.92);
 }
 
@@ -1637,7 +2177,7 @@ a {
 
 .attachment-template-card {
   padding: 12px 14px;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   border: 1px solid rgba(55, 67, 46, 0.12);
   background: rgba(250, 251, 247, 0.92);
   display: grid;
@@ -1689,7 +2229,7 @@ a {
 .attachment-stat-card {
   padding: 14px 16px;
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(245, 250, 255, 0.92));
 }
 
@@ -1730,7 +2270,7 @@ a {
   min-height: 0;
   padding: 14px 16px;
   border: 1px solid var(--line);
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(245, 250, 255, 0.92));
   align-content: start;
   box-shadow: var(--shadow);
@@ -1742,7 +2282,7 @@ a {
   overflow: auto;
   padding: 10px 4px 2px;
   border: 1px solid rgba(73, 212, 255, 0.14);
-  border-radius: 18px;
+  border-radius: var(--radius-xl);
   background: rgba(244, 249, 255, 0.92);
 }
 
@@ -1876,7 +2416,7 @@ a {
   align-items: center;
   padding: 14px 16px;
   border: 1px solid rgba(55, 67, 46, 0.12);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.74);
 }
 
@@ -1904,7 +2444,7 @@ a {
 .attachment-card-thumb {
   width: 84px;
   height: 84px;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   border: 1px solid rgba(55, 67, 46, 0.1);
   background: linear-gradient(135deg, rgba(240, 244, 232, 0.92), rgba(250, 251, 246, 0.98));
   display: flex;
@@ -1971,7 +2511,7 @@ a {
   gap: 12px;
   padding: 16px 18px;
   border: 1px solid var(--line);
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(245, 250, 255, 0.92));
   align-content: start;
   box-shadow: var(--shadow);
@@ -2068,20 +2608,39 @@ a {
     width: fit-content;
   }
 
+  .gis-search-dock {
+    top: 18px;
+    left: 18px;
+    right: 18px;
+    width: auto;
+  }
+
+  .gis-search-bar {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .gis-search-panel {
+    width: 100%;
+    max-height: 46vh;
+  }
+
   .gis-floating-toolbar {
+    top: 210px;
     right: 18px;
     flex-wrap: wrap;
   }
 
   .gis-floating-panel--left,
   .gis-floating-panel.secondary {
+    top: 280px;
     left: 18px;
     right: 18px;
     width: auto;
   }
 
   .gis-floating-panel.secondary {
-    top: 250px;
+    top: 420px;
   }
 
   .gis-property-panel {
@@ -2105,7 +2664,7 @@ a {
   align-items: center;
   justify-content: center;
   border: 1px solid rgba(73, 212, 255, 0.14);
-  border-radius: 18px;
+  border-radius: var(--radius-xl);
   background: rgba(244, 249, 255, 0.92);
   overflow: hidden;
 }
@@ -2134,7 +2693,7 @@ a {
 .workflow-current-card {
   padding: 16px 18px;
   border: 1px solid rgba(55, 67, 46, 0.12);
-  border-radius: 18px;
+  border-radius: var(--radius-xl);
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(246, 249, 241, 0.96));
 }
 
@@ -2169,7 +2728,7 @@ a {
 .workflow-step-card {
   padding: 14px 16px;
   border: 1px solid rgba(55, 67, 46, 0.12);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.72);
   cursor: pointer;
   transition: 0.2s ease;
@@ -2244,14 +2803,14 @@ a {
 .workflow-handler-card {
   padding: 16px 18px;
   border: 1px solid rgba(55, 67, 46, 0.12);
-  border-radius: 18px;
+  border-radius: var(--radius-xl);
   background: rgba(255, 255, 255, 0.72);
 }
 
 .workflow-config-card {
   padding: 16px 18px;
   border: 1px solid rgba(55, 67, 46, 0.12);
-  border-radius: 18px;
+  border-radius: var(--radius-xl);
   background: rgba(255, 255, 255, 0.72);
 }
 
@@ -2272,7 +2831,7 @@ a {
   display: grid;
   gap: 6px;
   padding: 12px 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: rgba(86, 115, 58, 0.06);
 }
 
@@ -2318,7 +2877,7 @@ a {
 
 .workflow-handler-item {
   padding: 12px 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: rgba(86, 115, 58, 0.06);
 }
 
@@ -2382,7 +2941,7 @@ a {
 .request-workflow-viewer {
   min-height: 460px;
   border: 1px solid rgba(55, 67, 46, 0.12);
-  border-radius: 18px;
+  border-radius: var(--radius-xl);
   overflow: hidden;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(246, 249, 241, 0.98));
@@ -2454,7 +3013,7 @@ a {
 .workflow-editor-panel {
   min-height: 0;
   border: 1px solid rgba(55, 67, 46, 0.12);
-  border-radius: 18px;
+  border-radius: var(--radius-xl);
   background: rgba(255, 255, 255, 0.72);
 }
 
@@ -2484,7 +3043,7 @@ a {
   width: 100%;
   padding: 12px 14px;
   border: 1px solid rgba(55, 67, 46, 0.1);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.6);
   text-align: left;
   cursor: pointer;
@@ -2540,7 +3099,7 @@ a {
   width: 100%;
   padding: 12px 14px;
   border: 1px solid rgba(55, 67, 46, 0.1);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.6);
   text-align: left;
   cursor: pointer;
@@ -2590,7 +3149,7 @@ a {
   margin: 12px 18px 0;
   padding: 12px 14px;
   border: 1px solid rgba(86, 115, 58, 0.12);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: linear-gradient(135deg, rgba(248, 251, 243, 0.92), rgba(255, 255, 255, 0.94));
 }
 
@@ -2690,6 +3249,44 @@ a {
 @media (max-width: 960px) {
   body {
     overflow: auto;
+  }
+
+  .app-topbar-inner,
+  .secondary-nav-row,
+  .main {
+    width: min(94vw, 1440px);
+  }
+
+  .shell.is-map-page .main {
+    width: 100%;
+  }
+
+  .app-topbar-inner {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 12px 0;
+  }
+
+  .brand {
+    min-width: 0;
+  }
+
+  .primary-nav {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .secondary-nav-row,
+  .secondary-nav {
+    justify-content: flex-start;
+  }
+
+  .user-panel {
+    justify-content: flex-start;
+  }
+
+  .user-meta {
+    text-align: left;
   }
 
   .shell {
@@ -2820,6 +3417,11 @@ a {
 
   .member-tab-actions {
     align-items: stretch;
+    flex-direction: column;
+  }
+
+  .member-tab-tools {
+    justify-content: flex-start;
   }
 
   .member-form-grid {
@@ -3049,3 +3651,4 @@ a {
   color: var(--text);
   word-break: break-all;
 }
+

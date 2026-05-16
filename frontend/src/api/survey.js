@@ -12,8 +12,8 @@ export function finishSurveyBatch(batchId) {
   return http.post(`/surveys/batches/${batchId}/finish`);
 }
 
-export function exportSurveyResults(batchId) {
-  return http.get(`/surveys/batches/${batchId}/export-results.zip`, { responseType: "blob" });
+export function exportSurveyResults(batchId, params) {
+  return http.get(`/surveys/batches/${batchId}/export-results.zip`, { params, responseType: "blob" });
 }
 
 export function fetchSurveyTasks(batchId, params) {
@@ -118,4 +118,48 @@ export function fetchSurveyParcels(batchId, contractorUid) {
 
 export function generateSurveyRequest(batchId, contractorUid, payload) {
   return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/generate-request`, payload);
+}
+
+// ── 合同信息 ──────────────────────────────────────────
+
+export function fetchSurveyContract(batchId, contractorUid) {
+  return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/contract`);
+}
+
+export function printSurveyContract(batchId, contractorUid) {
+  return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/contract/print`);
+}
+
+// ── 调查操作 ──────────────────────────────────────────
+
+export function changeHouseholdHead(batchId, contractorUid, payload) {
+  return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/change-head`, payload);
+}
+
+export function maintainSurveyMembers(batchId, contractorUid, payload) {
+  return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/maintain-members`, payload);
+}
+
+export function deregisterContractor(batchId, contractorUid, payload) {
+  return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/deregister`, payload);
+}
+
+export function addSurveyParcel(batchId, contractorUid, payload) {
+  return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/add-parcel`, payload);
+}
+
+export function splitSurveyParcel(batchId, contractorUid, payload) {
+  return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/split-parcel`, payload);
+}
+
+export function swapSurveyParcels(batchId, contractorUid, payload) {
+  return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/swap-parcels`, payload);
+}
+
+export function splitSurveyHousehold(batchId, contractorUid, payload) {
+  return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/split-household`, payload);
+}
+
+export function mergeSurveyHousehold(batchId, contractorUid, payload) {
+  return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/merge-household`, payload);
 }

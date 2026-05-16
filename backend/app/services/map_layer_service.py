@@ -14,7 +14,15 @@ LAYER_NAME_FALLBACKS = {
     "contractor_distribution": "\u627f\u5305\u65b9\u5206\u5e03",
     "workflow_status": "\u6d41\u7a0b\u72b6\u6001",
     "issue_review": "\u95ee\u9898\u6838\u67e5",
-    "dk3213242017": "GeoServer\u5730\u5757\u56fe\u5c42",
+    "survey_dk_result": "\u627f\u5305\u5730\u5757",
+    "czkfbj": "\u6751\u5e84\u5f00\u53d1\u8fb9\u754c",
+    "dltb": "\u5730\u7c7b\u56fe\u6591",
+    "gdbhmb": "\u8015\u5730\u4fdd\u62a4\u76ee\u6807",
+    "stbhhx": "\u751f\u6001\u4fdd\u62a4\u7ea2\u7ebf",
+    "xzq": "\u884c\u653f\u533a",
+    "xzqjx": "\u884c\u653f\u533a\u754c\u7ebf",
+    "yjjbntbhtb": "\u6c38\u4e45\u57fa\u672c\u519c\u7530",
+    "rural_land_layers": "\u8c03\u67e5\u5730\u5757\u56fe\u5c42\u7ec4",
 }
 
 LAYER_GROUP_FALLBACKS = {
@@ -26,7 +34,15 @@ LAYER_GROUP_FALLBACKS = {
     "contractor_distribution": "\u4e1a\u52a1\u4e13\u9898",
     "workflow_status": "\u4e1a\u52a1\u4e13\u9898",
     "issue_review": "\u4e1a\u52a1\u4e13\u9898",
-    "dk3213242017": "GeoServer\u56fe\u5c42",
+    "survey_dk_result": "GeoServer\u56fe\u5c42",
+    "czkfbj": "\u56fd\u571f\u7a7a\u95f4\u89c4\u5212",
+    "dltb": "\u56fd\u571f\u7a7a\u95f4\u89c4\u5212",
+    "gdbhmb": "\u56fd\u571f\u7a7a\u95f4\u89c4\u5212",
+    "stbhhx": "\u56fd\u571f\u7a7a\u95f4\u89c4\u5212",
+    "xzq": "\u884c\u653f\u533a\u5212",
+    "xzqjx": "\u884c\u653f\u533a\u5212",
+    "yjjbntbhtb": "\u56fd\u571f\u7a7a\u95f4\u89c4\u5212",
+    "rural_land_layers": "GeoServer\u56fe\u5c42",
 }
 
 

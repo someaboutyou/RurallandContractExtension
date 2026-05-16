@@ -1,4 +1,6 @@
 from app.models.cbht import Cbht
+from app.models.data_import import DataImportBatch, DataImportFile, DataImportOperation, DataImportRow
+from app.models.dictionary import DictionaryItem
 from app.models.fbf import Fbf
 from app.models.issuer import Issuer
 from app.models.map_layer import MapLayer
@@ -26,6 +28,7 @@ from app.models.user import User
 from app.models.workflow_definition_version import WorkflowDefinitionVersion
 
 __all__ = [
+    "DictionaryItem",
     "Tenant",
     "Region",
     "Role",
@@ -39,6 +42,10 @@ __all__ = [
     "WorkflowDefinitionVersion",
     "Fbf",
     "Cbht",
+    "DataImportBatch",
+    "DataImportFile",
+    "DataImportOperation",
+    "DataImportRow",
     "SurveyBatch",
     "SurveyCbfBase",
     "SurveyCbfResult",

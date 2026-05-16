@@ -1,7 +1,3 @@
-param(
-    [switch]$WithFrontend
-)
-
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -11,7 +7,6 @@ $installMarker = Join-Path $stateDir "installed.json"
 $initMarker = Join-Path $stateDir "initialized.json"
 $runtimeEnvFile = Join-Path $stateDir "runtime.env"
 $backendScript = Join-Path $PSScriptRoot "start-backend.ps1"
-$frontendScript = Join-Path $PSScriptRoot "start-frontend.ps1"
 
 $dbHost = "127.0.0.1"
 $dbPort = "15432"
@@ -74,7 +69,29 @@ $dbName = if ($env:DATABASE_NAME) { $env:DATABASE_NAME } else { $dbName }
 $dbUser = if ($env:DATABASE_USER) { $env:DATABASE_USER } else { $dbUser }
 $dbPassword = if ($env:DATABASE_PASSWORD) { $env:DATABASE_PASSWORD } else { $dbPassword }
 
+$pgDataDir = Join-Path $runtimeRoot "data\pgdata"
+if ($dbPassword -eq "RurallandContractExtension" -and (Test-Path (Join-Path $pgDataDir "PG_VERSION"))) {
+    Write-Host "Database password is still the default value. Re-initializing with a random password..."
+    & (Join-Path $PSScriptRoot "init.ps1") `
+        -DbPort ([int]$dbPort) `
+        -DbName $dbName `
+        -DbUser $dbUser `
+        -DbPassword $dbPassword `
+        -Force
+    if (-not (Test-Path $runtimeEnvFile)) {
+        throw "Re-initialization failed. Runtime config was not created."
+    }
+    Import-RuntimeEnv $runtimeEnvFile
+    $dbHost = if ($env:DATABASE_HOST) { $env:DATABASE_HOST } else { $dbHost }
+    $dbPort = if ($env:DATABASE_PORT) { $env:DATABASE_PORT } else { $dbPort }
+    $dbName = if ($env:DATABASE_NAME) { $env:DATABASE_NAME } else { $dbName }
+    $dbUser = if ($env:DATABASE_USER) { $env:DATABASE_USER } else { $dbUser }
+    $dbPassword = if ($env:DATABASE_PASSWORD) { $env:DATABASE_PASSWORD } else { $dbPassword }
+}
+
 & (Join-Path $PSScriptRoot "start-postgres.ps1") -Port ([int]$dbPort) -DbName $dbName -DbUser $dbUser -DbPassword $dbPassword
+$redisPort = if ($env:REDIS_PORT) { [int]$env:REDIS_PORT } else { 16379 }
+& (Join-Path $PSScriptRoot "start-redis.ps1") -Port $redisPort
 
 $dbHost = if ($env:DATABASE_HOST) { $env:DATABASE_HOST } else { $dbHost }
 $dbPort = if ($env:DATABASE_PORT) { $env:DATABASE_PORT } else { $dbPort }
@@ -89,24 +106,21 @@ $dbPassword = if ($env:DATABASE_PASSWORD) { $env:DATABASE_PASSWORD } else { $dbP
     -DbUser $dbUser `
     -DbPassword $dbPassword
 
-$dbHost = if ($env:DATABASE_HOST) { $env:DATABASE_HOST } else { $dbHost }
-$dbPort = if ($env:DATABASE_PORT) { $env:DATABASE_PORT } else { $dbPort }
-$dbName = if ($env:DATABASE_NAME) { $env:DATABASE_NAME } else { $dbName }
-$dbUser = if ($env:DATABASE_USER) { $env:DATABASE_USER } else { $dbUser }
-$dbPassword = if ($env:DATABASE_PASSWORD) { $env:DATABASE_PASSWORD } else { $dbPassword }
+$frontendDist = Join-Path $projectRoot "frontend\dist\index.html"
+if (-not (Test-Path $frontendDist)) {
+    Write-Host "Frontend build not found: frontend\dist\"
+    Write-Host "The backend will serve API and docs, but no frontend UI."
+}
 
+$env:BACKEND_DIST = "1"
 $backendProcess = Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "`"$backendScript`"" -WorkingDirectory $projectRoot -PassThru
 Set-Content -Path (Join-Path $stateDir "backend.pid") -Value $backendProcess.Id -Encoding ASCII
 
-if ($WithFrontend) {
-    $frontendProcess = Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "`"$frontendScript`"" -WorkingDirectory $projectRoot -PassThru
-    Set-Content -Path (Join-Path $stateDir "frontend.pid") -Value $frontendProcess.Id -Encoding ASCII
-}
-
 Write-Host ""
 Write-Host "PostGIS:   127.0.0.1:$dbPort/$dbName"
+Write-Host "Redis:     127.0.0.1:$redisPort"
 Write-Host "GeoServer: http://127.0.0.1:8080/geoserver"
 Write-Host "Backend:   http://127.0.0.1:8000"
-if ($WithFrontend) {
-    Write-Host "Frontend:  http://127.0.0.1:5173"
+if (Test-Path $frontendDist) {
+    Write-Host "Frontend:  http://127.0.0.1:8000 (served by backend)"
 }

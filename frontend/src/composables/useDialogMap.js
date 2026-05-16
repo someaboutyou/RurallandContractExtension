@@ -40,12 +40,12 @@ function buildDefaultEpsg4326TileGrid() {
   });
 }
 
-async function createDk3213242017Layer() {
+async function createSurveyDkResultLayer() {
   const projection = getProjection("EPSG:4326");
   const wmtsUrl =
-    "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:DK3213242017&style=&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png";
+    "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:survey_dk_result&style=&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png";
   const wmsUrl =
-    "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:DK3213242017&styles=&format=image/png&transparent=true";
+    "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:survey_dk_result&styles=&format=image/png&transparent=true";
 
   let wmtsSource;
   const capabilities = await fetchWmtsCapabilities();
@@ -55,7 +55,7 @@ async function createDk3213242017Layer() {
       const xml = parser.parseFromString(capabilities, "text/xml");
       if (!xml.querySelector("parsererror")) {
         const opts = optionsFromCapabilities(xml, {
-          layer: "erlunyanbao:DK3213242017",
+          layer: "erlunyanbao:survey_dk_result",
           matrixSet: "EPSG:4326",
           requestEncoding: "KVP",
         });
@@ -73,7 +73,7 @@ async function createDk3213242017Layer() {
   if (!wmtsSource) {
     wmtsSource = new WMTS({
       url: wmtsUrl,
-      layer: "erlunyanbao:DK3213242017",
+      layer: "erlunyanbao:survey_dk_result",
       matrixSet: "EPSG:4326",
       format: "image/png",
       projection,
@@ -94,7 +94,7 @@ async function createDk3213242017Layer() {
     source: new TileWMS({
       url: wmsUrl,
       params: {
-        LAYERS: "erlunyanbao:DK3213242017",
+        LAYERS: "erlunyanbao:survey_dk_result",
         FORMAT: "image/png",
         TRANSPARENT: true,
       },
@@ -148,9 +148,9 @@ export function useDialogMap(targetRef) {
     }
 
     try {
-      dkLayers = await createDk3213242017Layer();
+      dkLayers = await createSurveyDkResultLayer();
     } catch (e) {
-      console.warn("Failed to create DK3213242017 layer:", e);
+      console.warn("Failed to create survey_dk_result layer:", e);
       dkLayers = [];
     }
 

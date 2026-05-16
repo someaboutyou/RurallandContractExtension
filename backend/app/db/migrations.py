@@ -3,7 +3,9 @@ from sqlalchemy.engine import Engine
 
 
 def upgrade_schema(engine: Engine) -> None:
+    _upgrade_data_import_operations(engine)
     _upgrade_import_trace_columns(engine)
+    _upgrade_import_performance_indexes(engine)
     _upgrade_contractor_group_region(engine)
     _upgrade_survey_phase2(engine)
     _upgrade_map_layers(engine)
@@ -19,6 +21,42 @@ def upgrade_schema(engine: Engine) -> None:
     _upgrade_request_workflow_mappings(engine)
     _upgrade_tenant_scope_columns(engine)
     _migrate_legacy_cbf_tables_to_survey(engine)
+    _upgrade_survey_dk_postgis_geometry(engine)
+    _upgrade_spatial_tables(engine)
+
+
+def _upgrade_data_import_operations(engine: Engine) -> None:
+    inspector = inspect(engine)
+    if inspector.has_table("data_import_operations"):
+        _ensure_scope_columns(engine, "data_import_operations")
+        return
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            """
+            CREATE TABLE data_import_operations (
+                id SERIAL PRIMARY KEY,
+                import_batch_id INTEGER NOT NULL,
+                import_file_id INTEGER,
+                import_row_id INTEGER,
+                chunk_no INTEGER NOT NULL DEFAULT 0,
+                table_name VARCHAR(64) NOT NULL,
+                primary_key JSON NOT NULL,
+                operation_type VARCHAR(16) NOT NULL,
+                before_snapshot JSON,
+                after_snapshot JSON,
+                tenant_code VARCHAR(12),
+                region_code VARCHAR(32),
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+            )
+            """
+        )
+        connection.exec_driver_sql("CREATE INDEX ix_data_import_operations_import_batch_id ON data_import_operations(import_batch_id)")
+        connection.exec_driver_sql("CREATE INDEX ix_data_import_operations_import_file_id ON data_import_operations(import_file_id)")
+        connection.exec_driver_sql("CREATE INDEX ix_data_import_operations_import_row_id ON data_import_operations(import_row_id)")
+        connection.exec_driver_sql("CREATE INDEX ix_data_import_operations_table_name ON data_import_operations(table_name)")
+        connection.exec_driver_sql("CREATE INDEX ix_data_import_operations_tenant_code ON data_import_operations(tenant_code)")
+        connection.exec_driver_sql("CREATE INDEX ix_data_import_operations_region_code ON data_import_operations(region_code)")
 
 
 def _add_column_if_missing(connection, columns: set[str], table_name: str, column_name: str, column_type: str) -> None:
@@ -299,6 +337,98 @@ def _upgrade_import_trace_columns(engine: Engine) -> None:
             connection.exec_driver_sql(
                 f"CREATE INDEX IF NOT EXISTS ix_{table_name}_last_import_file_id ON {table_name}(last_import_file_id)"
             )
+
+
+def _create_index_if_columns_exist(connection, inspector, table_name: str, index_name: str, columns: tuple[str, ...], expression: str) -> None:
+    if not inspector.has_table(table_name):
+        return
+    existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
+    if all(column in existing_columns for column in columns):
+        connection.exec_driver_sql(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name}({expression})")
+
+
+def _upgrade_import_performance_indexes(engine: Engine) -> None:
+    inspector = inspect(engine)
+    index_specs = [
+        ("data_import_rows", "ix_data_import_rows_batch_id_desc", ("import_batch_id", "id"), "import_batch_id, id DESC"),
+        ("data_import_rows", "ix_data_import_rows_batch_status_id_desc", ("import_batch_id", "status", "id"), "import_batch_id, status, id DESC"),
+        ("data_import_operations", "ix_data_import_operations_batch_id_desc", ("import_batch_id", "id"), "import_batch_id, id DESC"),
+        ("survey_cbf_base", "ix_survey_cbf_base_batch_source_cbfbm", ("batch_id", "source_cbfbm"), "batch_id, source_cbfbm"),
+        ("survey_cbf_result", "ix_survey_cbf_result_batch_base_id", ("batch_id", "base_id"), "batch_id, base_id"),
+        (
+            "survey_cbf_jtcy_base",
+            "ix_survey_cbf_jtcy_base_batch_contractor_member",
+            ("batch_id", "base_contractor_code", "base_member_id_no"),
+            "batch_id, base_contractor_code, base_member_id_no",
+        ),
+        ("survey_cbf_jtcy_result", "ix_survey_cbf_jtcy_result_batch_base_id", ("batch_id", "base_id"), "batch_id, base_id"),
+        ("survey_fbf_base", "ix_survey_fbf_base_batch_source_fbfbm", ("batch_id", "source_fbfbm"), "batch_id, source_fbfbm"),
+        ("survey_fbf_result", "ix_survey_fbf_result_batch_base_id", ("batch_id", "base_id"), "batch_id, base_id"),
+        ("survey_cbdkxx_base", "ix_survey_cbdkxx_base_batch_source_dkbm_cbfbm", ("batch_id", "source_dkbm", "cbfbm"), "batch_id, source_dkbm, cbfbm"),
+        ("survey_cbdkxx_result", "ix_survey_cbdkxx_result_batch_base_id", ("batch_id", "base_id"), "batch_id, base_id"),
+        ("survey_dk_base", "ix_survey_dk_base_batch_source_dkbm", ("batch_id", "source_dkbm"), "batch_id, source_dkbm"),
+        ("survey_dk_result", "ix_survey_dk_result_batch_base_id", ("batch_id", "base_id"), "batch_id, base_id"),
+        ("survey_contractor_tasks", "ix_survey_contractor_tasks_batch_cbfbm", ("batch_id", "cbfbm"), "batch_id, cbfbm"),
+    ]
+    with engine.begin() as connection:
+        for table_name, index_name, columns, expression in index_specs:
+            _create_index_if_columns_exist(connection, inspector, table_name, index_name, columns, expression)
+
+
+def _upgrade_survey_dk_postgis_geometry(engine: Engine) -> None:
+    inspector = inspect(engine)
+    target_tables = ("survey_dk_base", "survey_dk_result")
+    if not any(inspector.has_table(table_name) for table_name in target_tables):
+        return
+
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS postgis")
+        connection.exec_driver_sql(
+            """
+            CREATE OR REPLACE FUNCTION public.survey_dk_json_to_geom(input_geometry json)
+            RETURNS public.geometry AS $$
+            BEGIN
+                IF input_geometry IS NULL THEN
+                    RETURN NULL;
+                END IF;
+                RETURN ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON(input_geometry::text), 4527));
+            EXCEPTION WHEN OTHERS THEN
+                RETURN NULL;
+            END;
+            $$ LANGUAGE plpgsql IMMUTABLE;
+            """
+        )
+
+        for table_name in target_tables:
+            if not inspector.has_table(table_name):
+                continue
+            columns = {column["name"] for column in inspector.get_columns(table_name)}
+            _add_column_if_missing(connection, columns, table_name, "geom", "public.geometry(MultiPolygon, 4527)")
+            if "geometry" in columns:
+                if table_name == "survey_dk_result":
+                    connection.exec_driver_sql("DROP VIEW IF EXISTS public.survey_dk_result_geoserver")
+                connection.exec_driver_sql(
+                    f"""
+                    UPDATE {table_name}
+                    SET geom = public.survey_dk_json_to_geom(geometry)
+                    WHERE geom IS NULL
+                      AND geometry IS NOT NULL
+                    """
+                )
+                connection.exec_driver_sql(f"DROP TRIGGER IF EXISTS trg_sync_{table_name}_geom ON {table_name}")
+                connection.exec_driver_sql(f"ALTER TABLE {table_name} DROP COLUMN geometry")
+            connection.exec_driver_sql(
+                f"""
+                CREATE INDEX IF NOT EXISTS ix_{table_name}_geom_gist
+                ON {table_name}
+                USING GIST (geom)
+                WHERE geom IS NOT NULL
+                """
+            )
+            connection.exec_driver_sql(f"ANALYZE {table_name}")
+
+        connection.exec_driver_sql("DROP FUNCTION IF EXISTS public.sync_survey_dk_geom()")
+        connection.exec_driver_sql("DROP FUNCTION IF EXISTS public.survey_dk_json_to_geom(json)")
 
 
 def _upgrade_contractor_group_region(engine: Engine) -> None:
@@ -941,3 +1071,287 @@ def _upgrade_request_attachment_templates(engine: Engine) -> None:
         connection.exec_driver_sql(
             "CREATE INDEX ix_request_attachment_templates_stage_code ON request_attachment_templates(stage_code)"
         )
+
+
+def _upgrade_spatial_tables(engine: Engine) -> None:
+    inspector = inspect(engine)
+    missing = [
+        table
+        for table in ("czkfbj", "dltb", "gdbhmb", "stbhhx", "xzq", "xzqjx", "yjjbntbhtb")
+        if not inspector.has_table(table)
+    ]
+
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS postgis")
+
+        if "czkfbj" in missing:
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE public.czkfbj (
+                    "OBJECTID" int8 NOT NULL,
+                    "Shape" public.geometry(multipolygon, 4527) NULL,
+                    "BSM" varchar(18) NULL,
+                    "YSDM" varchar(10) NULL,
+                    "XZQDM" varchar(12) NULL,
+                    "XZQMC" varchar(100) NULL,
+                    "GHFQDM" varchar(3) NULL,
+                    "GHFQMC" varchar(50) NULL,
+                    "MJ" numeric NULL,
+                    "BZ" varchar(255) NULL,
+                    "Shape_Length" numeric NULL,
+                    "Shape_Area" numeric NULL,
+                    "MJ_YS" numeric NULL,
+                    "MJ_YS_DOUBLE" numeric NULL,
+                    "MJ_TQ" numeric NULL,
+                    CONSTRAINT czkfbj_pkey PRIMARY KEY ("OBJECTID")
+                )
+                """
+            )
+
+        if "dltb" in missing:
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE public.dltb (
+                    "OBJECTID" int8 NOT NULL,
+                    "Shape" public.geometry(multipolygon, 4527) NULL,
+                    "BSM" varchar(18) NULL,
+                    "YSDM" varchar(10) NULL,
+                    "TBYBH" varchar(18) NULL,
+                    "TBBH" varchar(8) NULL,
+                    "DLBM" varchar(5) NULL,
+                    "DLMC" varchar(60) NULL,
+                    "QSXZ" varchar(2) NULL,
+                    "QSDWDM" varchar(19) NULL,
+                    "ZLDWDM" varchar(19) NULL,
+                    "ZLDWMC" varchar(255) NULL,
+                    "TBMJ" numeric NULL,
+                    "KCDLBM" varchar(5) NULL,
+                    "KCXS" numeric NULL,
+                    "KCMJ" numeric NULL,
+                    "TBDLMJ" numeric NULL,
+                    "GDLX" varchar(2) NULL,
+                    "GDPDJB" varchar(2) NULL,
+                    "XZDWKD" numeric NULL,
+                    "TBXHMC" varchar(100) NULL,
+                    "ZZSXDM" varchar(30) NULL,
+                    "ZZSXMC" varchar(100) NULL,
+                    "GDDB" int4 NULL,
+                    "FRDBS" varchar(1) NULL,
+                    "CZCSXM" varchar(4) NULL,
+                    "SJNF" int4 NULL,
+                    "MSSM" varchar(2) NULL,
+                    "HDMC" varchar(100) NULL,
+                    "BZ" varchar(255) NULL,
+                    "TBXHDM" varchar(30) NULL,
+                    "Shape_Length" numeric NULL,
+                    "Shape_Area" numeric NULL,
+                    CONSTRAINT dltb_pkey PRIMARY KEY ("OBJECTID")
+                )
+                """
+            )
+
+        if "gdbhmb" in missing:
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE public.gdbhmb (
+                    "OBJECTID" int8 NOT NULL,
+                    "Shape" public.geometry(multipolygon, 4527) NULL,
+                    "BSM" varchar(18) NULL,
+                    "YSDM" varchar(10) NULL,
+                    "TBYBH" varchar(18) NULL,
+                    "TBBH" varchar(8) NULL,
+                    "DLBM" varchar(5) NULL,
+                    "DLMC" varchar(60) NULL,
+                    "QSXZ" varchar(2) NULL,
+                    "QSDWDM" varchar(19) NULL,
+                    "QSDWMC" varchar(255) NULL,
+                    "ZLDWDM" varchar(19) NULL,
+                    "ZLDWMC" varchar(255) NULL,
+                    "TBMJ" numeric NULL,
+                    "KCDLBM" varchar(5) NULL,
+                    "KCXS" numeric NULL,
+                    "KCMJ" numeric NULL,
+                    "TBDLMJ" numeric NULL,
+                    "GDLX" varchar(2) NULL,
+                    "SFWHTD" int4 NULL,
+                    "GDPDJB" varchar(2) NULL,
+                    "TBXHDM" varchar(6) NULL,
+                    "TBXHMC" varchar(20) NULL,
+                    "ZZSXDM" varchar(6) NULL,
+                    "ZZSXMC" varchar(20) NULL,
+                    "GDDB" int4 NULL,
+                    "FRDBS" varchar(1) NULL,
+                    "SJNF" int4 NULL,
+                    "ORIG_FID" int4 NULL,
+                    "TBMJ_YS" numeric NULL,
+                    "TBDLMJ_YS" numeric NULL,
+                    "KCMJ_YS" numeric NULL,
+                    "Shape_Length" numeric NULL,
+                    "Shape_Area" numeric NULL,
+                    CONSTRAINT gdbhmb_pkey PRIMARY KEY ("OBJECTID")
+                )
+                """
+            )
+
+        if "stbhhx" in missing:
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE public.stbhhx (
+                    "OBJECTID" int8 NOT NULL,
+                    "Shape" public.geometry(multipolygon, 4490) NULL,
+                    "BSM" varchar(255) NULL,
+                    "YSDM" varchar(255) NULL,
+                    "XZQDM" varchar(255) NULL,
+                    "XZQMC" varchar(255) NULL,
+                    "SHENG" varchar(255) NULL,
+                    "SHI" varchar(255) NULL,
+                    "XIAN" varchar(255) NULL,
+                    "HXBM" varchar(255) NULL,
+                    "HXMC" varchar(255) NULL,
+                    "HXLX" varchar(255) NULL,
+                    "LXBM" varchar(255) NULL,
+                    "MJ" numeric NULL,
+                    "ZRBHDMC" varchar(255) NULL,
+                    "ZRBHDJB" varchar(255) NULL,
+                    "ZRBHDLX" varchar(255) NULL,
+                    "ZRBHDFQ" varchar(255) NULL,
+                    "XTYZBLX" varchar(255) NULL,
+                    "GKCS" varchar(255) NULL,
+                    "SZXJXZQDM" varchar(255) NULL,
+                    "SZXJXZQMC" varchar(255) NULL,
+                    "BZ" varchar(255) NULL,
+                    "MJ_YS" numeric NULL,
+                    "MJ_YS_DOUBLE" numeric NULL,
+                    "MJ_TQ" numeric NULL,
+                    "Shape_Length" numeric NULL,
+                    "Shape_Area" numeric NULL,
+                    CONSTRAINT stbhhx_pkey PRIMARY KEY ("OBJECTID")
+                )
+                """
+            )
+
+        if "xzq" in missing:
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE public.xzq (
+                    "OBJECTID" int8 NOT NULL,
+                    "SHAPE" public.geometry(multipolygon, 4527) NULL,
+                    "BSM" varchar(18) NULL,
+                    "YSDM" varchar(10) NULL,
+                    "XZQDM" varchar(9) NULL,
+                    "XZQMC" varchar(100) NULL,
+                    "DCMJ" numeric NULL,
+                    "JSMJ" numeric NULL,
+                    "MSSM" varchar(2) NULL,
+                    "HDMC" varchar(100) NULL,
+                    "BZ" varchar(255) NULL,
+                    "SHAPE_Length" numeric NULL,
+                    "SHAPE_Area" numeric NULL,
+                    CONSTRAINT xzq_pkey PRIMARY KEY ("OBJECTID")
+                )
+                """
+            )
+
+        if "xzqjx" in missing:
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE public.xzqjx (
+                    "OBJECTID" int8 NOT NULL,
+                    "SHAPE" public.geometry(multilinestring, 4527) NULL,
+                    "BSM" varchar(18) NULL,
+                    "YSDM" varchar(10) NULL,
+                    "JXLX" varchar(6) NULL,
+                    "JXXZ" varchar(6) NULL,
+                    "JXSM" varchar(100) NULL,
+                    "BZ" varchar(255) NULL,
+                    "SHAPE_Length" numeric NULL,
+                    CONSTRAINT xzqjx_pkey PRIMARY KEY ("OBJECTID")
+                )
+                """
+            )
+
+        if "yjjbntbhtb" in missing:
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE public.yjjbntbhtb (
+                    "OBJECTID" int8 NOT NULL,
+                    "Shape" public.geometry(multipolygon, 4527) NULL,
+                    "BSM" varchar(18) NULL,
+                    "YSDM" varchar(10) NULL,
+                    "XZQDM" varchar(12) NULL,
+                    "XZQMC" varchar(100) NULL,
+                    "YJJBNTTBBH" varchar(20) NULL,
+                    "TBBH" varchar(8) NULL,
+                    "DLBM" varchar(5) NULL,
+                    "DLMC" varchar(60) NULL,
+                    "QSXZ" varchar(2) NULL,
+                    "QSDWDM" varchar(19) NULL,
+                    "ZLDWDM" varchar(19) NULL,
+                    "YJJBNTTBMJ" numeric NULL,
+                    "KCDLBM" varchar(5) NULL,
+                    "KCXS" numeric NULL,
+                    "KCMJ" numeric NULL,
+                    "YJJBNTMJ" numeric NULL,
+                    "GDLX" varchar(2) NULL,
+                    "GDPDJB" varchar(2) NULL,
+                    "GGBZL" varchar(10) NULL,
+                    "TBXHDM" varchar(6) NULL,
+                    "TBXHMC" varchar(20) NULL,
+                    "ZZSXDM" varchar(6) NULL,
+                    "ZZSXMC" varchar(20) NULL,
+                    "GDDB" int4 NULL,
+                    "GDDJ" int4 NULL,
+                    "ZLFLDM" varchar(12) NULL,
+                    "FRDBS" varchar(1) NULL,
+                    "SJNF" int4 NULL,
+                    "CFZR" varchar(20) NULL,
+                    "ZMC" varchar(50) NULL,
+                    "ZZRR" varchar(20) NULL,
+                    "ZRRZJHM" varchar(18) NULL,
+                    "ZRRMC" varchar(20) NULL,
+                    "LXDH" varchar(20) NULL,
+                    "JZDZ" varchar(50) NULL,
+                    "BHKSSJ" timestamp NULL,
+                    "BHJSSJ" timestamp NULL,
+                    "SJBH" varchar(20) NULL,
+                    "SJMC" varchar(50) NULL,
+                    "ZRSYX" varchar(100) NULL,
+                    "WDGD" varchar(10) NULL,
+                    "SFWYYJJBNT" varchar(10) NULL,
+                    "BZ" varchar(50) NULL,
+                    "QSDWMC" varchar(255) NULL,
+                    "ZLDWMC" varchar(255) NULL,
+                    "FWDGDHRLY" varchar(255) NULL,
+                    "ORIG_FID" int4 NULL,
+                    "YJJBNTTBMJ_YS" numeric NULL,
+                    "YJJBNTMJ_YS" numeric NULL,
+                    "KCMJ_YS" numeric NULL,
+                    "Shape_Length" numeric NULL,
+                    "Shape_Area" numeric NULL,
+                    "WDGD_YS" varchar(10) NULL,
+                    CONSTRAINT yjjbntbhtb_pkey PRIMARY KEY ("OBJECTID")
+                )
+                """
+            )
+
+        spatial_index_specs = (
+            ("czkfbj", "Shape"),
+            ("dltb", "Shape"),
+            ("gdbhmb", "Shape"),
+            ("stbhhx", "Shape"),
+            ("xzq", "SHAPE"),
+            ("xzqjx", "SHAPE"),
+            ("yjjbntbhtb", "Shape"),
+        )
+        for table_name, geom_column in spatial_index_specs:
+            if not inspector.has_table(table_name) and table_name not in missing:
+                continue
+            connection.exec_driver_sql(
+                f"""
+                CREATE INDEX IF NOT EXISTS ix_{table_name}_{geom_column.lower()}_gist
+                ON public.{table_name}
+                USING GIST ("{geom_column}")
+                WHERE "{geom_column}" IS NOT NULL
+                """
+            )
+            connection.exec_driver_sql(f"ANALYZE public.{table_name}")

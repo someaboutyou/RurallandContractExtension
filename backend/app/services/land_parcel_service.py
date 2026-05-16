@@ -49,6 +49,45 @@ class LandParcelService:
             })
         return result
 
+    def get_parcels_for_issuer(
+        self, db: Session, fbfbm: str, current_user: User
+    ) -> list[dict]:
+        data_access_service.ensure_code_in_scope(
+            current_user, fbfbm, detail="发包方不在当前数据权限范围内"
+        )
+
+        cbdkxx_rows = land_parcel_repository.get_cbdkxx_by_fbfbm(db, fbfbm)
+        if not cbdkxx_rows:
+            return []
+
+        cbdkxx_map = {row["dkbm"]: row for row in cbdkxx_rows}
+        dkbm_list = list(cbdkxx_map.keys())
+        dk_rows = land_parcel_repository.get_dk_by_codes(db, dkbm_list)
+
+        result = []
+        for dk in dk_rows:
+            cbdkxx = cbdkxx_map.get(dk["dkbm"])
+            geometry = None
+            if dk["geometry"]:
+                try:
+                    geometry = json.loads(dk["geometry"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            result.append({
+                "dkbm": dk["dkbm"],
+                "dkmc": dk["dkmc"],
+                "htmj": str(cbdkxx["htmj"]) if cbdkxx and cbdkxx["htmj"] is not None else None,
+                "syqxz": dk["syqxz"],
+                "dklb": dk["dklb"],
+                "scmj": str(dk["scmj"]) if dk["scmj"] is not None else None,
+                "dkdz": dk["dkdz"],
+                "fbfbm": fbfbm,
+                "cbfbm": cbdkxx["cbfbm"] if cbdkxx else None,
+                "geometry": geometry,
+            })
+        return result
+
     def get_survey_parcels(
         self, db: Session, batch_id: int, cbfbm: str, current_user: User
     ) -> list[dict]:
@@ -76,6 +115,15 @@ class LandParcelService:
             )
         ).all()
         dk_base_map = {row.dkbm: row for row in dk_base_rows}
+        dk_geometry_map = {}
+        for row in land_parcel_repository.get_dk_by_codes(db, dkbm_list):
+            geometry = None
+            if row["geometry"]:
+                try:
+                    geometry = json.loads(row["geometry"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            dk_geometry_map[row["dkbm"]] = geometry
 
         fbf_result_rows = db.scalars(
             select(SurveyFbfResult).where(
@@ -96,16 +144,6 @@ class LandParcelService:
         for cbdkxx in cbdkxx_result_rows:
             dk_base = dk_base_map.get(cbdkxx.dkbm)
             fbf = fbf_map.get(cbdkxx.fbfbm)
-
-            geometry = None
-            if dk_base and dk_base.geometry:
-                try:
-                    if isinstance(dk_base.geometry, str):
-                        geometry = json.loads(dk_base.geometry)
-                    else:
-                        geometry = dk_base.geometry
-                except (json.JSONDecodeError, TypeError):
-                    pass
 
             item = {
                 "dkbm": cbdkxx.dkbm,
@@ -136,7 +174,7 @@ class LandParcelService:
                 "cbfbm": cbdkxx.cbfbm,
                 "cbfmc": cbf_result_row.cbfmc if cbf_result_row else None,
                 "cbflx": cbf_result_row.cbflx if cbf_result_row else None,
-                "geometry": geometry,
+                "geometry": dk_geometry_map.get(cbdkxx.dkbm),
             }
             result.append(item)
 

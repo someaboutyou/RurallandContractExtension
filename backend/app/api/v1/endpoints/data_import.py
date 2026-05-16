@@ -1,15 +1,25 @@
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+import logging
+
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_permission
 from app.models.user import User
-from app.schemas.data_import import DataImportBatchCreate, DataImportBatchRead, DataImportRowRead
+from app.schemas.data_import import (
+    DataImportBatchCreate,
+    DataImportBatchRead,
+    DataImportJobRead,
+    DataImportProgressRead,
+    DataImportRowRead,
+)
 from app.schemas.pagination import PageResponse
 from app.schemas.response import ApiResponse
+from app.services.data_import_progress import data_import_progress
 from app.services.data_import_service import data_import_service
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("", response_model=ApiResponse[PageResponse[DataImportBatchRead]])
@@ -79,14 +89,80 @@ async def upload_import_archive(
     return {"data": await data_import_service.upload_archive(db, batch_id, file, current_user)}
 
 
-@router.post("/{batch_id}/gdb", response_model=ApiResponse[DataImportBatchRead])
+@router.post("/{batch_id}/gdb", response_model=ApiResponse[DataImportJobRead])
 async def upload_import_gdb(
     batch_id: int,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contractors.manage")),
 ):
-    return {"data": await data_import_service.upload_gdb_archive(db, batch_id, file, current_user)}
+    user_id = current_user.id
+    try:
+        return {"data": await data_import_service.start_gdb_import_job(db, batch_id, file, current_user, background_tasks)}
+    except Exception:
+        logger.exception(
+            "GDB upload endpoint failed: batch_id=%s filename=%s user_id=%s",
+            batch_id,
+            file.filename,
+            user_id,
+        )
+        raise
+
+
+@router.get("/{batch_id}/progress", response_model=ApiResponse[DataImportProgressRead])
+def get_import_progress(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    progress = data_import_progress.get(batch_id)
+    if not progress:
+        batch = db.get(data_import_service.batch_model, batch_id) if hasattr(data_import_service, "batch_model") else None
+        if batch is None:
+            from app.models.data_import import DataImportBatch
+
+            batch = db.get(DataImportBatch, batch_id)
+        if batch is None:
+            progress = {"batchId": batch_id, "status": "unknown", "message": "暂无导入进度"}
+        else:
+            total = batch.total_count or 0
+            processed = (batch.success_count or 0) + (batch.failed_count or 0)
+            progress = {
+                "batchId": batch.id,
+                "jobId": None,
+                "status": batch.status,
+                "currentLayer": None,
+                "totalRows": total,
+                "processedRows": processed,
+                "successRows": batch.success_count or 0,
+                "failedRows": batch.failed_count or 0,
+                "percent": round(processed * 100 / total, 2) if total else 0,
+                "message": "后台导入中，可稍后刷新进度" if batch.status == "processing" else "暂无实时进度",
+                "cancelRequested": data_import_progress.is_cancel_requested(batch_id),
+            }
+    return {"data": progress}
+
+
+@router.post("/{batch_id}/cancel", response_model=ApiResponse[DataImportProgressRead])
+def cancel_import(
+    batch_id: int,
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    data_import_progress.request_cancel(batch_id)
+    progress = data_import_progress.get(batch_id) or {"batchId": batch_id, "status": "cancel_requested"}
+    progress["cancelRequested"] = True
+    progress["message"] = "已请求取消，后台会在当前行处理后停止"
+    return {"data": progress}
+
+
+@router.post("/{batch_id}/rollback", response_model=ApiResponse[DataImportBatchRead])
+def rollback_import(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    return {"data": data_import_service.rollback_batch(db, batch_id, current_user)}
 
 
 @router.get("/{batch_id}/rows", response_model=ApiResponse[PageResponse[DataImportRowRead]])

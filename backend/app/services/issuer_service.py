@@ -1,9 +1,11 @@
 from datetime import date, datetime
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.fbf import Fbf
+from app.models.survey import SurveyCbfResult, SurveyCbdkxxResult
 from app.models.user import User
 from app.repositories.issuer_repository import issuer_repository
 from app.services.data_access_service import data_access_service
@@ -83,6 +85,33 @@ class IssuerService:
         data_access_service.ensure_code_in_scope(current_user, issuer.fbfbm, detail="发包方不在当前数据权限范围内")
         issuer_repository.delete_issuer(db, issuer)
 
+    def list_contractors(self, db: Session, issuer_code: str, current_user: User) -> list[dict]:
+        issuer = issuer_repository.get_issuer(db, issuer_code)
+        if issuer is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="发包方不存在")
+        data_access_service.ensure_code_in_scope(current_user, issuer.fbfbm, detail="发包方不在当前数据权限范围内")
+
+        contractor_codes = db.scalars(
+            select(SurveyCbdkxxResult.cbfbm)
+            .where(SurveyCbdkxxResult.fbfbm == issuer_code, SurveyCbdkxxResult.cbfbm.is_not(None))
+            .distinct()
+        ).all()
+        if not contractor_codes:
+            return []
+
+        rows = db.scalars(
+            select(SurveyCbfResult)
+            .where(
+                SurveyCbfResult.cbfbm.in_(contractor_codes),
+                *data_access_service.build_code_scope_filters(SurveyCbfResult.cbfbm, current_user),
+            )
+            .order_by(SurveyCbfResult.cbfbm.asc(), SurveyCbfResult.id.desc())
+        ).all()
+        latest_by_code = {}
+        for row in rows:
+            latest_by_code.setdefault(row.cbfbm, row)
+        return [self._serialize_contractor(item) for item in latest_by_code.values()]
+
     def _serialize(self, item: Fbf) -> dict:
         return {
             "code": item.fbfbm,
@@ -99,6 +128,21 @@ class IssuerService:
             "regionId": None,
             "region": None,
             "status": None,
+        }
+
+    def _serialize_contractor(self, item: SurveyCbfResult) -> dict:
+        return {
+            "code": item.cbfbm,
+            "typeCode": item.cbflx,
+            "name": item.cbfmc,
+            "idType": item.cbfzjlx,
+            "idNo": item.cbfzjhm,
+            "mobile": item.lxdh,
+            "address": item.cbfdz,
+            "memberCount": item.cbfcysl,
+            "surveyDate": item.cbfdcrq.date().isoformat() if item.cbfdcrq else None,
+            "surveyorName": item.cbfdcy,
+            "groupRegionName": item.group_region_name,
         }
 
     def _parse_datetime(self, value: str | None) -> datetime | None:

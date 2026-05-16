@@ -24,6 +24,10 @@ from app.models.survey import (
     SurveyHouseholdRestructure,
     SurveyHouseholdRestructureMember,
     SurveyHouseholdTag,
+    SurveyCbdkxxBase,
+    SurveyCbdkxxResult,
+    SurveyDkBase,
+    SurveyDkResult,
 )
 from app.models.user import User
 from app.services.data_access_service import data_access_service
@@ -39,9 +43,32 @@ class SurveyService:
         "five_guarantees": "五保户",
         "little_or_no_land": "无地少地户",
     }
-    def list_batches(self, db: Session, page: int, page_size: int, keyword: str | None) -> dict:
-        stmt = select(SurveyBatch).order_by(SurveyBatch.id.desc()).offset((page - 1) * page_size).limit(page_size)
-        total_stmt = select(func.count(SurveyBatch.id))
+    def list_batches(
+        self,
+        db: Session,
+        page: int,
+        page_size: int,
+        keyword: str | None,
+        region_code: str | None,
+        current_user: User,
+    ) -> dict:
+        normalized_region_code = data_access_service.normalize_region_code(region_code)
+        if normalized_region_code:
+            data_access_service.ensure_region_in_scope(current_user, normalized_region_code)
+        scoped_task_filters = self._build_task_scope_filters(current_user, normalized_region_code)
+        batch_scope = (
+            select(SurveyContractorTask.id)
+            .where(SurveyContractorTask.batch_id == SurveyBatch.id, *scoped_task_filters)
+            .exists()
+        )
+        stmt = (
+            select(SurveyBatch)
+            .where(batch_scope)
+            .order_by(SurveyBatch.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        total_stmt = select(func.count(SurveyBatch.id)).where(batch_scope)
         if keyword:
             pattern = f"%{keyword.strip()}%"
             condition = or_(SurveyBatch.batch_no.ilike(pattern), SurveyBatch.batch_name.ilike(pattern))
@@ -49,7 +76,7 @@ class SurveyService:
             total_stmt = total_stmt.where(condition)
         batches = db.scalars(stmt).all()
         return {
-            "items": [self._serialize_batch(db, item) for item in batches],
+            "items": [self._serialize_batch(db, item, scoped_task_filters) for item in batches],
             "total": db.scalar(total_stmt) or 0,
             "page": page,
             "pageSize": page_size,
@@ -180,9 +207,13 @@ class SurveyService:
         page_size: int,
         keyword: str | None,
         task_status: str | None,
+        region_code: str | None,
         current_user: User,
     ) -> dict:
         self._ensure_batch(db, batch_id)
+        normalized_region_code = data_access_service.normalize_region_code(region_code)
+        if normalized_region_code:
+            data_access_service.ensure_region_in_scope(current_user, normalized_region_code)
         stmt = (
             select(SurveyContractorTask)
             .where(SurveyContractorTask.batch_id == batch_id)
@@ -191,7 +222,7 @@ class SurveyService:
             .limit(page_size)
         )
         total_stmt = select(func.count(SurveyContractorTask.id)).where(SurveyContractorTask.batch_id == batch_id)
-        filters = data_access_service.build_code_scope_filters(SurveyContractorTask.cbfbm, current_user)
+        filters = self._build_task_scope_filters(current_user, normalized_region_code)
         if keyword:
             pattern = f"%{keyword.strip()}%"
             filters.append(or_(SurveyContractorTask.cbfbm.ilike(pattern), SurveyContractorTask.cbfmc.ilike(pattern)))
@@ -257,11 +288,15 @@ class SurveyService:
         db: Session,
         batch_id: int,
         contractor_uid: str | None,
+        region_code: str | None,
         page: int,
         page_size: int,
         current_user: User,
     ) -> dict:
         self._ensure_batch(db, batch_id)
+        normalized_region_code = data_access_service.normalize_region_code(region_code)
+        if normalized_region_code:
+            data_access_service.ensure_region_in_scope(current_user, normalized_region_code)
         stmt = (
             select(SurveyChangeRecord)
             .where(SurveyChangeRecord.batch_id == batch_id)
@@ -271,6 +306,8 @@ class SurveyService:
         )
         total_stmt = select(func.count(SurveyChangeRecord.id)).where(SurveyChangeRecord.batch_id == batch_id)
         filters = data_access_service.build_code_scope_filters(SurveyChangeRecord.cbfbm, current_user)
+        if normalized_region_code:
+            filters.append(SurveyChangeRecord.region_code.like(f"{normalized_region_code}%"))
         if contractor_uid:
             filters.append(SurveyChangeRecord.contractor_uid == contractor_uid)
         if filters:
@@ -664,11 +701,18 @@ class SurveyService:
         db.commit()
         return created
 
-    def build_results_zip(self, db: Session, batch_id: int, current_user: User) -> tuple[str, bytes]:
+    def build_results_zip(self, db: Session, batch_id: int, current_user: User, region_code: str | None = None) -> tuple[str, bytes]:
         batch = self._ensure_batch(db, batch_id)
+        normalized_region_code = data_access_service.normalize_region_code(region_code)
+        if normalized_region_code:
+            data_access_service.ensure_region_in_scope(current_user, normalized_region_code)
         task_filters = data_access_service.build_code_scope_filters(SurveyContractorTask.cbfbm, current_user)
         contractor_filters = data_access_service.build_code_scope_filters(SurveyCbfResult.cbfbm, current_user)
         member_filters = data_access_service.build_code_scope_filters(SurveyCbfJtcyResult.cbfbm, current_user)
+        if normalized_region_code:
+            task_filters.append(SurveyContractorTask.region_code.like(f"{normalized_region_code}%"))
+            contractor_filters.append(SurveyCbfResult.region_code.like(f"{normalized_region_code}%"))
+            member_filters.append(SurveyCbfJtcyResult.region_code.like(f"{normalized_region_code}%"))
 
         tasks = db.scalars(
             select(SurveyContractorTask)
@@ -1198,32 +1242,43 @@ class SurveyService:
             "resultStatus": result.result_status,
         }
 
-    def _serialize_batch(self, db: Session, item: SurveyBatch) -> dict:
-        task_count = db.scalar(select(func.count(SurveyContractorTask.id)).where(SurveyContractorTask.batch_id == item.id)) or 0
+    def _build_task_scope_filters(self, current_user: User, region_code: str | None = None) -> list:
+        filters = data_access_service.build_code_scope_filters(SurveyContractorTask.cbfbm, current_user)
+        if region_code:
+            filters.append(SurveyContractorTask.region_code.like(f"{region_code}%"))
+        return filters
+
+    def _serialize_batch(self, db: Session, item: SurveyBatch, scope_filters: list | None = None) -> dict:
+        filters = scope_filters or []
+        task_count = db.scalar(select(func.count(SurveyContractorTask.id)).where(SurveyContractorTask.batch_id == item.id, *filters)) or 0
         not_started_count = db.scalar(
             select(func.count(SurveyContractorTask.id)).where(
                 SurveyContractorTask.batch_id == item.id,
+                *filters,
                 SurveyContractorTask.task_status == "not_started",
             )
         ) or 0
         surveyed_count = db.scalar(
             select(func.count(SurveyContractorTask.id)).where(
                 SurveyContractorTask.batch_id == item.id,
+                *filters,
                 SurveyContractorTask.task_status.in_(["surveyed", "changed", "unchanged", "confirmed"]),
             )
         ) or 0
         changed_count = db.scalar(
-            select(func.count(SurveyContractorTask.id)).where(SurveyContractorTask.batch_id == item.id, SurveyContractorTask.has_change.is_(True))
+            select(func.count(SurveyContractorTask.id)).where(SurveyContractorTask.batch_id == item.id, *filters, SurveyContractorTask.has_change.is_(True))
         ) or 0
         confirmed_count = db.scalar(
             select(func.count(SurveyContractorTask.id)).where(
                 SurveyContractorTask.batch_id == item.id,
+                *filters,
                 SurveyContractorTask.task_status == "confirmed",
             )
         ) or 0
         skipped_count = db.scalar(
             select(func.count(SurveyContractorTask.id)).where(
                 SurveyContractorTask.batch_id == item.id,
+                *filters,
                 SurveyContractorTask.task_status == "skipped",
             )
         ) or 0
@@ -1841,6 +1896,1042 @@ class SurveyService:
             except ValueError:
                 pass
         return datetime.combine(date.fromisoformat(value), datetime.min.time())
+
+    # ── 调查操作 ──────────────────────────────────────
+
+    def change_household_head(
+        self, db: Session, batch_id: int, contractor_uid: str,
+        new_head_member_uid: str, reason: str | None, current_user: User,
+    ) -> dict:
+        """更换户主：取消旧户主，设置新户主。"""
+        batch = self._ensure_batch(db, batch_id)
+        if batch.status == "finished":
+            raise HTTPException(400, "调查批次已结束")
+        result = self._get_result(db, batch_id, contractor_uid)
+        if result.survey_status == "confirmed":
+            raise HTTPException(400, "调查成果已确认")
+        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="无权限")
+        now = datetime.now(timezone.utc)
+
+        # 查找旧户主
+        old_head = db.scalars(
+            select(SurveyCbfJtcyResult).where(
+                SurveyCbfJtcyResult.batch_id == batch_id,
+                SurveyCbfJtcyResult.contractor_uid == contractor_uid,
+                SurveyCbfJtcyResult.is_household_head.is_(True),
+            )
+        ).first()
+
+        # 查找新户主
+        new_head = db.scalars(
+            select(SurveyCbfJtcyResult).where(
+                SurveyCbfJtcyResult.batch_id == batch_id,
+                SurveyCbfJtcyResult.contractor_uid == contractor_uid,
+                SurveyCbfJtcyResult.member_uid == new_head_member_uid,
+            )
+        ).first()
+        if new_head is None:
+            raise HTTPException(404, "未找到指定成员")
+        if new_head.is_deceased:
+            raise HTTPException(400, "已死亡成员不能设为户主")
+
+        old_name = old_head.cyxm if old_head else "无"
+        if old_head:
+            old_head.is_household_head = False
+            old_head.is_changed = True
+        new_head.is_household_head = True
+        new_head.is_changed = True
+        new_head.yhzgx = "01"  # 设为本人（户主）
+
+        # 创建变化记录
+        record = self._create_change_record(
+            db, batch_id, contractor_uid, result.cbfbm,
+            change_type="change_head",
+            before_summary={"old_head": old_name, "old_head_uid": old_head.member_uid if old_head else None},
+            after_summary={"new_head": new_head.cyxm, "new_head_uid": new_head_member_uid},
+            reason=reason,
+            current_user=current_user, now=now,
+        )
+        db.flush()
+
+        # 创建 diff 记录
+        db.add(SurveyChangeDiff(
+            batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
+            entity_type="member", entity_uid=new_head_member_uid, entity_name=new_head.cyxm,
+            field_name="is_household_head", field_label="是否户主",
+            before_value="否", after_value="是", change_reason=reason,
+        ))
+        if old_head:
+            db.add(SurveyChangeDiff(
+                batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
+                entity_type="member", entity_uid=old_head.member_uid, entity_name=old_name,
+                field_name="is_household_head", field_label="是否户主",
+                before_value="是", after_value="否", change_reason=reason,
+            ))
+
+        # 更新任务
+        task = self._get_task(db, batch_id, contractor_uid)
+        if task:
+            task.has_change = True
+            task.change_count = (task.change_count or 0) + 1
+            task.investigated_at = now
+
+        result.investigated_at = now
+        db.commit()
+        return self.get_result(db, batch_id, contractor_uid, current_user)
+
+    def maintain_members(
+        self, db: Session, batch_id: int, contractor_uid: str,
+        members_to_add: list[dict], members_to_update: list[dict],
+        members_to_delete: list[str], reason: str | None, current_user: User,
+    ) -> dict:
+        """家庭成员维护：批量增、改、删。"""
+        batch = self._ensure_batch(db, batch_id)
+        if batch.status == "finished":
+            raise HTTPException(400, "调查批次已结束")
+        result = self._get_result(db, batch_id, contractor_uid)
+        if result.survey_status == "confirmed":
+            raise HTTPException(400, "调查成果已确认")
+        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="无权限")
+        now = datetime.now(timezone.utc)
+
+        change_details = {"added": [], "updated": [], "deleted": []}
+
+        # 删除
+        for member_uid in members_to_delete:
+            member = db.scalars(
+                select(SurveyCbfJtcyResult).where(
+                    SurveyCbfJtcyResult.batch_id == batch_id,
+                    SurveyCbfJtcyResult.contractor_uid == contractor_uid,
+                    SurveyCbfJtcyResult.member_uid == member_uid,
+                )
+            ).first()
+            if member is None:
+                continue
+            change_details["deleted"].append({
+                "member_uid": member_uid, "name": member.cyxm,
+                "id_no": member.cyzjhm, "relation": member.yhzgx,
+            })
+            db.delete(member)
+
+        # 更新
+        for item in members_to_update:
+            member_uid = item.get("memberUid")
+            if not member_uid:
+                continue
+            member = db.scalars(
+                select(SurveyCbfJtcyResult).where(
+                    SurveyCbfJtcyResult.batch_id == batch_id,
+                    SurveyCbfJtcyResult.contractor_uid == contractor_uid,
+                    SurveyCbfJtcyResult.member_uid == member_uid,
+                )
+            ).first()
+            if member is None:
+                continue
+            change_details["updated"].append(member_uid)
+            member.cyxm = item.get("name", member.cyxm)
+            member.cyxb = item.get("gender", member.cyxb)
+            member.cyzjlx = item.get("idType", member.cyzjlx)
+            member.cyzjhm = item.get("idNo", member.cyzjhm)
+            member.yhzgx = item.get("relationToHead", member.yhzgx)
+            member.cybz = item.get("noteCode", member.cybz)
+            member.sfgyr = item.get("isCoOwner", member.sfgyr)
+            member.cybzsm = item.get("note", member.cybzsm)
+            member.is_household_head = bool(item.get("isHouseholdHead", member.is_household_head))
+            member.is_changed = True
+
+        # 新增
+        for item in members_to_add:
+            member_uid = item.get("memberUid") or str(uuid4())
+            member = SurveyCbfJtcyResult(
+                batch_id=batch_id, contractor_uid=contractor_uid,
+                member_uid=member_uid, base_id=None,
+                cbfbm=result.cbfbm,
+                cyxm=item["name"], cyxb=item.get("gender", "1"),
+                cyzjlx=item.get("idType", "1"), cyzjhm=item.get("idNo", ""),
+                yhzgx=item.get("relationToHead", "09"),
+                cybz=item.get("noteCode"), sfgyr=item.get("isCoOwner"),
+                cybzsm=item.get("note"),
+                member_result_status="added", survey_status="surveyed",
+                is_household_head=bool(item.get("isHouseholdHead")),
+                is_changed=True,
+                initialized_at=now,
+                investigator_id=current_user.id, investigator_name=current_user.real_name,
+                investigated_at=now,
+            )
+            db.add(member)
+            change_details["added"].append({"member_uid": member_uid, "name": item["name"]})
+
+        # 更新成员数量
+        member_count = db.scalar(
+            select(func.count(SurveyCbfJtcyResult.id)).where(
+                SurveyCbfJtcyResult.batch_id == batch_id,
+                SurveyCbfJtcyResult.contractor_uid == contractor_uid,
+            )
+        ) or 0
+        result.cbfcysl = member_count
+        result.investigated_at = now
+
+        # 变化记录
+        record = self._create_change_record(
+            db, batch_id, contractor_uid, result.cbfbm,
+            change_type="member_maintain",
+            before_summary={},
+            after_summary=change_details,
+            reason=reason,
+            current_user=current_user, now=now,
+        )
+
+        # 任务更新
+        task = self._get_task(db, batch_id, contractor_uid)
+        if task:
+            task.has_change = True
+            task.change_count = (task.change_count or 0) + len(members_to_add) + len(members_to_update) + len(members_to_delete)
+            task.investigated_at = now
+
+        db.commit()
+        return self.get_result(db, batch_id, contractor_uid, current_user)
+
+    def _create_change_record(
+        self, db: Session, batch_id: int, contractor_uid: str, cbfbm: str,
+        change_type: str, before_summary: dict, after_summary: dict,
+        reason: str | None, current_user: User, now: datetime,
+    ) -> SurveyChangeRecord:
+        record = SurveyChangeRecord(
+            batch_id=batch_id,
+            change_no=self._next_no(db, "CHG", SurveyChangeRecord.id),
+            contractor_uid=contractor_uid,
+            cbfbm=cbfbm,
+            change_type=change_type,
+            change_level="household",
+            change_status="surveyed",
+            before_summary=before_summary,
+            after_summary=after_summary,
+            change_reason=reason,
+            investigated_at=now,
+            investigator_id=current_user.id,
+            investigator_name=current_user.real_name,
+        )
+        db.add(record)
+        return record
+
+    def deregister_contractor(
+        self, db: Session, batch_id: int, contractor_uid: str,
+        reason: str, current_user: User,
+    ) -> dict:
+        """注销承包方：物理删除 result 记录，base 保留，before_summary 存完整快照。"""
+        batch = self._ensure_batch(db, batch_id)
+        if batch.status == "finished":
+            raise HTTPException(400, "调查批次已结束")
+        result = self._get_result(db, batch_id, contractor_uid)
+        if result.survey_status == "confirmed":
+            raise HTTPException(400, "调查成果已确认，不能注销")
+        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="无权限")
+        now = datetime.now(timezone.utc)
+
+        # 收集删除前完整快照
+        members = db.scalars(
+            select(SurveyCbfJtcyResult).where(
+                SurveyCbfJtcyResult.batch_id == batch_id,
+                SurveyCbfJtcyResult.contractor_uid == contractor_uid,
+            )
+        ).all()
+        parcel_relations = db.scalars(
+            select(SurveyCbdkxxResult).where(
+                SurveyCbdkxxResult.batch_id == batch_id,
+                SurveyCbdkxxResult.cbfbm == result.cbfbm,
+            )
+        ).all()
+
+        before_summary = {
+            "contractor": {
+                "code": result.cbfbm, "name": result.cbfmc,
+                "typeCode": result.cbflx, "idType": result.cbfzjlx,
+                "idNo": result.cbfzjhm, "address": result.cbfdz,
+                "postcode": result.yzbm, "mobile": result.lxdh,
+                "memberCount": result.cbfcysl, "groupRegionCode": result.group_region_code,
+                "groupRegionName": result.group_region_name,
+            },
+            "members": [
+                {
+                    "memberUid": m.member_uid, "name": m.cyxm,
+                    "idNo": m.cyzjhm, "gender": m.cyxb,
+                    "relationToHead": m.yhzgx, "isCoOwner": m.sfgyr,
+                    "noteCode": m.cybz, "note": m.cybzsm,
+                    "isHouseholdHead": m.is_household_head,
+                }
+                for m in members
+            ],
+            "parcel_relations": [
+                {
+                    "parcelInfoUid": p.parcel_info_uid, "dkbm": p.dkbm,
+                    "fbfbm": p.fbfbm, "cbjyqqdfs": p.cbjyqqdfs,
+                    "htmj": float(p.htmj) if p.htmj else None,
+                    "cbhtbm": p.cbhtbm, "cbjyqzbm": p.cbjyqzbm,
+                }
+                for p in parcel_relations
+            ],
+        }
+
+        # 创建变化记录（先创建，因为需要 change_id 给 diff）
+        record = self._create_change_record(
+            db, batch_id, contractor_uid, result.cbfbm,
+            change_type="deregister",
+            before_summary=before_summary,
+            after_summary={"action": "deregistered", "reason": reason},
+            reason=reason,
+            current_user=current_user, now=now,
+        )
+        db.flush()
+
+        # 创建 diffs（逐个实体记录删除）
+        db.add(SurveyChangeDiff(
+            batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
+            entity_type="contractor", entity_uid=contractor_uid, entity_name=result.cbfmc,
+            field_name="result_status", field_label="承包方状态",
+            before_value=result.result_status, after_value="deregistered", change_reason=reason,
+        ))
+        for m in members:
+            db.add(SurveyChangeDiff(
+                batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
+                entity_type="member", entity_uid=m.member_uid, entity_name=m.cyxm,
+                field_name="member", field_label="删除成员",
+                before_value=f"{m.cyxm} / {m.cyzjhm}", after_value=None, change_reason=reason,
+            ))
+        for p in parcel_relations:
+            db.add(SurveyChangeDiff(
+                batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
+                entity_type="parcel_relation", entity_uid=p.parcel_info_uid, entity_name=p.dkbm,
+                field_name="parcel_relation", field_label="删除地块关联",
+                before_value=f"{p.dkbm} (关联 {result.cbfbm})", after_value=None, change_reason=reason,
+            ))
+
+        # 物理删除
+        for m in members:
+            db.delete(m)
+        for p in parcel_relations:
+            db.delete(p)
+        db.delete(result)
+
+        # 更新任务状态
+        task = self._get_task(db, batch_id, contractor_uid)
+        if task:
+            task.task_status = "deregistered"
+            task.has_change = True
+            task.change_count = (task.change_count or 0) + 1
+            task.investigated_at = now
+
+        db.commit()
+        return {"contractorUid": contractor_uid, "status": "deregistered", "changeNo": record.change_no}
+
+    def add_parcel(
+        self, db: Session, batch_id: int, contractor_uid: str,
+        payload: dict, current_user: User,
+    ) -> dict:
+        """新增地块：创建 SurveyDkResult + SurveyCbdkxxResult，关联承包方。"""
+        batch = self._ensure_batch(db, batch_id)
+        if batch.status == "finished":
+            raise HTTPException(400, "调查批次已结束")
+        result = self._get_result(db, batch_id, contractor_uid)
+        if result.survey_status == "confirmed":
+            raise HTTPException(400, "调查成果已确认")
+        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="无权限")
+        now = datetime.now(timezone.utc)
+
+        # 查找发包方（从已有地块关系中获取，或从承包方代码推导）
+        existing_parcel = db.scalars(
+            select(SurveyCbdkxxResult.fbfbm).where(
+                SurveyCbdkxxResult.batch_id == batch_id,
+                SurveyCbdkxxResult.cbfbm == result.cbfbm,
+            ).limit(1)
+        ).first()
+        fbfbm = existing_parcel or result.cbfbm[:14]
+
+        parcel_uid = str(uuid4())
+        parcel_info_uid = str(uuid4())
+        scmj = payload["scmj"]
+
+        # 创建 SurveyDkResult
+        dk_result = SurveyDkResult(
+            batch_id=batch_id,
+            parcel_uid=parcel_uid,
+            base_id=0,  # 新增地块无 base
+            ysdm=result.cbfbm[:6] or "000000",
+            dkbm=payload["dkbm"],
+            dkmc=payload["dkmc"],
+            syqxz=payload.get("syqxz", "10"),
+            dklb=payload["dklb"],
+            tdlylx=payload.get("tdlylx", "001"),
+            dldj=payload["dldj"],
+            tdyt=payload["tdyt"],
+            sfjbnt=payload.get("sfjbnt", "1"),
+            scmj=scmj,
+            dkdz=payload.get("dkdz"),
+            dkxz=payload.get("dkxz"),
+            dknz=payload.get("dknz"),
+            dkbz=payload.get("dkbz"),
+            dkbzxx=payload.get("dkbzxx"),
+            survey_status="surveyed",
+            result_status="added",
+            is_changed=True,
+            change_type="add_parcel",
+            change_reason=payload.get("reason"),
+            initialized_at=now,
+        )
+        db.add(dk_result)
+        db.flush()
+
+        # 创建 SurveyCbdkxxResult
+        cbdkxx = SurveyCbdkxxResult(
+            batch_id=batch_id,
+            parcel_info_uid=parcel_info_uid,
+            base_id=0,
+            dkbm=payload["dkbm"],
+            fbfbm=fbfbm,
+            cbfbm=result.cbfbm,
+            cbjyqqdfs=payload.get("cbjyqqdfs", "001"),
+            htmj=payload.get("htmj") or scmj,
+            cbhtbm=payload.get("cbhtbm") or "",
+            lzhtbm=payload.get("lzhtbm"),
+            cbjyqzbm=payload.get("cbjyqzbm") or "",
+            yhtmj=payload.get("yhtmj"),
+            htmjm=payload.get("htmjm"),
+            yhtmjm=payload.get("yhtmjm"),
+            sfqqqg=payload.get("sfqqqg"),
+            survey_status="surveyed",
+            result_status="added",
+            is_changed=True,
+            change_type="add_parcel",
+            change_reason=payload.get("reason"),
+            initialized_at=now,
+        )
+        db.add(cbdkxx)
+
+        # 变化记录
+        record = self._create_change_record(
+            db, batch_id, contractor_uid, result.cbfbm,
+            change_type="add_parcel",
+            before_summary={"parcels_count": db.scalar(
+                select(func.count(SurveyCbdkxxResult.id)).where(
+                    SurveyCbdkxxResult.batch_id == batch_id,
+                    SurveyCbdkxxResult.cbfbm == result.cbfbm,
+                )
+            ) or 0},
+            after_summary={"action": "add_parcel", "dkbm": payload["dkbm"], "scmj": scmj},
+            reason=payload.get("reason"),
+            current_user=current_user, now=now,
+        )
+        db.flush()
+
+        # diffs
+        db.add(SurveyChangeDiff(
+            batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
+            entity_type="parcel", entity_uid=parcel_uid, entity_name=payload["dkmc"],
+            field_name="parcel", field_label="新增地块",
+            before_value=None, after_value=f"{payload['dkbm']} / {payload['dkmc']} / {scmj}亩",
+            change_reason=payload.get("reason"),
+        ))
+
+        # 更新任务
+        task = self._get_task(db, batch_id, contractor_uid)
+        if task:
+            task.has_change = True
+            task.change_count = (task.change_count or 0) + 1
+            task.investigated_at = now
+
+        result.investigated_at = now
+        db.commit()
+        return self.get_result(db, batch_id, contractor_uid, current_user)
+
+    def split_parcel(
+        self, db: Session, batch_id: int, contractor_uid: str,
+        payload: dict, current_user: User,
+    ) -> dict:
+        """切割地块：减小原地块面积，创建新地块。"""
+        batch = self._ensure_batch(db, batch_id)
+        if batch.status == "finished":
+            raise HTTPException(400, "调查批次已结束")
+        result = self._get_result(db, batch_id, contractor_uid)
+        if result.survey_status == "confirmed":
+            raise HTTPException(400, "调查成果已确认")
+        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="无权限")
+        now = datetime.now(timezone.utc)
+
+        # 查找原地块关联
+        dkbm = payload["dkbm"]
+        old_relation = db.scalars(
+            select(SurveyCbdkxxResult).where(
+                SurveyCbdkxxResult.batch_id == batch_id,
+                SurveyCbdkxxResult.dkbm == dkbm,
+                SurveyCbdkxxResult.cbfbm == result.cbfbm,
+            )
+        ).first()
+        if old_relation is None:
+            raise HTTPException(404, "原地块关联不存在")
+
+        # 查找原地块
+        old_parcel = db.scalars(
+            select(SurveyDkResult).where(
+                SurveyDkResult.batch_id == batch_id,
+                SurveyDkResult.dkbm == old_relation.dkbm,
+            )
+        ).first()
+        if old_parcel is None:
+            raise HTTPException(404, "原地块不存在")
+
+        new_scmj = payload["newScmj"]
+        old_area = float(old_parcel.scmj or 0)
+        if new_scmj >= old_area:
+            raise HTTPException(400, f"切割面积({new_scmj})不能大于等于原地块面积({old_area})")
+
+        # 减小原地块面积
+        remaining = round(old_area - new_scmj, 2)
+        old_parcel.scmj = remaining
+        old_parcel.is_changed = True
+        old_parcel.change_type = "split_parcel"
+        old_parcel.change_reason = payload.get("reason")
+
+        # 更新原地块关联的面积
+        if old_relation.htmj and float(old_relation.htmj) > 0:
+            old_relation.htmj = remaining
+
+        # 创建新地块
+        new_parcel_uid = str(uuid4())
+        new_parcel_info_uid = str(uuid4())
+        new_dkbm = payload["newDkbm"]
+
+        new_parcel = SurveyDkResult(
+            batch_id=batch_id,
+            parcel_uid=new_parcel_uid,
+            base_id=0,
+            ysdm=old_parcel.ysdm,
+            dkbm=new_dkbm,
+            dkmc=payload["newDkmc"],
+            syqxz=old_parcel.syqxz,
+            dklb=old_parcel.dklb,
+            tdlylx=old_parcel.tdlylx,
+            dldj=old_parcel.dldj,
+            tdyt=old_parcel.tdyt,
+            sfjbnt=old_parcel.sfjbnt,
+            scmj=new_scmj,
+            dkdz=old_parcel.dkdz,
+            dkxz=old_parcel.dkxz,
+            dknz=old_parcel.dknz,
+            dkbz=f"从 {old_parcel.dkbm} 切割",
+            survey_status="surveyed",
+            result_status="added",
+            is_changed=True,
+            change_type="split_parcel",
+            change_reason=payload.get("reason"),
+            initialized_at=now,
+        )
+        db.add(new_parcel)
+        db.flush()
+
+        # 创建新地块关联
+        new_relation = SurveyCbdkxxResult(
+            batch_id=batch_id,
+            parcel_info_uid=new_parcel_info_uid,
+            base_id=0,
+            dkbm=new_dkbm,
+            fbfbm=old_relation.fbfbm,
+            cbfbm=result.cbfbm,
+            cbjyqqdfs=old_relation.cbjyqqdfs,
+            htmj=new_scmj,
+            cbhtbm=old_relation.cbhtbm,
+            lzhtbm=old_relation.lzhtbm,
+            cbjyqzbm=old_relation.cbjyqzbm,
+            sfqqqg=old_relation.sfqqqg,
+            survey_status="surveyed",
+            result_status="added",
+            is_changed=True,
+            change_type="split_parcel",
+            change_reason=payload.get("reason"),
+            initialized_at=now,
+        )
+        db.add(new_relation)
+
+        # 变化记录
+        record = self._create_change_record(
+            db, batch_id, contractor_uid, result.cbfbm,
+            change_type="split_parcel",
+            before_summary={
+                "dkbm": old_parcel.dkbm, "original_area": old_area,
+            },
+            after_summary={
+                "action": "split_parcel",
+                "original_dkbm": old_parcel.dkbm, "remaining_area": remaining,
+                "new_dkbm": new_dkbm, "new_area": new_scmj,
+            },
+            reason=payload.get("reason"),
+            current_user=current_user, now=now,
+        )
+        db.flush()
+
+        # diffs
+        db.add(SurveyChangeDiff(
+            batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
+            entity_type="parcel", entity_uid=old_parcel.parcel_uid, entity_name=old_parcel.dkmc,
+            field_name="scmj", field_label="实测面积",
+            before_value=str(old_area), after_value=str(remaining), change_reason=payload.get("reason"),
+        ))
+        db.add(SurveyChangeDiff(
+            batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
+            entity_type="parcel", entity_uid=new_parcel_uid, entity_name=new_parcel.dkmc,
+            field_name="parcel", field_label="切割产生新地块",
+            before_value=None, after_value=f"{new_dkbm} / {payload['newDkmc']} / {new_scmj}亩",
+            change_reason=payload.get("reason"),
+        ))
+
+        # 更新任务
+        task = self._get_task(db, batch_id, contractor_uid)
+        if task:
+            task.has_change = True
+            task.change_count = (task.change_count or 0) + 1
+            task.investigated_at = now
+
+        result.investigated_at = now
+        db.commit()
+        return self.get_result(db, batch_id, contractor_uid, current_user)
+
+    def swap_parcels(
+        self, db: Session, batch_id: int, contractor_uid: str,
+        payload: dict, current_user: User,
+    ) -> dict:
+        """地块互换：交换两个承包方之间的地块归属。"""
+        batch = self._ensure_batch(db, batch_id)
+        if batch.status == "finished":
+            raise HTTPException(400, "调查批次已结束")
+        result = self._get_result(db, batch_id, contractor_uid)
+        if result.survey_status == "confirmed":
+            raise HTTPException(400, "调查成果已确认")
+        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="无权限")
+        now = datetime.now(timezone.utc)
+
+        target_uid = payload["targetContractorUid"]
+        target_result = self._get_result(db, batch_id, target_uid)
+        if target_result.survey_status == "confirmed":
+            raise HTTPException(400, "目标承包方已确认")
+        if target_uid == contractor_uid:
+            raise HTTPException(400, "不能与自己互换地块")
+
+        source_dkbms = payload["sourceDkbms"]
+        target_dkbms = payload["targetDkbms"]
+
+        # 执行互换
+        swapped_source = []
+        swapped_target = []
+        for dkbm in source_dkbms:
+            rel = db.scalars(
+                select(SurveyCbdkxxResult).where(
+                    SurveyCbdkxxResult.batch_id == batch_id,
+                    SurveyCbdkxxResult.dkbm == dkbm,
+                    SurveyCbdkxxResult.cbfbm == result.cbfbm,
+                )
+            ).first()
+            if rel is None:
+                raise HTTPException(404, f"源地块 {dkbm} 不属于当前承包方")
+            swapped_source.append({"dkbm": dkbm, "from": result.cbfbm, "to": target_result.cbfbm})
+            rel.cbfbm = target_result.cbfbm
+            rel.is_changed = True
+            rel.change_type = "swap_parcels"
+            rel.change_reason = payload.get("reason")
+
+        for dkbm in target_dkbms:
+            rel = db.scalars(
+                select(SurveyCbdkxxResult).where(
+                    SurveyCbdkxxResult.batch_id == batch_id,
+                    SurveyCbdkxxResult.dkbm == dkbm,
+                    SurveyCbdkxxResult.cbfbm == target_result.cbfbm,
+                )
+            ).first()
+            if rel is None:
+                raise HTTPException(404, f"目标地块 {dkbm} 不属于目标承包方")
+            swapped_target.append({"dkbm": dkbm, "from": target_result.cbfbm, "to": result.cbfbm})
+            rel.cbfbm = result.cbfbm
+            rel.is_changed = True
+            rel.change_type = "swap_parcels"
+            rel.change_reason = payload.get("reason")
+
+        # 变化记录（源方）
+        record = self._create_change_record(
+            db, batch_id, contractor_uid, result.cbfbm,
+            change_type="swap_parcels",
+            before_summary={"swapped_out": source_dkbms},
+            after_summary={"swapped_in": target_dkbms, "counterparty": target_result.cbfbm},
+            reason=payload.get("reason"),
+            current_user=current_user, now=now,
+        )
+        db.flush()
+        for item in swapped_source:
+            db.add(SurveyChangeDiff(
+                batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
+                entity_type="parcel_relation", entity_uid=item["dkbm"], entity_name=item["dkbm"],
+                field_name="cbfbm", field_label="承包方",
+                before_value=item["from"], after_value=item["to"], change_reason=payload.get("reason"),
+            ))
+        for item in swapped_target:
+            db.add(SurveyChangeDiff(
+                batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
+                entity_type="parcel_relation", entity_uid=item["dkbm"], entity_name=item["dkbm"],
+                field_name="cbfbm", field_label="承包方",
+                before_value=item["from"], after_value=item["to"], change_reason=payload.get("reason"),
+            ))
+
+        # 变化记录（目标方）
+        target_record = self._create_change_record(
+            db, batch_id, target_uid, target_result.cbfbm,
+            change_type="swap_parcels",
+            before_summary={"swapped_out": target_dkbms},
+            after_summary={"swapped_in": source_dkbms, "counterparty": result.cbfbm},
+            reason=payload.get("reason"),
+            current_user=current_user, now=now,
+        )
+
+        # 更新双方任务
+        for uid in [contractor_uid, target_uid]:
+            task = self._get_task(db, batch_id, uid)
+            if task:
+                task.has_change = True
+                task.change_count = (task.change_count or 0) + 1
+                task.investigated_at = now
+
+        result.investigated_at = now
+        target_result.investigated_at = now
+        db.commit()
+        return self.get_result(db, batch_id, contractor_uid, current_user)
+
+    def split_household(
+        self, db: Session, batch_id: int, contractor_uid: str,
+        payload: dict, current_user: User,
+    ) -> dict:
+        """分户：创建新承包方，迁移指定成员和地块。"""
+        batch = self._ensure_batch(db, batch_id)
+        if batch.status == "finished":
+            raise HTTPException(400, "调查批次已结束")
+        result = self._get_result(db, batch_id, contractor_uid)
+        if result.survey_status == "confirmed":
+            raise HTTPException(400, "调查成果已确认")
+        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="无权限")
+        now = datetime.now(timezone.utc)
+
+        member_uids = payload["memberUids"]
+        parcel_dkbms = payload.get("parcelDkbms") or []
+        new_cbfbm = payload["newCbfbm"]
+        new_cbfmc = payload["newCbfmc"]
+
+        # 获取所有当前成员
+        all_members = db.scalars(
+            select(SurveyCbfJtcyResult).where(
+                SurveyCbfJtcyResult.batch_id == batch_id,
+                SurveyCbfJtcyResult.contractor_uid == contractor_uid,
+            )
+        ).all()
+        if len(all_members) < 2:
+            raise HTTPException(400, "至少需要 2 名成员才能分户")
+        stay_members = [m for m in all_members if m.member_uid not in member_uids]
+        if not stay_members:
+            raise HTTPException(400, "原户必须至少保留 1 名成员")
+        move_members = [m for m in all_members if m.member_uid in member_uids]
+        if not move_members:
+            raise HTTPException(400, "请至少选择 1 名成员移至新户")
+
+        # 创建新户
+        new_contractor_uid = str(uuid5(NAMESPACE_URL, f"survey:{batch_id}:cbf:{new_cbfbm}"))
+        new_result = SurveyCbfResult(
+            batch_id=batch_id,
+            contractor_uid=new_contractor_uid,
+            base_id=0,  # 新户无 base
+            cbfbm=new_cbfbm,
+            cbflx=result.cbflx,
+            cbfmc=new_cbfmc,
+            cbfzjlx=result.cbfzjlx,
+            cbfzjhm="",  # 新户由户主证件号填充
+            cbfdz=result.cbfdz,
+            yzbm=result.yzbm,
+            lxdh=result.lxdh,
+            cbfcysl=len(move_members),
+            group_region_code=result.group_region_code,
+            group_region_name=result.group_region_name,
+            survey_status="surveyed",
+            result_status="added",
+            is_changed=True,
+            change_type="split_household",
+            change_reason=payload.get("reason"),
+            investigator_id=current_user.id,
+            investigator_name=current_user.real_name,
+            investigated_at=now,
+            initialized_from_base_id=0,
+            initialized_at=now,
+            remark=f"由 {result.cbfbm} {result.cbfmc} 分户产生",
+        )
+        db.add(new_result)
+        db.flush()
+
+        # 创建新户任务
+        db.add(SurveyContractorTask(
+            batch_id=batch_id,
+            contractor_uid=new_contractor_uid,
+            cbfbm=new_cbfbm,
+            cbfmc=new_cbfmc,
+            task_status="surveyed",
+            has_change=True,
+            change_count=1,
+            investigated_at=now,
+            remark=f"由 {result.cbfbm} 分户产生",
+        ))
+
+        # 迁移成员
+        moved_member_names = []
+        for member in move_members:
+            moved_member_names.append(member.cyxm)
+            member.contractor_uid = new_contractor_uid
+            member.cbfbm = new_cbfbm
+            member.is_changed = True
+        # 新户的户主设为第一个迁入成员
+        if move_members:
+            # 取消原户主标记
+            for m in stay_members:
+                if m.is_household_head:
+                    # 如果户主被迁出，在留下的成员中选一个设为户主
+                    pass
+            if not any(m.is_household_head for m in stay_members):
+                stay_members[0].is_household_head = True
+            if not any(m.is_household_head for m in move_members):
+                move_members[0].is_household_head = True
+
+        # 迁移地块
+        moved_parcel_dkbms = []
+        for dkbm in parcel_dkbms:
+            rel = db.scalars(
+                select(SurveyCbdkxxResult).where(
+                    SurveyCbdkxxResult.batch_id == batch_id,
+                    SurveyCbdkxxResult.dkbm == dkbm,
+                    SurveyCbdkxxResult.cbfbm == result.cbfbm,
+                )
+            ).first()
+            if rel is None:
+                continue
+            moved_parcel_dkbms.append(dkbm)
+            rel.cbfbm = new_cbfbm
+            rel.is_changed = True
+            rel.change_type = "split_household"
+            rel.change_reason = payload.get("reason")
+
+        # 更新原户成员数量
+        result.cbfcysl = len(stay_members)
+        result.is_changed = True
+        result.change_type = "split_household"
+        result.investigated_at = now
+
+        # 原户变化记录
+        record = self._create_change_record(
+            db, batch_id, contractor_uid, result.cbfbm,
+            change_type="split_household",
+            before_summary={"member_count": len(all_members), "parcel_count": len(parcel_dkbms)},
+            after_summary={
+                "action": "split_out",
+                "new_household": new_cbfbm,
+                "moved_members": moved_member_names,
+                "moved_parcels": moved_parcel_dkbms,
+            },
+            reason=payload.get("reason"),
+            current_user=current_user, now=now,
+        )
+        db.flush()
+        for m in move_members:
+            db.add(SurveyChangeDiff(
+                batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
+                entity_type="member", entity_uid=m.member_uid, entity_name=m.cyxm,
+                field_name="contractor", field_label="所属承包方",
+                before_value=result.cbfbm, after_value=new_cbfbm, change_reason=payload.get("reason"),
+            ))
+
+        # 新户变化记录
+        new_record = self._create_change_record(
+            db, batch_id, new_contractor_uid, new_cbfbm,
+            change_type="split_household",
+            before_summary={},
+            after_summary={
+                "action": "created",
+                "from_household": result.cbfbm,
+                "members": moved_member_names,
+                "parcels": moved_parcel_dkbms,
+            },
+            reason=payload.get("reason"),
+            current_user=current_user, now=now,
+        )
+
+        # 更新原户任务
+        task = self._get_task(db, batch_id, contractor_uid)
+        if task:
+            task.has_change = True
+            task.change_count = (task.change_count or 0) + 1
+            task.investigated_at = now
+            task.cbfmc = result.cbfmc
+
+        db.commit()
+        return self.get_result(db, batch_id, contractor_uid, current_user)
+
+    def merge_household(
+        self, db: Session, batch_id: int, source_contractor_uid: str,
+        payload: dict, current_user: User,
+    ) -> dict:
+        """合户：将源承包方的所有成员和地块迁移到目标承包方，注销源承包方。"""
+        batch = self._ensure_batch(db, batch_id)
+        if batch.status == "finished":
+            raise HTTPException(400, "调查批次已结束")
+        source_result = self._get_result(db, batch_id, source_contractor_uid)
+        if source_result.survey_status == "confirmed":
+            raise HTTPException(400, "源户调查成果已确认")
+        data_access_service.ensure_code_in_scope(current_user, source_result.cbfbm, detail="无权限")
+        now = datetime.now(timezone.utc)
+
+        target_contractor_uid = payload["targetContractorUid"]
+        if target_contractor_uid == source_contractor_uid:
+            raise HTTPException(400, "不能合并到自身")
+
+        # 获取目标户
+        target_result = db.scalars(
+            select(SurveyCbfResult).where(
+                SurveyCbfResult.batch_id == batch_id,
+                SurveyCbfResult.contractor_uid == target_contractor_uid,
+            )
+        ).first()
+        if not target_result:
+            raise HTTPException(400, "目标承包方不存在")
+        if target_result.survey_status == "confirmed":
+            raise HTTPException(400, "目标户调查成果已确认")
+
+        # 获取源户全部成员
+        source_members = db.scalars(
+            select(SurveyCbfJtcyResult).where(
+                SurveyCbfJtcyResult.batch_id == batch_id,
+                SurveyCbfJtcyResult.contractor_uid == source_contractor_uid,
+            )
+        ).all()
+        # 获取源户全部地块关联
+        source_parcels = db.scalars(
+            select(SurveyCbdkxxResult).where(
+                SurveyCbdkxxResult.batch_id == batch_id,
+                SurveyCbdkxxResult.cbfbm == source_result.cbfbm,
+            )
+        ).all()
+
+        # 收集迁移明细
+        moved_member_names = [m.cyxm for m in source_members]
+        moved_parcel_dkbms = [p.dkbm for p in source_parcels]
+
+        # 创建源户变化记录（注销）
+        source_record = self._create_change_record(
+            db, batch_id, source_contractor_uid, source_result.cbfbm,
+            change_type="merge_household",
+            before_summary={
+                "member_count": len(source_members),
+                "parcel_count": len(source_parcels),
+            },
+            after_summary={
+                "action": "merged_into",
+                "target_household": target_result.cbfbm,
+                "target_name": target_result.cbfmc,
+                "moved_members": moved_member_names,
+                "moved_parcels": moved_parcel_dkbms,
+            },
+            reason=payload.get("reason"),
+            current_user=current_user, now=now,
+        )
+        db.flush()
+
+        # 源户 diffs
+        db.add(SurveyChangeDiff(
+            batch_id=batch_id, contractor_uid=source_contractor_uid, change_id=source_record.id,
+            entity_type="contractor", entity_uid=source_contractor_uid, entity_name=source_result.cbfmc,
+            field_name="result_status", field_label="承包方状态",
+            before_value=source_result.result_status, after_value="merged", change_reason=payload.get("reason"),
+        ))
+        for m in source_members:
+            db.add(SurveyChangeDiff(
+                batch_id=batch_id, contractor_uid=source_contractor_uid, change_id=source_record.id,
+                entity_type="member", entity_uid=m.member_uid, entity_name=m.cyxm,
+                field_name="contractor", field_label="所属承包方",
+                before_value=source_result.cbfbm, after_value=target_result.cbfbm, change_reason=payload.get("reason"),
+            ))
+        for p in source_parcels:
+            db.add(SurveyChangeDiff(
+                batch_id=batch_id, contractor_uid=source_contractor_uid, change_id=source_record.id,
+                entity_type="parcel_relation", entity_uid=p.parcel_info_uid, entity_name=p.dkbm,
+                field_name="cbfbm", field_label="承包方编码",
+                before_value=source_result.cbfbm, after_value=target_result.cbfbm, change_reason=payload.get("reason"),
+            ))
+
+        # 创建目标户变化记录（接收方）
+        target_record = self._create_change_record(
+            db, batch_id, target_contractor_uid, target_result.cbfbm,
+            change_type="merge_household",
+            before_summary={
+                "member_count": target_result.cbfcysl,
+            },
+            after_summary={
+                "action": "received_merge",
+                "from_household": source_result.cbfbm,
+                "from_name": source_result.cbfmc,
+                "received_members": moved_member_names,
+                "received_parcels": moved_parcel_dkbms,
+                "new_member_count": target_result.cbfcysl + len(source_members),
+            },
+            reason=payload.get("reason"),
+            current_user=current_user, now=now,
+        )
+
+        # 迁移成员：更新 contractor_uid 和 cbfbm，取消户主标记
+        for member in source_members:
+            member.contractor_uid = target_contractor_uid
+            member.cbfbm = target_result.cbfbm
+            member.is_household_head = False  # 迁入后不再是户主
+            member.is_changed = True
+
+        # 迁移地块关联
+        for parcel in source_parcels:
+            parcel.cbfbm = target_result.cbfbm
+            parcel.is_changed = True
+            parcel.change_type = "merge_household"
+            parcel.change_reason = payload.get("reason")
+
+        # 更新目标户成员数量
+        target_result.cbfcysl = (target_result.cbfcysl or 0) + len(source_members)
+        target_result.is_changed = True
+        target_result.change_type = "merge_household"
+        target_result.investigated_at = now
+
+        # 删除源户 result（注销）
+        db.delete(source_result)
+
+        # 更新源户任务为已注销
+        source_task = self._get_task(db, batch_id, source_contractor_uid)
+        if source_task:
+            source_task.task_status = "deregistered"
+            source_task.has_change = True
+            source_task.change_count = (source_task.change_count or 0) + 1
+            source_task.investigated_at = now
+            source_task.remark = f"合入 {target_result.cbfbm} {target_result.cbfmc}"
+
+        # 更新目标户任务
+        target_task = self._get_task(db, batch_id, target_contractor_uid)
+        if target_task:
+            target_task.has_change = True
+            target_task.change_count = (target_task.change_count or 0) + 1
+            target_task.investigated_at = now
+
+        db.commit()
+        return self.get_result(db, batch_id, target_contractor_uid, current_user)
+
+    def _get_task(self, db: Session, batch_id: int, contractor_uid: str) -> SurveyContractorTask | None:
+        return db.scalars(
+            select(SurveyContractorTask).where(
+                SurveyContractorTask.batch_id == batch_id,
+                SurveyContractorTask.contractor_uid == contractor_uid,
+            )
+        ).first()
 
     def _next_no(self, db: Session, prefix: str, id_column) -> str:
         next_id = (db.scalar(select(func.max(id_column))) or 0) + 1

@@ -2,9 +2,12 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
+from sqlalchemy import select as sa_select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_permission
+from app.models.cbht import Cbht
+from app.models.survey import SurveyCbdkxxBase, SurveyCbdkxxResult
 from app.models.user import User
 from app.schemas.pagination import PageResponse
 from app.schemas.response import ApiResponse
@@ -15,9 +18,18 @@ from app.schemas.survey import (
     SurveyAuthorizationCreate,
     SurveyAuthorizationRevoke,
     SurveyChangeDiffRead,
+    SurveyChangeHeadRequest,
     SurveyChangeRecordRead,
     SurveyContractorRead,
     SurveyContractorUpdate,
+    SurveyContractRead,
+    SurveyMaintainMembersRequest,
+    SurveyDeregisterRequest,
+    SurveyAddParcelRequest,
+    SurveySplitParcelRequest,
+    SurveySwapParcelsRequest,
+    SurveySplitHouseholdRequest,
+    SurveyMergeHouseholdRequest,
     SurveyGenerateRequest,
     SurveyRestructureCreate,
     SurveyTagCreate,
@@ -25,6 +37,7 @@ from app.schemas.survey import (
     SurveyTaskSkip,
     SurveyTaskRead,
 )
+from app.services.contract_template_service import contract_template_service
 from app.services.land_parcel_service import land_parcel_service
 from app.services.survey_service import survey_service
 
@@ -36,10 +49,11 @@ def list_survey_batches(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
     keyword: str | None = Query(default=None),
+    region_code: str | None = Query(default=None, alias="regionCode"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contractors.view")),
 ):
-    return {"data": survey_service.list_batches(db, page, page_size, keyword)}
+    return {"data": survey_service.list_batches(db, page, page_size, keyword, region_code, current_user)}
 
 
 @router.post("/batches", response_model=ApiResponse[SurveyBatchRead])
@@ -58,6 +72,7 @@ def list_survey_tasks(
     page_size: int = Query(default=20, ge=1, le=200),
     keyword: str | None = Query(default=None),
     task_status: str | None = Query(default=None, alias="taskStatus"),
+    region_code: str | None = Query(default=None, alias="regionCode"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contractors.view")),
 ):
@@ -69,6 +84,7 @@ def list_survey_tasks(
             page_size=page_size,
             keyword=keyword,
             task_status=task_status,
+            region_code=region_code,
             current_user=current_user,
         )
     }
@@ -281,6 +297,7 @@ def generate_request_from_survey_result(
 def list_survey_changes(
     batch_id: int,
     contractor_uid: str | None = Query(default=None, alias="contractorUid"),
+    region_code: str | None = Query(default=None, alias="regionCode"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -291,6 +308,7 @@ def list_survey_changes(
             db,
             batch_id=batch_id,
             contractor_uid=contractor_uid,
+            region_code=region_code,
             page=page,
             page_size=page_size,
             current_user=current_user,
@@ -301,10 +319,11 @@ def list_survey_changes(
 @router.get("/batches/{batch_id}/export-results.zip")
 def export_survey_results(
     batch_id: int,
+    region_code: str | None = Query(default=None, alias="regionCode"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contractors.view")),
 ):
-    filename, content = survey_service.build_results_zip(db, batch_id, current_user)
+    filename, content = survey_service.build_results_zip(db, batch_id, current_user, region_code)
     return Response(
         content=content,
         media_type="application/zip",
@@ -363,6 +382,218 @@ def skip_survey_task(
     current_user: User = Depends(require_permission("contractors.manage")),
 ):
     return {"data": survey_service.skip_task(db, batch_id, contractor_uid, payload.skipReason, current_user)}
+
+
+# ── 合同信息 ──────────────────────────────────────────
+
+def _get_cbhtbm_for_contractor(db: Session, cbfbm: str, batch_id: int) -> str | None:
+    """查找承包方关联的合同编码，优先 result 表再 fallback base 表。"""
+    cbhtbm = db.scalar(
+        sa_select(SurveyCbdkxxResult.cbhtbm)
+        .where(SurveyCbdkxxResult.cbfbm == cbfbm)
+        .where(SurveyCbdkxxResult.batch_id == batch_id)
+        .limit(1)
+    )
+    if not cbhtbm:
+        cbhtbm = db.scalar(
+            sa_select(SurveyCbdkxxBase.cbhtbm)
+            .where(SurveyCbdkxxBase.cbfbm == cbfbm)
+            .limit(1)
+        )
+    return cbhtbm
+
+
+@router.get("/batches/{batch_id}/results/{contractor_uid}/contract", response_model=ApiResponse[SurveyContractRead])
+def get_survey_contract(
+    batch_id: int,
+    contractor_uid: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """获取承包方的合同信息及渲染后的 HTML 合同。"""
+    result = survey_service.get_result(db, batch_id, contractor_uid, current_user)
+    cbfbm = result.get("code", "")
+    cbhtbm = _get_cbhtbm_for_contractor(db, cbfbm, batch_id)
+    if not cbhtbm:
+        return {"data": None}
+
+    contract = db.scalar(sa_select(Cbht).where(Cbht.cbhtbm == cbhtbm))
+    if not contract:
+        return {"data": None}
+
+    rendered = contract_template_service.render_contract(
+        db, cbhtbm=cbhtbm, batch_id=batch_id,
+    )
+    return {
+        "data": {
+            "cbhtbm": contract.cbhtbm,
+            "ycbhtbm": contract.ycbhtbm,
+            "fbfbm": contract.fbfbm,
+            "fbfmc": None,
+            "cbfbm": contract.cbfbm,
+            "cbfs": contract.cbfs,
+            "cbqxq": str(contract.cbqxq) if contract.cbqxq else None,
+            "cbqxz": str(contract.cbqxz) if contract.cbqxz else None,
+            "htzmj": float(contract.htzmj) if contract.htzmj else None,
+            "htzmjm": float(contract.htzmjm) if contract.htzmjm else None,
+            "cbdkzs": contract.cbdkzs,
+            "qdsj": str(contract.qdsj) if contract.qdsj else None,
+            "renderedHtml": rendered,
+        }
+    }
+
+
+@router.post("/batches/{batch_id}/results/{contractor_uid}/contract/print")
+def print_survey_contract(
+    batch_id: int,
+    contractor_uid: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """返回合同 HTML 用于打印。"""
+    result = survey_service.get_result(db, batch_id, contractor_uid, current_user)
+    cbfbm = result.get("code", "")
+    cbhtbm = _get_cbhtbm_for_contractor(db, cbfbm, batch_id)
+    if not cbhtbm:
+        return Response(content="", media_type="text/html")
+    rendered = contract_template_service.render_contract(
+        db, cbhtbm=cbhtbm, batch_id=batch_id,
+    )
+    return Response(content=rendered, media_type="text/html; charset=utf-8")
+
+
+# ── 调查操作 ──────────────────────────────────────────
+
+@router.post("/batches/{batch_id}/results/{contractor_uid}/change-head", response_model=ApiResponse[SurveyContractorRead])
+def change_household_head(
+    batch_id: int,
+    contractor_uid: str,
+    payload: SurveyChangeHeadRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """更换户主。"""
+    return {
+        "data": survey_service.change_household_head(
+            db, batch_id, contractor_uid,
+            payload.newHeadMemberUid, payload.reason, current_user,
+        )
+    }
+
+
+@router.post("/batches/{batch_id}/results/{contractor_uid}/maintain-members", response_model=ApiResponse[SurveyContractorRead])
+def maintain_survey_members(
+    batch_id: int,
+    contractor_uid: str,
+    payload: SurveyMaintainMembersRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """家庭成员维护：批量增删改。"""
+    return {
+        "data": survey_service.maintain_members(
+            db, batch_id, contractor_uid,
+            [m.model_dump() for m in payload.membersToAdd],
+            [m.model_dump() for m in payload.membersToUpdate],
+            payload.membersToDelete, payload.reason, current_user,
+        )
+    }
+
+
+@router.post("/batches/{batch_id}/results/{contractor_uid}/deregister", response_model=ApiResponse[dict])
+def deregister_contractor(
+    batch_id: int,
+    contractor_uid: str,
+    payload: SurveyDeregisterRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """注销承包方：物理删除 result，base 保留，before_summary 存完整快照。"""
+    return {
+        "data": survey_service.deregister_contractor(
+            db, batch_id, contractor_uid, payload.reason, current_user,
+        )
+    }
+
+
+@router.post("/batches/{batch_id}/results/{contractor_uid}/add-parcel", response_model=ApiResponse[dict])
+def add_parcel(
+    batch_id: int,
+    contractor_uid: str,
+    payload: SurveyAddParcelRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """新增地块：创建 SurveyDkResult + SurveyCbdkxxResult。"""
+    return {
+        "data": survey_service.add_parcel(
+            db, batch_id, contractor_uid, payload.model_dump(), current_user,
+        )
+    }
+
+
+@router.post("/batches/{batch_id}/results/{contractor_uid}/split-parcel", response_model=ApiResponse[dict])
+def split_survey_parcel(
+    batch_id: int,
+    contractor_uid: str,
+    payload: SurveySplitParcelRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """切割地块：减小原地块面积，创建新地块。"""
+    return {
+        "data": survey_service.split_parcel(
+            db, batch_id, contractor_uid, payload.model_dump(), current_user,
+        )
+    }
+
+
+@router.post("/batches/{batch_id}/results/{contractor_uid}/swap-parcels", response_model=ApiResponse[dict])
+def swap_survey_parcels(
+    batch_id: int,
+    contractor_uid: str,
+    payload: SurveySwapParcelsRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """地块互换：交换两个承包方的地块归属。"""
+    return {
+        "data": survey_service.swap_parcels(
+            db, batch_id, contractor_uid, payload.model_dump(), current_user,
+        )
+    }
+
+
+@router.post("/batches/{batch_id}/results/{contractor_uid}/split-household", response_model=ApiResponse[dict])
+def split_household(
+    batch_id: int,
+    contractor_uid: str,
+    payload: SurveySplitHouseholdRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """分户：创建新承包方，迁移指定成员和地块。"""
+    return {
+        "data": survey_service.split_household(
+            db, batch_id, contractor_uid, payload.model_dump(), current_user,
+        )
+    }
+
+
+@router.post("/batches/{batch_id}/results/{contractor_uid}/merge-household", response_model=ApiResponse[dict])
+def merge_household(
+    batch_id: int,
+    contractor_uid: str,
+    payload: SurveyMergeHouseholdRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """合户：将源承包方全部成员和地块迁移到目标承包方，注销源承包方。"""
+    return {
+        "data": survey_service.merge_household(
+            db, batch_id, contractor_uid, payload.model_dump(), current_user,
+        )
+    }
 
 
 @router.post("/batches/{batch_id}/finish", response_model=ApiResponse[SurveyBatchRead])

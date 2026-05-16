@@ -7,6 +7,119 @@
 
         <div class="gis-scene-title">{{ ui.title }}</div>
 
+        <div class="gis-search-dock">
+          <div class="gis-search-bar">
+            <select v-model="searchType" class="gis-search-select" :aria-label="ui.searchType">
+              <option v-for="option in searchTypeOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+            <input
+              v-model="queryKeyword"
+              class="gis-search-input"
+              type="search"
+              :placeholder="ui.searchPlaceholder"
+              @keyup.enter="performQuery"
+            />
+            <button type="button" class="gis-search-button" :disabled="searchLoading" @click="performQuery">
+              <span class="gis-search-button-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="5.5" />
+                  <path d="m16 16 4.2 4.2" />
+                </svg>
+              </span>
+              <span>{{ searchLoading ? ui.searching : ui.locateQuery }}</span>
+            </button>
+          </div>
+
+          <Transition name="gis-search-panel">
+            <section v-if="searchPanelVisible" class="gis-search-panel">
+              <div class="gis-search-panel-head">
+                <div class="gis-search-counts">
+                  <div>
+                    <span>{{ activeSearchCountLabel }}</span>
+                    <strong>{{ activeSearchCount }}</strong>
+                    <span>{{ ui.countUnit }}</span>
+                  </div>
+                  <div>
+                    <span>{{ ui.parcelAmount }}</span>
+                    <strong>{{ searchParcelCount }}</strong>
+                    <span>{{ ui.countUnit }}</span>
+                  </div>
+                </div>
+                <button type="button" class="gis-search-close" :aria-label="ui.closeSearchPanel" @click="searchPanelVisible = false">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+                    <path d="M6 6l12 12" />
+                    <path d="M18 6 6 18" />
+                  </svg>
+                </button>
+              </div>
+
+              <div class="gis-search-tabs">
+                <button
+                  v-for="tab in visibleSearchTabs"
+                  :key="tab.value"
+                  type="button"
+                  class="gis-search-tab"
+                  :class="{ 'is-active': activeSearchTab === tab.value }"
+                  @click="activeSearchTab = tab.value"
+                >
+                  {{ tab.label }}
+                </button>
+              </div>
+
+              <div class="gis-search-message" v-if="queryMessage">{{ queryMessage }}</div>
+              <div class="gis-search-list" v-if="activeSearchItems.length">
+                <button
+                  v-for="item in activeSearchItems"
+                  :key="`${item.resultType}-${item.code}`"
+                  type="button"
+                  class="gis-search-result"
+                  @click="applySearchResult(item)"
+                >
+                  <div class="gis-search-result-main">
+                    <div class="gis-search-result-title">{{ item.name || ui.unknown }}</div>
+                    <div class="gis-search-result-lines">
+                      <span>{{ resultCodeLabel(item) }}：{{ item.code || ui.unknown }}</span>
+                      <span>{{ resultSubLabel(item) }}：{{ resultSubValue(item) }}</span>
+                    </div>
+                  </div>
+                  <div class="gis-search-result-actions">
+                    <span :title="ui.parcelAmount">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M4 6h12l4 4v8H4z" />
+                        <path d="M16 6v4h4" />
+                      </svg>
+                      {{ item.parcelCount || 0 }}
+                    </span>
+                    <span :title="ui.locateQuery">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 21s6-5.2 6-10a6 6 0 1 0-12 0c0 4.8 6 10 6 10Z" />
+                        <circle cx="12" cy="11" r="2.2" />
+                      </svg>
+                    </span>
+                  </div>
+                </button>
+              </div>
+              <div v-else class="gis-search-empty">{{ ui.notFound }}</div>
+            </section>
+          </Transition>
+        </div>
+
+        <div v-show="selectedParcel" ref="parcelPopupRef" class="gis-parcel-popup">
+          <div class="gis-parcel-popup-title">{{ selectedParcel?.dkmc || selectedParcel?.dkbm || ui.objectParcel }}</div>
+          <div class="gis-parcel-popup-grid">
+            <span>{{ ui.parcelCode }}</span>
+            <strong>{{ selectedParcel?.dkbm || ui.unknown }}</strong>
+            <span>{{ ui.contractor }}</span>
+            <strong>{{ selectedParcel?.cbfmc || ui.unknown }}</strong>
+            <span>{{ ui.issuer }}</span>
+            <strong>{{ selectedParcel?.fbfmc || ui.unknown }}</strong>
+            <span>{{ ui.area }}</span>
+            <strong>{{ selectedParcel?.htmj || selectedParcel?.scmj || ui.unknown }}</strong>
+          </div>
+        </div>
+
         <div class="gis-floating-toolbar">
           <button
             v-for="tool in tools"
@@ -144,13 +257,15 @@
           </div>
         </div>
 
-        <aside class="gis-property-panel">
-          <div class="gis-property-title">{{ ui.attrTitle }}</div>
-          <div class="gis-attr-card" v-for="item in attrs" :key="item.label">
-            <div class="gis-attr-card-label">{{ item.label }}</div>
-            <div class="gis-attr-card-value">{{ item.value }}</div>
-          </div>
-        </aside>
+        <Transition name="gis-property-panel">
+          <aside v-if="propertyPanelVisible" :key="propertyPanelKey" class="gis-property-panel">
+            <div class="gis-property-title">{{ ui.attrTitle }}</div>
+            <div class="gis-attr-card" v-for="item in attrs" :key="item.label">
+              <div class="gis-attr-card-label">{{ item.label }}</div>
+              <div class="gis-attr-card-value">{{ item.value }}</div>
+            </div>
+          </aside>
+        </Transition>
 
         <div class="gis-map-crosshair"></div>
 
@@ -170,7 +285,7 @@
 <script setup>
 import "ol/ol.css";
 
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
 import { ElMessage } from "element-plus";
 import Feature from "ol/Feature";
 import GeoJSON from "ol/format/GeoJSON";
@@ -180,15 +295,18 @@ import { ScaleLine } from "ol/control";
 import { Draw } from "ol/interaction";
 import TileLayer from "ol/layer/Tile";
 import VectorLayer from "ol/layer/Vector";
+import Overlay from "ol/Overlay";
 import WMTSGrid from "ol/tilegrid/WMTS";
 import { fromLonLat, get as getProjection, toLonLat, transformExtent } from "ol/proj";
 import { OSM, TileWMS, Vector as VectorSource, XYZ } from "ol/source";
 import WMTS from "ol/source/WMTS";
 import { Fill, Icon, Stroke, Style, Text } from "ol/style";
+import MultiPolygon from "ol/geom/MultiPolygon";
 import Point from "ol/geom/Point";
+import Polygon from "ol/geom/Polygon";
 import { getArea, getLength } from "ol/sphere";
 
-import { searchGisBusiness } from "../api/gis";
+import { fetchGisParcel, searchGisBusiness } from "../api/gis";
 import { fetchMapLayers } from "../api/mapLayer";
 import { basemapConfigs as fallbackBasemaps, vectorLayerConfigs as fallbackVectors } from "../config/mapLayers";
 
@@ -211,6 +329,15 @@ const ui = {
   labelHint: "\u70b9\u51fb\u5730\u56fe\u4efb\u610f\u4f4d\u7f6e\u5373\u53ef\u843d\u70b9\uff0c\u6587\u5b57\u4f1a\u8ddf\u968f\u6807\u6ce8\u663e\u793a\u3002",
   queryTool: "\u67e5\u8be2\u5de5\u5177",
   queryPlaceholder: "\u8f93\u5165\u5730\u5757\u7f16\u7801\u3001\u53d1\u5305\u65b9\u3001\u627f\u5305\u65b9\u6216\u4e1a\u52a1\u6d41\u6c34\u53f7",
+  searchPlaceholder: "\u8bf7\u8f93\u5165\u627f\u5305\u65b9\u6216\u53d1\u5305\u65b9\u540d\u79f0",
+  searchType: "\u641c\u7d22\u7c7b\u578b",
+  searchAll: "\u627f\u5305\u65b9 / \u53d1\u5305\u65b9",
+  searching: "\u67e5\u8be2\u4e2d",
+  closeSearchPanel: "\u5173\u95ed\u641c\u7d22\u7ed3\u679c",
+  countUnit: "\u4e2a",
+  contractorAmount: "\u627f\u5305\u65b9\u6570\u91cf\uff1a",
+  issuerAmount: "\u53d1\u5305\u65b9\u6570\u91cf\uff1a",
+  parcelAmount: "\u5730\u5757\u6570\u91cf\uff1a",
   locateQuery: "\u5b9a\u4f4d\u67e5\u8be2",
   clearSelection: "\u6e05\u9664\u9009\u62e9",
   queryTip: "\u652f\u6301\u4e1a\u52a1\u7533\u8bf7\u3001\u53d1\u5305\u65b9\u3001\u627f\u5305\u65b9\u4e09\u7c7b\u6570\u636e\u8054\u52a8\u67e5\u8be2\uff0c\u4e5f\u652f\u6301\u5730\u56fe\u70b9\u51fb\u67e5\u8be2\u3002",
@@ -244,6 +371,7 @@ const ui = {
   contractorCode: "\u627f\u5305\u65b9\u7f16\u7801",
   contractorType: "\u627f\u5305\u65b9\u7c7b\u578b",
   objectLayer: "\u5730\u5757\u56fe\u5c42",
+  objectParcel: "\u627f\u5305\u5730\u5757",
   objectRequest: "\u4e1a\u52a1\u7533\u8bf7",
   objectIssuer: "\u53d1\u5305\u65b9",
   objectContractor: "\u627f\u5305\u65b9",
@@ -264,6 +392,7 @@ const ui = {
   notFound: "\u672a\u67e5\u8be2\u5230\u5339\u914d\u7684\u4e1a\u52a1\u5bf9\u8c61\u3002",
   clickNoFeature: "\u5f53\u524d\u70b9\u51fb\u4f4d\u7f6e\u672a\u67e5\u8be2\u5230\u56fe\u5c42\u8981\u7d20\u3002",
   mapClickHit: "\u5df2\u901a\u8fc7\u5730\u56fe\u70b9\u51fb\u547d\u4e2d\u56fe\u5c42 ",
+  parcelClickHit: "\u5df2\u547d\u4e2d\u627f\u5305\u5730\u5757 ",
   clickPoint: "\u70b9\u51fb\u70b9",
   meters: "\u7c73",
   squareMeters: "\u5e73\u65b9\u7c73",
@@ -305,6 +434,7 @@ const resetTool = {
 
 const mapRootRef = ref(null);
 const scaleLineRef = ref(null);
+const parcelPopupRef = ref(null);
 const mapRef = shallowRef(null);
 
 const activeTool = ref("layers");
@@ -314,22 +444,20 @@ const measureMode = ref("distance");
 const measureResult = ref(`0 ${ui.meters}`);
 const queryKeyword = ref("");
 const queryMessage = ref("");
+const searchType = ref("all");
+const searchLoading = ref(false);
+const searchPanelVisible = ref(false);
+const activeSearchTab = ref("contractors");
 const currentCoord = ref(ui.defaultCoord);
 const markText = ref("");
 
 const basemapRows = ref([]);
 const layerRows = ref([]);
 const searchResult = ref({ requests: [], issuers: [], contractors: [] });
-const attrs = ref([
-  { label: ui.currentObject, value: ui.objectLayer },
-  { label: ui.currentBusiness, value: ui.defaultBusiness },
-  { label: ui.issuer, value: ui.unknown },
-  { label: ui.contractor, value: ui.unknown },
-  { label: ui.parcelCode, value: ui.unknown },
-  { label: ui.area, value: ui.unknown },
-  { label: ui.status, value: ui.unknown },
-  { label: ui.coord, value: ui.defaultCoord },
-]);
+const selectedParcel = ref(null);
+const propertyPanelVisible = ref(false);
+const propertyPanelKey = ref(0);
+const attrs = ref([]);
 
 const groupedLayerRows = computed(() => {
   const groups = new globalThis.Map();
@@ -352,14 +480,44 @@ const basemapOptions = computed(() =>
 
 const hasSearchResult = computed(() => searchResult.value.requests.length || searchResult.value.issuers.length || searchResult.value.contractors.length);
 
+const visibleSearchTabs = computed(() =>
+  searchTypeOptions
+    .filter((option) => option.value !== "all")
+    .filter((option) => searchType.value === "all" || option.value === searchType.value),
+);
+
+const activeSearchItems = computed(() => searchResult.value[activeSearchTab.value] || []);
+
+const activeSearchCountLabel = computed(() => (activeSearchTab.value === "issuers" ? ui.issuerAmount : ui.contractorAmount));
+
+const activeSearchCount = computed(() => activeSearchItems.value.length);
+
+const searchParcelCount = computed(() =>
+  activeSearchItems.value.reduce((total, item) => total + Number(item.parcelCount || 0), 0),
+);
+
 const layerInstances = new globalThis.Map();
 const basemapLayerInstances = new globalThis.Map();
+
+const basemapThemeMap = {
+  image: { topbarBg: "rgba(229, 237, 221, 0.96)", topbarAccent: "#5f7f44", topbarText: "#243325" },
+  vector: { topbarBg: "rgba(226, 237, 246, 0.96)", topbarAccent: "#2f70a2", topbarText: "#213447" },
+  terrain: { topbarBg: "rgba(237, 231, 214, 0.96)", topbarAccent: "#786f45", topbarText: "#393525" },
+};
+
+const searchTypeOptions = [
+  { label: ui.searchAll, value: "all" },
+  { label: ui.contractorSection, value: "contractors" },
+  { label: ui.issuerSection, value: "issuers" },
+];
 
 let scaleControl = null;
 let measureDrawInteraction = null;
 let labelDrawInteraction = null;
 let measureLayer = null;
 let labelLayer = null;
+let parcelHighlightLayer = null;
+let parcelPopupOverlay = null;
 
 function normalizeLayer(item) {
   const rawServiceConfigs =
@@ -384,7 +542,7 @@ function normalizeLayer(item) {
     const url = service.serviceUrl ?? service.service_url ?? item.serviceUrl ?? item.service_url ?? "";
     return {
       id: service.id || `${item.key}_${service.serviceType ?? service.layerType ?? item.layerType}_${service.minZoom ?? 0}_${service.maxZoom ?? 24}`,
-      serviceType: service.serviceType ?? service.layerType ?? item.layerType ?? item.layer_type ?? "WMS",
+      serviceType: String(service.serviceType ?? service.layerType ?? item.layerType ?? item.layer_type ?? "WMS").toUpperCase(),
       serviceUrl: url,
       projection: service.projection ?? item.projection ?? "EPSG:3857",
       minZoom: Number(service.minZoom ?? service.min_zoom ?? 0),
@@ -413,21 +571,23 @@ function normalizeLayer(item) {
 
 function ensurePrimaryGeoServerLayer(rows) {
   const normalizedRows = rows.map(normalizeLayer).filter(Boolean);
-  const primaryLayer = normalizedRows.find((item) => item.key === "dk3213242017");
+  const primaryLayer = normalizedRows.find((item) => item.key === "survey_dk_result");
   if (primaryLayer) {
     primaryLayer.visible = true;
     primaryLayer.defaultVisible = true;
-    primaryLayer.name = "GeoServer地块图层";
-    primaryLayer.groupName = "GeoServer图层";
+    primaryLayer.name = "\u627f\u5305\u5730\u5757";
+    primaryLayer.groupName = "GeoServer\u56fe\u5c42";
     return normalizedRows;
   }
 
-  const fallbackPrimary = normalizeLayer(fallbackVectors.find((item) => item.key === "dk3213242017") || fallbackVectors[0]);
+  const fallbackPrimary = normalizeLayer(fallbackVectors.find((item) => item.key === "survey_dk_result") || fallbackVectors[0]);
   if (!fallbackPrimary) {
     return normalizedRows;
   }
   fallbackPrimary.visible = true;
   fallbackPrimary.defaultVisible = true;
+  fallbackPrimary.name = "\u627f\u5305\u5730\u5757";
+  fallbackPrimary.groupName = "GeoServer\u56fe\u5c42";
   return [...normalizedRows, fallbackPrimary];
 }
 
@@ -437,6 +597,13 @@ async function loadLayerConfigs() {
     const rows = ensurePrimaryGeoServerLayer(data.data || []);
     basemapRows.value = rows.filter((item) => item.category === "basemap").sort((a, b) => a.sortOrder - b.sortOrder);
     layerRows.value = rows.filter((item) => item.category === "vector").sort((a, b) => (a.groupName || "").localeCompare(b.groupName || "") || a.sortOrder - b.sortOrder);
+
+    // If the API returned successfully but returned zero basemap layers
+    // (e.g. DB has only user-created vector layers), inject the local
+    // config basemaps so the map still gets a tile background.
+    if (!basemapRows.value.length) {
+      basemapRows.value = fallbackBasemaps.map(normalizeLayer);
+    }
   } catch (error) {
     basemapRows.value = fallbackBasemaps.map(normalizeLayer);
     layerRows.value = ensurePrimaryGeoServerLayer(fallbackVectors);
@@ -448,7 +615,16 @@ async function loadLayerConfigs() {
   const defaultBasemap = basemapRows.value.find((item) => item.isDefault) || basemapRows.value[0];
   if (defaultBasemap) {
     activeBasemap.value = defaultBasemap.key;
+    emitBasemapTheme(defaultBasemap.key);
   }
+}
+
+function emitBasemapTheme(key = activeBasemap.value) {
+  window.dispatchEvent(
+    new CustomEvent("app-theme-change", {
+      detail: basemapThemeMap[key] || basemapThemeMap.image,
+    }),
+  );
 }
 
 function parseServiceUrl(rawUrl) {
@@ -691,6 +867,13 @@ function createPointStyle(labelText) {
   });
 }
 
+function createParcelHighlightStyle() {
+  return new Style({
+    fill: new Fill({ color: "rgba(255, 64, 129, 0.26)" }),
+    stroke: new Stroke({ color: "#ff4081", width: 5 }),
+  });
+}
+
 function createWmsLayer(config) {
   const { baseUrl, params } = parseServiceUrl(config.serviceUrl);
   return new TileLayer({
@@ -794,8 +977,9 @@ async function createOperationalLayersForRow(config) {
     try {
       const layer = await createOperationalLayer(subConfig);
       if (layer) {
-        layer.set("serviceType", sc.serviceType);
+        layer.set("serviceType", String(sc.serviceType || "").toUpperCase());
         layer.set("parentKey", config.key);
+        layer.set("serviceConfig", subConfig);
         const subKey = `${config.key}_${sc.serviceType.toLowerCase()}_${sc.minZoom}_${sc.maxZoom}`;
         results.push({ key: subKey, layer });
         typesCreated.add(sc.serviceType);
@@ -824,6 +1008,32 @@ function getOrCreateQueryMarkerLayer() {
   layerInstances.set("query_marker", layer);
   mapRef.value?.addLayer(layer);
   return layer;
+}
+
+function getOrCreateParcelHighlightLayer() {
+  if (parcelHighlightLayer) {
+    return parcelHighlightLayer;
+  }
+  parcelHighlightLayer = new VectorLayer({
+    source: new VectorSource(),
+    style: createParcelHighlightStyle(),
+    visible: true,
+  });
+  parcelHighlightLayer.set("systemOverlay", true);
+  parcelHighlightLayer.setZIndex(1000);
+  mapRef.value?.addLayer(parcelHighlightLayer);
+  return parcelHighlightLayer;
+}
+
+function getFeatureProperty(properties, candidates) {
+  const entries = Object.entries(properties || {});
+  for (const candidate of candidates) {
+    const found = entries.find(([key]) => key.toLowerCase() === candidate.toLowerCase());
+    if (found?.[1] != null && found[1] !== "") {
+      return String(found[1]).trim();
+    }
+  }
+  return "";
 }
 
 function updateCurrentCoord(coordinate) {
@@ -856,33 +1066,225 @@ function showMapClickMarker(coordinate) {
   source.addFeature(new Feature({ geometry: new Point(coordinate) }));
 }
 
+function getGeometryProjection(geometry) {
+  if (geometry?.crs?.properties?.name) {
+    const crsName = String(geometry.crs.properties.name);
+    const epsgMatch = crsName.match(/EPSG[:/](\d+)/i);
+    if (epsgMatch?.[1] === "3857") {
+      return "EPSG:3857";
+    }
+    if (epsgMatch?.[1] === "4326" || epsgMatch?.[1] === "4490") {
+      return "EPSG:4326";
+    }
+  }
+  const firstNumberPair = (coords) => {
+    if (!Array.isArray(coords)) return null;
+    if (typeof coords[0] === "number" && typeof coords[1] === "number") {
+      return coords;
+    }
+    for (const item of coords) {
+      const pair = firstNumberPair(item);
+      if (pair) return pair;
+    }
+    return null;
+  };
+  const pair = firstNumberPair(geometry?.coordinates);
+  if (!pair) {
+    return "EPSG:4326";
+  }
+  return Math.abs(pair[0]) > 180 || Math.abs(pair[1]) > 90 ? "EPSG:3857" : "EPSG:4326";
+}
+
+function coordinatesLookLikeLonLat(coords) {
+  if (!Array.isArray(coords)) return false;
+  if (typeof coords[0] === "number" && typeof coords[1] === "number") {
+    return Math.abs(coords[0]) <= 180 && Math.abs(coords[1]) <= 90;
+  }
+  return coords.some(coordinatesLookLikeLonLat);
+}
+
+function projectLonLatCoordinates(coords) {
+  if (!Array.isArray(coords)) return coords;
+  if (typeof coords[0] === "number" && typeof coords[1] === "number") {
+    return fromLonLat(coords);
+  }
+  return coords.map(projectLonLatCoordinates);
+}
+
+function readLonLatParcelFeature(parcel, geometry) {
+  if (!geometry || !coordinatesLookLikeLonLat(geometry.coordinates)) {
+    return null;
+  }
+  if (geometry.type === "Polygon") {
+    return new Feature({
+      ...parcel,
+      geometry: new Polygon(projectLonLatCoordinates(geometry.coordinates)),
+    });
+  }
+  if (geometry.type === "MultiPolygon") {
+    return new Feature({
+      ...parcel,
+      geometry: new MultiPolygon(projectLonLatCoordinates(geometry.coordinates)),
+    });
+  }
+  return null;
+}
+
+function readParcelFeature(parcel, fallbackFeature) {
+  const geometries = [parcel.geometry, fallbackFeature?.geometry].filter(Boolean);
+  for (const geometry of geometries) {
+    try {
+      const manualFeature = readLonLatParcelFeature(parcel, geometry);
+      if (manualFeature) {
+        return manualFeature;
+      }
+      return new GeoJSON().readFeature(
+        {
+          type: "Feature",
+          geometry,
+          properties: parcel,
+        },
+        { dataProjection: getGeometryProjection(geometry), featureProjection: "EPSG:3857" },
+      );
+    } catch (error) {
+      console.warn("Failed to parse parcel geometry:", error);
+    }
+  }
+  return null;
+}
+
+function highlightParcel(parcel, coordinate, fallbackFeature = null) {
+  const highlightLayer = getOrCreateParcelHighlightLayer();
+  const source = highlightLayer.getSource();
+  source.clear();
+
+  const feature = readParcelFeature(parcel, fallbackFeature);
+  if (feature) {
+    source.addFeature(feature);
+    const extent = feature.getGeometry()?.getExtent();
+    if (extent && extent.every(Number.isFinite)) {
+      mapRef.value.getView().fit(extent, {
+        padding: [110, 380, 130, 90],
+        duration: 450,
+        maxZoom: 18,
+      });
+    }
+  }
+
+  parcelPopupOverlay?.setPosition(coordinate);
+}
+
+function updateAttrsByParcel(parcel) {
+  updateAttrsByEntries([
+    { label: "\u5730\u5757\u4fe1\u606f", value: parcel.dkmc || parcel.dkbm || ui.unknown },
+    { label: "\u5408\u540c\u9762\u79ef", value: parcel.htmj || ui.unknown },
+    { label: "\u5b9e\u6d4b\u9762\u79ef", value: parcel.scmj || ui.unknown },
+    { label: ui.contractor, value: parcel.cbfmc || ui.unknown },
+    { label: ui.issuer, value: parcel.fbfmc || ui.unknown },
+  ]);
+}
+
+async function showPropertyPanel() {
+  const wasVisible = propertyPanelVisible.value;
+  propertyPanelVisible.value = false;
+  if (wasVisible) {
+    await new Promise((resolve) => window.setTimeout(resolve, 160));
+  }
+  await nextTick();
+  propertyPanelKey.value += 1;
+  propertyPanelVisible.value = true;
+}
+
+async function applyParcelSelection(dkbm, coordinate, fallbackFeature = null) {
+  if (!dkbm) {
+    return false;
+  }
+  let parcel = null;
+  try {
+    const { data } = await fetchGisParcel(dkbm);
+    parcel = data.data;
+    if (!parcel) {
+      return false;
+    }
+  } catch (_error) {
+    return false;
+  }
+
+  selectedParcel.value = parcel;
+  updateAttrsByParcel(parcel);
+  await showPropertyPanel();
+  try {
+    highlightParcel(parcel, coordinate, fallbackFeature);
+  } catch (error) {
+    console.warn("Failed to highlight parcel:", error);
+  }
+  queryMessage.value = `${ui.parcelClickHit}${parcel.dkbm}`;
+  return true;
+}
+
+function buildWmsFeatureInfoUrl(instance, coordinate) {
+  const map = mapRef.value;
+  const view = map?.getView();
+  const size = map?.getSize();
+  if (!map || !view || !size) {
+    return "";
+  }
+
+  const source = instance?.getSource?.();
+  const sourceParams = source?.getParams?.() || {};
+  const serviceConfig = instance.get("serviceConfig") || {};
+  const parsed = parseServiceUrl(serviceConfig.serviceUrl || source?.getUrls?.()?.[0] || source?.getUrl?.() || "");
+  const params = { ...parsed.params, ...sourceParams };
+  const version = params.VERSION || "1.1.1";
+  const layerName = params.LAYERS || params.LAYER || getWmsLayerName(serviceConfig);
+  if (!parsed.baseUrl || !layerName) {
+    return "";
+  }
+
+  const pixel = map.getPixelFromCoordinate(coordinate);
+  const width = Math.round(size[0]);
+  const height = Math.round(size[1]);
+  const extent = view.calculateExtent(size);
+  const projectionCode = view.getProjection().getCode();
+  const isV13 = version === "1.3.0";
+  const requestParams = new URLSearchParams({
+    SERVICE: "WMS",
+    VERSION: version,
+    REQUEST: "GetFeatureInfo",
+    FORMAT: params.FORMAT || "image/png",
+    TRANSPARENT: "true",
+    LAYERS: layerName,
+    QUERY_LAYERS: layerName,
+    STYLES: params.STYLES || "",
+    INFO_FORMAT: "application/json",
+    FEATURE_COUNT: "10",
+    WIDTH: String(width),
+    HEIGHT: String(height),
+    BBOX: extent.join(","),
+  });
+
+  requestParams.set(isV13 ? "CRS" : "SRS", projectionCode);
+  requestParams.set(isV13 ? "I" : "X", String(Math.round(pixel[0])));
+  requestParams.set(isV13 ? "J" : "Y", String(Math.round(pixel[1])));
+
+  return `${parsed.baseUrl}?${requestParams.toString()}`;
+}
+
 async function fetchWmsFeatureInfo(coordinate) {
   const view = mapRef.value?.getView();
   if (!view) {
     return false;
   }
-  const resolution = view.getResolution();
-  const projection = view.getProjection();
 
   const wmsLayers = [];
   layerInstances.forEach((instance, key) => {
-    if (instance.get("serviceType") === "WMS" && instance.getVisible()) {
+    if (instance.get("serviceType") === "WMS" && instance.get("parentKey") === "survey_dk_result" && instance.getVisible()) {
       wmsLayers.push({ key, instance });
     }
   });
 
   for (const { instance } of wmsLayers) {
-    const source = instance?.getSource?.();
-    if (!source?.getFeatureInfoUrl || !resolution) {
-      continue;
-    }
-    const sourceParams = source.getParams?.() || {};
-    const layerName = sourceParams.LAYERS || "";
-    const url = source.getFeatureInfoUrl(coordinate, resolution, projection, {
-      INFO_FORMAT: "application/json",
-      FEATURE_COUNT: 10,
-      QUERY_LAYERS: layerName,
-    });
+    const url = buildWmsFeatureInfoUrl(instance, coordinate);
     if (!url) {
       continue;
     }
@@ -897,11 +1299,12 @@ async function fetchWmsFeatureInfo(coordinate) {
       const parentRow = layerRows.value.find((r) => r.key === parentKey);
       const layerLabel = parentRow?.name || parentKey || "WMS";
       const properties = features[0].properties || {};
-      const entries = Object.entries(properties).slice(0, 8).map(([k, v]) => ({
-        label: k,
-        value: v == null || v === "" ? ui.unknown : String(v),
-      }));
-      updateAttrsByEntries([{ label: ui.currentObject, value: layerLabel }, { label: "\u56fe\u5c42\u7f16\u7801", value: parentKey }, ...entries]);
+      const dkbm = getFeatureProperty(properties, ["dkbm", "DKBM", "source_dkbm", "SOURCE_DKBM", "地块代码"]);
+      if (await applyParcelSelection(dkbm, coordinate, features[0])) {
+        return true;
+      }
+      selectedParcel.value = null;
+      propertyPanelVisible.value = false;
       queryMessage.value = `${ui.mapClickHit}${layerLabel}`;
       return true;
     } catch (_error) {
@@ -974,7 +1377,7 @@ async function fetchWmtsLonLatExtent(config) {
 
 async function fitToPrimaryLayer() {
   const primaryLayer =
-    layerRows.value.find((item) => item.key === "dk3213242017") ||
+    layerRows.value.find((item) => item.key === "survey_dk_result") ||
     layerRows.value.find((item) => (item.groupName || "").includes("GeoServer"));
   if (!primaryLayer || !mapRef.value) {
     return;
@@ -1030,6 +1433,13 @@ async function buildMap() {
     }
   }
 
+  // Sync initial visibility for all rows — layer instances are created with
+  // per-config visibility from normalizeLayer(), but the UI checkbox state
+  // in layerRows may diverge, so force a full pass here.
+  for (const item of layerRows.value) {
+    syncLayerVisibility(item);
+  }
+
   scaleControl = new ScaleLine({
     target: scaleLineRef.value,
     units: "metric",
@@ -1046,6 +1456,14 @@ async function buildMap() {
     }),
   });
 
+  parcelPopupOverlay = new Overlay({
+    element: parcelPopupRef.value,
+    positioning: "bottom-center",
+    offset: [0, -18],
+    stopEvent: false,
+  });
+  mapRef.value.addOverlay(parcelPopupOverlay);
+
   mapRef.value.on("pointermove", (event) => {
     updateCurrentCoord(event.coordinate);
   });
@@ -1054,6 +1472,12 @@ async function buildMap() {
     updateCurrentCoord(event.coordinate);
     showMapClickMarker(event.coordinate);
     const hit = await fetchWmsFeatureInfo(event.coordinate);
+    if (!hit) {
+      parcelHighlightLayer?.getSource?.().clear();
+      parcelPopupOverlay?.setPosition(undefined);
+      selectedParcel.value = null;
+      propertyPanelVisible.value = false;
+    }
     if (!hit && activeTool.value === "query") {
       queryMessage.value = ui.clickNoFeature;
     }
@@ -1062,6 +1486,7 @@ async function buildMap() {
 
 function switchBasemap() {
   if (!mapRef.value) return;
+  emitBasemapTheme();
   basemapLayerInstances.forEach((layer) => {
     mapRef.value.removeLayer(layer);
   });
@@ -1182,6 +1607,7 @@ async function applyRequestResult(item, silent = false) {
     { label: ui.status, value: item.status || ui.unknown },
     { label: ui.currentStep, value: item.currentStep || ui.unknown },
   ]);
+  await showPropertyPanel();
   if (!silent) {
     queryMessage.value = `${ui.requestLinked}${item.serialNo}`;
   }
@@ -1199,6 +1625,7 @@ async function applyIssuerResult(item) {
     { label: ui.address, value: item.address || ui.unknown },
     { label: ui.coord, value: currentCoord.value },
   ]);
+  await showPropertyPanel();
   queryMessage.value = `${ui.issuerLinked}${item.name}`;
 }
 
@@ -1214,7 +1641,52 @@ async function applyContractorResult(item) {
     { label: ui.contractorType, value: item.type || ui.unknown },
     { label: ui.coord, value: currentCoord.value },
   ]);
+  await showPropertyPanel();
   queryMessage.value = `${ui.contractorLinked}${item.name}`;
+}
+
+function normalizeSearchResultForType(data) {
+  const result = data || { requests: [], issuers: [], contractors: [] };
+  return {
+    requests: result.requests || [],
+    issuers: searchType.value === "contractors" ? [] : result.issuers || [],
+    contractors: searchType.value === "issuers" ? [] : result.contractors || [],
+  };
+}
+
+function activateFirstSearchTab() {
+  if (searchType.value !== "issuers" && searchResult.value.contractors.length) {
+    activeSearchTab.value = "contractors";
+    return;
+  }
+  if (searchType.value !== "contractors" && searchResult.value.issuers.length) {
+    activeSearchTab.value = "issuers";
+    return;
+  }
+  activeSearchTab.value = searchType.value === "issuers" ? "issuers" : "contractors";
+}
+
+async function applySearchResult(item) {
+  if (item.resultType === "issuer") {
+    await applyIssuerResult(item);
+    return;
+  }
+  await applyContractorResult(item);
+}
+
+function resultCodeLabel(item) {
+  return item.resultType === "issuer" ? ui.issuerCode : ui.contractorCode;
+}
+
+function resultSubLabel(item) {
+  return item.resultType === "issuer" ? ui.ownerName : ui.idNo;
+}
+
+function resultSubValue(item) {
+  if (item.resultType === "issuer") {
+    return item.ownerName || ui.notMaintainedOwner;
+  }
+  return item.idNo || ui.notMaintainedId;
 }
 
 async function performQuery() {
@@ -1222,23 +1694,29 @@ async function performQuery() {
   if (!keyword) {
     queryMessage.value = ui.emptyKeyword;
     searchResult.value = { requests: [], issuers: [], contractors: [] };
+    searchPanelVisible.value = true;
     return;
   }
 
+  searchLoading.value = true;
+  searchPanelVisible.value = true;
   try {
-    const { data } = await searchGisBusiness({ keyword, limit: 6 });
-    searchResult.value = data.data || { requests: [], issuers: [], contractors: [] };
+    const { data } = await searchGisBusiness({ keyword, limit: 10 });
+    searchResult.value = normalizeSearchResultForType(data.data);
   } catch (_error) {
     searchResult.value = { requests: [], issuers: [], contractors: [] };
+  } finally {
+    searchLoading.value = false;
   }
+  activateFirstSearchTab();
 
-  if (searchResult.value.requests.length) {
-    await applyRequestResult(searchResult.value.requests[0], true);
-    queryMessage.value = `${ui.requestMatched}${searchResult.value.requests.length}${ui.requestMatchedSuffix}`;
+  if (searchResult.value.contractors.length) {
+    await applyContractorResult(searchResult.value.contractors[0]);
   } else if (searchResult.value.issuers.length) {
     await applyIssuerResult(searchResult.value.issuers[0]);
-  } else if (searchResult.value.contractors.length) {
-    await applyContractorResult(searchResult.value.contractors[0]);
+  } else if (activeTool.value === "query" && searchResult.value.requests.length) {
+    await applyRequestResult(searchResult.value.requests[0], true);
+    queryMessage.value = `${ui.requestMatched}${searchResult.value.requests.length}${ui.requestMatchedSuffix}`;
   } else {
     queryMessage.value = ui.notFound;
     await fitToPrimaryLayer();
@@ -1248,8 +1726,13 @@ async function performQuery() {
 function clearSelection() {
   const markerLayer = layerInstances.get("query_marker");
   markerLayer?.getSource?.().clear();
+  parcelHighlightLayer?.getSource?.().clear();
+  parcelPopupOverlay?.setPosition(undefined);
+  selectedParcel.value = null;
+  propertyPanelVisible.value = false;
   queryMessage.value = "";
   searchResult.value = { requests: [], issuers: [], contractors: [] };
+  searchPanelVisible.value = false;
 }
 
 async function resetView() {
@@ -1259,8 +1742,8 @@ async function resetView() {
 onMounted(async () => {
   await loadLayerConfigs();
   await buildMap();
-  await fitToPrimaryLayer();
   mapRef.value.setTarget(mapRootRef.value);
+  await fitToPrimaryLayer();
 });
 
 onBeforeUnmount(() => {

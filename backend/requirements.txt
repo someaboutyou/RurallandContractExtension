@@ -9,3 +9,5 @@ spiffworkflow==3.1.2
 python-multipart==0.0.9
 pyproj==3.6.1
 fiona==1.10.1
+redis==5.2.1
+httpx==0.28.1

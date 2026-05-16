@@ -10,6 +10,7 @@ const DataCenterView = () => import("../views/DataCenterView.vue");
 const ArchiveView = () => import("../views/ArchiveView.vue");
 const LayerManagementView = () => import("../views/LayerManagementView.vue");
 const RegionManagementView = () => import("../views/RegionManagementView.vue");
+const DictionaryManagementView = () => import("../views/DictionaryManagementView.vue");
 const UserView = () => import("../views/UserView.vue");
 const IssuerView = () => import("../views/IssuerView.vue");
 const ContractorView = () => import("../views/ContractorView.vue");
@@ -49,6 +50,12 @@ const appChildren = [
     meta: { requiresAuth: true, permissions: [...REQUEST_MODULE_PERMISSIONS, "users.view", "roles.view"] },
   },
   { path: "users", name: "users", component: UserView, meta: { requiresAuth: true, permissions: ["users.view", "roles.view"] } },
+  {
+    path: "dictionaries",
+    name: "dictionaries",
+    component: DictionaryManagementView,
+    meta: { requiresAuth: true, permissions: ["dictionaries.view"] },
+  },
   { path: "regions", name: "regions", component: RegionManagementView, meta: { requiresAuth: true, permissions: ["regions.view", "regions.manage"] } },
   { path: "workflows", name: "workflows", component: WorkflowDesignerView, meta: { requiresAuth: true, permissions: ["roles.manage"] } },
   { path: "layers", name: "layers", component: LayerManagementView, meta: { requiresAuth: true, permissions: ["layers.manage"] } },

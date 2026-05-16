@@ -8,6 +8,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# CMD->PowerShell arg forwarding passes "%~1".."%~9"; missing args become ""
+# which PowerShell binds positionally, overwriting defaults. Guard all params.
+if ($Port -lt 1) { $Port = 15432 }
+if ([string]::IsNullOrWhiteSpace($DbName)) { $DbName = "erlunyanbao" }
+if ([string]::IsNullOrWhiteSpace($DbUser)) { $DbUser = "RurallandContractExtension" }
+if ([string]::IsNullOrWhiteSpace($DbPassword)) { $DbPassword = "RurallandContractExtension" }
+
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $runtimeRoot = Join-Path $projectRoot "runtime"
 $pgHome = Join-Path $runtimeRoot "windows\postgresql"
@@ -23,6 +30,8 @@ $pgIsReady = Join-Path $pgBin "pg_isready.exe"
 $pgLog = Join-Path $logDir "postgres.log"
 $pgDirectLog = Join-Path $logDir "postgres-direct.log"
 $pgHost = "127.0.0.1"
+
+$env:PATH = "$pgBin;$env:PATH"
 
 function Require-File([string]$Path, [string]$Message) {
     if (-not (Test-Path $Path)) {
@@ -63,6 +72,15 @@ function Test-ExtensionExists([string]$Name) {
     $result = & $psql "-h" "127.0.0.1" "-p" "$Port" "-U" $DbUser "-d" $DbName "-tAc" "SELECT 1 FROM pg_extension WHERE extname = '$literal'"
     $result = (($result | Out-String).Trim())
     return $result -eq "1"
+}
+
+function New-RandomPassword {
+    $chars = "ABCDEFGHKMNPQRSTUVWXYZabcdefghkmnpqrstuvwxyz23456789!#$%&*"
+    $random = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $bytes = New-Object byte[] 24
+    $random.GetBytes($bytes)
+    $password = -join ($bytes | ForEach-Object { $chars[$_ % $chars.Length] })
+    return $password
 }
 
 function Test-PortInUse([int]$PortToCheck) {
@@ -187,8 +205,15 @@ if ($pgStatus -eq 0) {
         }
         Remove-Item -LiteralPath (Join-Path $pgData ".gitkeep") -Force -ErrorAction SilentlyContinue
 
+        if ($DbPassword -eq "RurallandContractExtension") {
+            $DbPassword = New-RandomPassword
+            Write-Host "Generated random database password (stored in runtime/.state/runtime.env)"
+        } else {
+            Write-Host "Using provided database password."
+        }
+
         $pwFile = Join-Path $logDir ".pgpass-init"
-        Set-Content -Path $pwFile -Value $DbPassword -Encoding ASCII
+        Set-Content -Path $pwFile -Value $DbPassword -Encoding ASCII -NoNewline
         try {
             & $initDb "-D" $pgData "-U" $DbUser "--encoding=UTF8" "--locale=C" "--auth-host=scram-sha-256" "--auth-local=trust" "--pwfile=$pwFile"
             if ($LASTEXITCODE -ne 0) {
@@ -196,6 +221,16 @@ if ($pgStatus -eq 0) {
             }
         } finally {
             Remove-Item -LiteralPath $pwFile -Force -ErrorAction SilentlyContinue
+        }
+
+        $stateDir = Join-Path $runtimeRoot ".state"
+        $runtimeEnvFile = Join-Path $stateDir "runtime.env"
+        New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
+        if (Test-Path $runtimeEnvFile) {
+            $envContent = Get-Content $runtimeEnvFile | Where-Object { $_ -notmatch "^DATABASE_PASSWORD=" }
+            $envContent + "DATABASE_PASSWORD=$DbPassword" | Set-Content -Path $runtimeEnvFile -Encoding UTF8
+        } else {
+            "DATABASE_PASSWORD=$DbPassword" | Set-Content -Path $runtimeEnvFile -Encoding UTF8
         }
     }
 
@@ -237,13 +272,11 @@ if ($pgStatus -eq 0) {
         Write-Host "pg_ctl start failed. Trying direct postgres.exe startup..."
         $pgOutLog = Join-Path $logDir "postgres-direct.out.log"
         $pgErrLog = Join-Path $logDir "postgres-direct.err.log"
-        Start-Process -FilePath $postgresExe `
-            -ArgumentList @("-D", $pgData, "-p", "$Port", "-h", $pgHost) `
-            -WorkingDirectory $pgHome `
-            -RedirectStandardOutput $pgOutLog `
-            -RedirectStandardError $pgErrLog `
-            -WindowStyle Hidden | Out-Null
+        $pgProc = Start-Process -FilePath $postgresExe -ArgumentList "-D", $pgData, "-p", $Port, "-h", $pgHost -WorkingDirectory $pgHome -NoNewWindow -PassThru
         Start-Sleep -Seconds 2
+        if ($pgProc.HasExited -and $pgProc.ExitCode -ne 0) {
+            Write-Host "postgres.exe exited with code $($pgProc.ExitCode)"
+        }
         if (-not (Test-PostgresReady $Port)) {
             throw "Failed to start PostgreSQL with data directory: $pgData. Check $pgLog and $pgErrLog"
         }

@@ -148,11 +148,7 @@
               <el-input v-model="form.code" placeholder="请输入承包方代码" />
             </el-form-item>
             <el-form-item label="承包方类型" prop="typeCode">
-              <el-select v-model="form.typeCode" placeholder="请选择承包方类型">
-                <el-option label="农户" value="1" />
-                <el-option label="个人" value="2" />
-                <el-option label="单位" value="3" />
-              </el-select>
+              <DictionarySelect v-model="form.typeCode" dict-type="nyt2539_c16_contractor_type" placeholder="请选择承包方类型" />
             </el-form-item>
             <el-form-item label="承包方名称" prop="name">
               <el-input v-model="form.name" placeholder="请输入承包方名称" />
@@ -171,13 +167,7 @@
               />
             </el-form-item>
             <el-form-item label="证件类型" prop="idType">
-              <el-select v-model="form.idType" placeholder="请选择证件类型">
-                <el-option label="居民身份证" value="1" />
-                <el-option label="军官证" value="2" />
-                <el-option label="护照" value="3" />
-                <el-option label="户口簿" value="4" />
-                <el-option label="其他" value="9" />
-              </el-select>
+              <DictionarySelect v-model="form.idType" dict-type="nyt2539_c15_id_document_type" placeholder="请选择证件类型" />
             </el-form-item>
             <el-form-item label="证件号码" prop="idNo">
               <el-input v-model="form.idNo" placeholder="请输入证件号码" />
@@ -239,13 +229,25 @@
           <div class="member-tab-actions">
             <div class="member-tab-tip">
               <div class="member-tab-title">家庭成员维护</div>
-              <div>家庭成员较多时，可在下方标签之间快速切换。</div>
+              <div>家庭成员较多时，可在表单编辑和表格查看之间快速切换。</div>
             </div>
-            <el-button type="primary" plain @click="appendFamilyMember">新增成员</el-button>
+            <div class="member-tab-tools">
+              <el-radio-group v-model="familyMemberViewMode" size="small" class="member-view-switch">
+                <el-radio-button value="tabs">
+                  <el-icon><EditPen /></el-icon>
+                  <span>表单</span>
+                </el-radio-button>
+                <el-radio-button value="table">
+                  <el-icon><List /></el-icon>
+                  <span>表格</span>
+                </el-radio-button>
+              </el-radio-group>
+              <el-button type="primary" plain @click="appendFamilyMember">新增成员</el-button>
+            </div>
           </div>
 
           <el-tabs
-            v-if="form.familyMembers.length"
+            v-if="form.familyMembers.length && familyMemberViewMode === 'tabs'"
             v-model="activeMemberTab"
             class="member-tabs"
             type="card"
@@ -276,34 +278,22 @@
                       <el-input v-model="member.name" placeholder="请输入姓名" />
                     </el-form-item>
                     <el-form-item label="性别">
-                      <el-select v-model="member.gender" placeholder="请选择性别">
-                        <el-option label="男" value="1" />
-                        <el-option label="女" value="2" />
-                      </el-select>
+                      <DictionarySelect v-model="member.gender" dict-type="nyt2539_c17_gender" placeholder="请选择性别" />
                     </el-form-item>
                     <el-form-item label="与户主关系">
                       <el-input v-model="member.relationToHead" placeholder="请输入关系代码，如 01" />
                     </el-form-item>
                     <el-form-item label="证件类型">
-                      <el-select v-model="member.idType" placeholder="请选择证件类型">
-                        <el-option label="居民身份证" value="1" />
-                        <el-option label="军官证" value="2" />
-                        <el-option label="护照" value="3" />
-                        <el-option label="户口簿" value="4" />
-                        <el-option label="其他" value="9" />
-                      </el-select>
+                      <DictionarySelect v-model="member.idType" dict-type="nyt2539_c15_id_document_type" placeholder="请选择证件类型" />
                     </el-form-item>
                     <el-form-item class="member-span-2" label="证件号码">
                       <el-input v-model="member.idNo" placeholder="请输入证件号码" />
                     </el-form-item>
                     <el-form-item label="是否共有人">
-                      <el-select v-model="member.isCoOwner" clearable placeholder="请选择">
-                        <el-option label="是" value="1" />
-                        <el-option label="否" value="2" />
-                      </el-select>
+                      <DictionarySelect v-model="member.isCoOwner" dict-type="nyt2539_c19_yes_no" placeholder="请选择" />
                     </el-form-item>
                     <el-form-item label="备注代码">
-                      <el-input v-model="member.noteCode" placeholder="如需填写请输入代码" />
+                      <DictionarySelect v-model="member.noteCode" dict-type="nyt2539_c18_member_remark" placeholder="请选择备注代码" />
                     </el-form-item>
                     <el-form-item class="member-span-full" label="成员备注说明">
                       <el-input v-model="member.note" type="textarea" :rows="3" placeholder="请输入成员备注说明" />
@@ -314,10 +304,91 @@
             </el-tab-pane>
           </el-tabs>
 
+          <div v-else-if="form.familyMembers.length" class="member-table-wrap">
+            <el-table :data="form.familyMembers" border>
+              <el-table-column type="index" label="序号" width="70" />
+              <el-table-column prop="name" label="姓名" min-width="120">
+                <template #default="{ row, $index }">{{ row.name || `成员 ${$index + 1}` }}</template>
+              </el-table-column>
+              <el-table-column prop="gender" label="性别" min-width="90">
+                <template #default="{ row }">{{ genderLabel(row.gender, "--") }}</template>
+              </el-table-column>
+              <el-table-column prop="relationToHead" label="与户主关系" min-width="120">
+                <template #default="{ row }">{{ row.relationToHead || "--" }}</template>
+              </el-table-column>
+              <el-table-column prop="idType" label="证件类型" min-width="130">
+                <template #default="{ row }">{{ idDocumentTypeLabel(row.idType, "--") }}</template>
+              </el-table-column>
+              <el-table-column prop="idNo" label="证件号码" min-width="190" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.idNo || "--" }}</template>
+              </el-table-column>
+              <el-table-column prop="isCoOwner" label="是否共有人" min-width="110">
+                <template #default="{ row }">{{ yesNoLabel(row.isCoOwner, "--") }}</template>
+              </el-table-column>
+              <el-table-column prop="noteCode" label="备注代码" min-width="120">
+                <template #default="{ row }">{{ memberRemarkLabel(row.noteCode, "--") }}</template>
+              </el-table-column>
+              <el-table-column prop="note" label="备注说明" min-width="220" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.note || "--" }}</template>
+              </el-table-column>
+              <el-table-column label="操作" fixed="right" width="130">
+                <template #default="{ row }">
+                  <el-button link type="primary" @click="openFamilyMemberForm(row._tabKey)">编辑</el-button>
+                  <el-button link type="danger" @click="removeFamilyMemberByKey(row._tabKey)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+
           <div v-else class="family-empty">
             暂无家庭成员，请点击右上角“新增成员”。
           </div>
         </template>
+      </el-tab-pane>
+
+      <el-tab-pane :disabled="!editingCode" :label="`合同信息（${form.contracts.length}）`" name="contracts">
+        <div v-if="!editingCode" class="family-empty">
+          新增承包方保存后可查看关联合同信息。
+        </div>
+        <div v-else-if="!form.contracts.length" class="family-empty">
+          该承包方暂无关联合同信息。
+        </div>
+        <el-tabs
+          v-else
+          v-model="activeContractTab"
+          class="contract-vertical-tabs"
+          tab-position="left"
+        >
+          <el-tab-pane
+            v-for="(contract, index) in form.contracts"
+            :key="contract._tabKey"
+            :label="contractTabLabel(contract, index)"
+            :name="contract._tabKey"
+          >
+            <div class="contract-pane-card">
+              <div class="contract-pane-header">
+                <div>
+                  <div class="contract-pane-title">{{ contract.title || contract.code }}</div>
+                  <div class="contract-pane-meta">
+                    <el-tag size="small" :type="contract.type === 'lzht' ? 'warning' : 'success'" effect="plain">
+                      {{ contract.typeLabel }}
+                    </el-tag>
+                    <span v-if="contract.role">{{ contract.role }}</span>
+                  </div>
+                </div>
+              </div>
+              <el-descriptions class="contract-descriptions" :column="2" border>
+                <el-descriptions-item
+                  v-for="field in contractDetailFields(contract)"
+                  :key="field.key"
+                  :label="field.label"
+                >
+                  {{ displayValue(field.value) }}
+                </el-descriptions-item>
+              </el-descriptions>
+            </div>
+          </el-tab-pane>
+        </el-tabs>
       </el-tab-pane>
 
       <el-tab-pane :disabled="!editingCode" label="地块信息" name="parcels">
@@ -394,7 +465,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Loading } from "@element-plus/icons-vue";
+import { EditPen, List, Loading } from "@element-plus/icons-vue";
 
 import {
   createContractor,
@@ -405,12 +476,19 @@ import {
 } from "../api/contractor";
 import { fetchContractorParcels } from "../api/landParcel";
 import { fetchRegionTree } from "../api/region";
+import DictionarySelect from "../components/DictionarySelect.vue";
+import { useDictionary } from "../composables/useDictionary";
 import { useAuthStore } from "../stores/auth";
 import { useDialogMap } from "../composables/useDialogMap";
 import { validateChinaId, validateMobile, validatePostcode } from "../utils/validators";
 
 const authStore = useAuthStore();
 const canManage = computed(() => authStore.hasPermission("contractors.manage"));
+const { labelOf: contractorTypeLabel } = useDictionary("nyt2539_c16_contractor_type");
+const { labelOf: genderLabel } = useDictionary("nyt2539_c17_gender");
+const { labelOf: idDocumentTypeLabel } = useDictionary("nyt2539_c15_id_document_type");
+const { labelOf: yesNoLabel } = useDictionary("nyt2539_c19_yes_no");
+const { labelOf: memberRemarkLabel } = useDictionary("nyt2539_c18_member_remark");
 
 const loading = ref(false);
 const submitting = ref(false);
@@ -434,7 +512,10 @@ const activeRegionLabel = ref("");
 const formRef = ref();
 const activeMainTab = ref("base");
 const activeMemberTab = ref("member-1");
+const activeContractTab = ref("");
+const familyMemberViewMode = ref("tabs");
 let memberTabSeed = 0;
+let contractTabSeed = 0;
 const regionTreeProps = {
   label: "label",
   children: "children",
@@ -443,6 +524,11 @@ const regionTreeProps = {
 const createMemberTabKey = () => {
   memberTabSeed += 1;
   return `member-${memberTabSeed}`;
+};
+
+const createContractTabKey = () => {
+  contractTabSeed += 1;
+  return `contract-${contractTabSeed}`;
 };
 
 const createEmptyFamilyMember = () => ({
@@ -476,6 +562,7 @@ const createEmptyForm = () => ({
   groupRegionCode: "",
   groupRegionName: "",
   familyMembers: [],
+  contracts: [],
 });
 
 const form = reactive(createEmptyForm());
@@ -514,6 +601,70 @@ const parcelDetailFields = [
   { key: "dklb", label: "地块类别" },
   { key: "dkdz", label: "地块地址" },
 ];
+
+function normalizeContractInfos(contracts = []) {
+  return contracts.map((item) => ({
+    ...item,
+    _tabKey: createContractTabKey(),
+  }));
+}
+
+function formatArea(value, unit) {
+  return hasDisplayValue(value) ? `${value}${unit}` : "";
+}
+
+function displayValue(value, fallback = "--") {
+  return hasDisplayValue(value) ? value : fallback;
+}
+
+function hasDisplayValue(value) {
+  return value !== null && value !== undefined && value !== "";
+}
+
+function contractTabLabel(contract, index) {
+  const shortCode = contract.code ? contract.code.slice(-6) : index + 1;
+  return `${contract.typeLabel || "合同"} ${shortCode}`;
+}
+
+function contractDetailFields(contract) {
+  if (contract.type === "lzht") {
+    return [
+      { key: "code", label: "流转合同代码", value: contract.code },
+      { key: "parentContractCode", label: "承包合同代码", value: contract.parentContractCode },
+      { key: "contractorCode", label: "转出方代码", value: contract.contractorCode },
+      { key: "recipientContractorCode", label: "受让方代码", value: contract.recipientContractorCode },
+      { key: "role", label: "当前承包方角色", value: contract.role },
+      { key: "transferMode", label: "流转方式", value: contract.transferMode },
+      { key: "term", label: "流转期限", value: contract.term },
+      { key: "dateRange", label: "流转起止日期", value: joinRange(contract.startDate, contract.endDate) },
+      { key: "totalArea", label: "流转面积", value: formatArea(contract.totalArea, "m²") },
+      { key: "parcelCount", label: "流转地块数", value: contract.parcelCount },
+      { key: "priceDescription", label: "流转价款说明", value: contract.priceDescription },
+      { key: "signDate", label: "合同签订日期", value: contract.signDate },
+    ];
+  }
+  return [
+    { key: "code", label: "承包合同代码", value: contract.code },
+    { key: "originalCode", label: "原承包合同代码", value: contract.originalCode },
+    { key: "issuerCode", label: "发包方代码", value: contract.issuerCode },
+    { key: "contractorCode", label: "承包方代码", value: contract.contractorCode },
+    { key: "contractMode", label: "承包方式", value: contract.contractMode },
+    { key: "dateRange", label: "承包期限", value: joinRange(contract.startDate, contract.endDate) },
+    { key: "totalArea", label: "合同总面积", value: formatArea(contract.totalArea, "m²") },
+    { key: "totalAreaMu", label: "合同总面积（亩）", value: formatArea(contract.totalAreaMu, "亩") },
+    { key: "originalTotalArea", label: "原合同总面积", value: formatArea(contract.originalTotalArea, "m²") },
+    { key: "originalTotalAreaMu", label: "原合同总面积（亩）", value: formatArea(contract.originalTotalAreaMu, "亩") },
+    { key: "parcelCount", label: "承包地块数", value: contract.parcelCount },
+    { key: "signDate", label: "合同签订日期", value: contract.signDate },
+  ];
+}
+
+function joinRange(start, end) {
+  if (start && end) {
+    return `${start} 至 ${end}`;
+  }
+  return start || end || "";
+}
 
 function triggerFlash(dkbm) {
   flashDkbm.value = dkbm;
@@ -652,11 +803,9 @@ function resetForm() {
   Object.assign(form, createEmptyForm());
   activeMainTab.value = "base";
   activeMemberTab.value = "";
+  activeContractTab.value = "";
+  familyMemberViewMode.value = "tabs";
   formRef.value?.clearValidate();
-}
-
-function contractorTypeLabel(code) {
-  return { 1: "农户", 2: "个人", 3: "单位" }[code] || code;
 }
 
 function normalizeRegionTree(nodes = []) {
@@ -734,6 +883,12 @@ function appendFamilyMember() {
   const member = createEmptyFamilyMember();
   form.familyMembers.push(member);
   activeMemberTab.value = member._tabKey;
+  familyMemberViewMode.value = "tabs";
+}
+
+function openFamilyMemberForm(tabKey) {
+  activeMemberTab.value = tabKey;
+  familyMemberViewMode.value = "tabs";
 }
 
 function removeFamilyMemberByKey(targetKey) {
@@ -848,9 +1003,12 @@ async function openEditDialog(row) {
       familyMembers: detail.familyMembers?.length
         ? detail.familyMembers.map((item) => ({ ...item, _tabKey: createMemberTabKey() }))
         : [],
+      contracts: normalizeContractInfos(detail.contracts || []),
     });
     activeMainTab.value = "base";
     activeMemberTab.value = form.familyMembers[0]?._tabKey || "";
+    activeContractTab.value = form.contracts[0]?._tabKey || "";
+    familyMemberViewMode.value = "tabs";
     await nextTick();
     formRef.value?.clearValidate();
     dialogVisible.value = true;
@@ -869,12 +1027,14 @@ function validateFamilyMembers() {
     if (!member.name || !member.gender || !member.idType || !member.idNo || !member.relationToHead) {
       activeMainTab.value = "family";
       activeMemberTab.value = member._tabKey;
+      familyMemberViewMode.value = "tabs";
       ElMessage.warning("农户类型下，家庭成员信息需要填写完整");
       return false;
     }
     if (member.idType === "1" && !validateChinaId(member.idNo)) {
       activeMainTab.value = "family";
       activeMemberTab.value = member._tabKey;
+      familyMemberViewMode.value = "tabs";
       ElMessage.warning(`家庭成员“${member.name || "未命名成员"}”的身份证号格式不正确`);
       return false;
     }

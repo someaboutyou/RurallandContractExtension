@@ -5,7 +5,14 @@ class Settings(BaseSettings):
     app_name: str = "Rural Land Contract Extension Platform"
     app_version: str = "0.1.0"
     api_prefix: str = "/api/v1"
-    cors_origins: list[str] = ["http://127.0.0.1:5173", "http://localhost:5173"]
+    cors_origins: list[str] = [
+        # 开发环境（Vite dev server）
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        # 生产环境 / 单端口部署
+        "http://127.0.0.1:8000",
+        "http://localhost:8000",
+    ]
     database_host: str = "127.0.0.1"
     database_port: int = 5432
     database_name: str = "erlunyanbao"

@@ -9,9 +9,25 @@ backend/.venv/
 frontend/node_modules/
 frontend/dist/
 
+# Backend build artifacts (Cython)
+backend/build/
+backend/app/**/*.pyd
+backend/app/**/*.so
+backend/app/**/*.c
+
 .DS_Store
 Thumbs.db
 datas/
 
 runtime/
 
+dist/
+
+.claude/
+
+backend/app/storage/data_imports/
+
+frontend/dist/
+frontend/node_modules/
+
+**/*.zip

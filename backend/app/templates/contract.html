@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>农村土地承包合同</title>
+<style>
+  @page {
+    size: A4;
+    margin: 25mm 20mm 25mm 20mm;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "SimSun", "宋体", serif;
+    font-size: 14px;
+    line-height: 2;
+    color: #000;
+  }
+  h1 {
+    text-align: center;
+    font-size: 22px;
+    font-weight: bold;
+    letter-spacing: 4px;
+    margin-bottom: 24px;
+  }
+  h2 {
+    font-size: 14px;
+    font-weight: bold;
+    margin: 16px 0 8px 0;
+  }
+  .contract-no {
+    text-align: right;
+    margin-bottom: 12px;
+    font-size: 13px;
+  }
+  .party-section {
+    margin: 12px 0;
+  }
+  .party-section p {
+    text-indent: 2em;
+    margin: 4px 0;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 12px;
+  }
+  table th, table td {
+    border: 1px solid #000;
+    padding: 4px 6px;
+    text-align: center;
+    vertical-align: middle;
+  }
+  table th {
+    background-color: #f0f0f0;
+    font-weight: bold;
+  }
+  .clause {
+    margin: 8px 0;
+    text-indent: 2em;
+  }
+  .clause-title {
+    font-weight: bold;
+    margin: 16px 0 4px 0;
+  }
+  .signature-block {
+    margin: 24px 0 12px 0;
+  }
+  .signature-row {
+    display: flex;
+    justify-content: space-between;
+    margin: 16px 0;
+  }
+  .signature-item {
+    flex: 1;
+    text-align: center;
+  }
+  .signature-item .label {
+    display: inline-block;
+    min-width: 80px;
+    text-align: right;
+  }
+  .signature-item .line {
+    display: inline-block;
+    min-width: 120px;
+    border-bottom: 1px solid #000;
+    margin: 0 8px;
+  }
+  .date-line {
+    text-align: right;
+    margin: 20px 0;
+  }
+  .seal-area {
+    display: flex;
+    justify-content: space-around;
+    margin: 32px 0 16px 0;
+    min-height: 80px;
+  }
+  .seal-placeholder {
+    width: 120px;
+    height: 100px;
+    border: 1px dashed #999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    color: #999;
+  }
+  @media print {
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .no-print { display: none; }
+  }
+  .print-btn {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    padding: 8px 20px;
+    background: #409eff;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    z-index: 100;
+  }
+</style>
+</head>
+<body>
+<button class="print-btn no-print" onclick="window.print()">打 印</button>
+
+<h1>农 村 土 地 承 包 合 同</h1>
+
+<div class="contract-no">
+  合同编号：{{ cbhtbm }}
+</div>
+
+<!-- ====== 发包方 ====== -->
+<h2>一、发包方（甲方）</h2>
+<div class="party-section">
+  <p>名称：{{ fbfmc }}</p>
+  <p>负责人：{{ fbf_fzr }}</p>
+  <p>地址：{{ fbf_dz }}</p>
+</div>
+
+<!-- ====== 承包方 ====== -->
+<h2>二、承包方（乙方）</h2>
+<div class="party-section">
+  <p>承包方类型：{{ cbf_type_text }}</p>
+  <p>承包方名称：{{ cbfmc }}</p>
+  <p>承包方证件类型：{{ cbf_zjlx_text }}</p>
+  <p>承包方证件号码：{{ cbfzjhm }}</p>
+  <p>承包方地址：{{ cbfdz }}</p>
+  <p>联系电话：{{ lxdh }}</p>
+  <p>承包方成员数量：{{ cbfcysl }} 人</p>
+</div>
+
+<!-- ====== 承包地块 ====== -->
+<h2>三、承包地块情况</h2>
+<table>
+  <thead>
+    <tr>
+      <th>序号</th>
+      <th>地块编码</th>
+      <th>地块名称</th>
+      <th>地块类别</th>
+      <th>面积（亩）</th>
+      <th>四至</th>
+      <th>是否基本农田</th>
+      <th>土地利用类型</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for dk in parcels %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>{{ dk.dkbm }}</td>
+      <td>{{ dk.dkmc }}</td>
+      <td>{{ dk.dklb_text }}</td>
+      <td>{{ dk.scmj_mu }}</td>
+      <td>东：{{ dk.dkdz or '—' }}　西：{{ dk.dkxz or '—' }}　南：{{ dk.dknz or '—' }}　北：{{ dk.dkbz or '—' }}</td>
+      <td>{{ dk.sfjbnt_text }}</td>
+      <td>{{ dk.tdlylx_text }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<p style="margin-top: 8px;">承包地块总数：{{ cbdkzs }} 块</p>
+<p>合同总面积：{{ htzmjm }} 亩（{{ htzmj }} 平方米）</p>
+
+<!-- ====== 承包期限 ====== -->
+<h2>四、承包期限</h2>
+<div class="party-section">
+  <p>承包期限自 {{ cbqxq }} 起，至 {{ cbqxz }} 止。</p>
+  <p>承包方式：{{ cbfs_text }}</p>
+  <p>承包经营权取得方式：{{ cbjyqqdfs_text }}</p>
+</div>
+
+<!-- ====== 权利义务 ====== -->
+<h2>五、双方的权利和义务</h2>
+
+<h3 style="font-size: 14px; margin-top: 12px;">（一）发包方的权利和义务</h3>
+<div class="party-section">
+  <p class="clause">1. 发包本集体所有的或者国家所有依法由本集体使用的农村土地。</p>
+  <p class="clause">2. 监督承包方依照承包合同约定的用途合理利用和保护土地。</p>
+  <p class="clause">3. 制止承包方损害承包地和农业资源的行为。</p>
+  <p class="clause">4. 维护承包方的土地承包经营权，不得非法变更、解除承包合同。</p>
+  <p class="clause">5. 尊重承包方的生产经营自主权，不得干涉承包方依法进行正常的生产经营活动。</p>
+  <p class="clause">6. 依照承包合同约定为承包方提供生产、技术、信息等服务。</p>
+  <p class="clause">7. 执行县、乡（镇）土地利用总体规划，组织本集体经济组织内的农业基础设施建设。</p>
+</div>
+
+<h3 style="font-size: 14px; margin-top: 12px;">（二）承包方的权利和义务</h3>
+<div class="party-section">
+  <p class="clause">1. 依法享有承包地使用、收益和土地承包经营权流转的权利，有权自主组织生产经营和处置产品。</p>
+  <p class="clause">2. 承包地被依法征收、征用、占用的，有权依法获得相应的补偿。</p>
+  <p class="clause">3. 维持土地的农业用途，不得用于非农建设。</p>
+  <p class="clause">4. 依法保护和合理利用土地，不得给土地造成永久性损害。</p>
+  <p class="clause">5. 法律、行政法规规定的其他权利和义务。</p>
+</div>
+
+<!-- ====== 违约责任 ====== -->
+<h2>六、违约责任</h2>
+<div class="party-section">
+  <p class="clause">1. 当事人一方不履行合同义务或者履行义务不符合约定的，依照《中华人民共和国民法典》的规定承担违约责任。</p>
+  <p class="clause">2. 承包方给承包地造成永久性损害的，发包方有权制止，并有权要求承包方赔偿由此造成的损失。</p>
+  <p class="clause">3. 承包方违法将承包地用于非农建设的，由县级以上地方人民政府有关行政主管部门依法予以处罚。</p>
+  <p class="clause">4. 承包方无正当理由弃耕抛荒承包地连续两年以上的，发包方可以请求终止合同。</p>
+</div>
+
+<!-- ====== 其他约定 ====== -->
+<h2>七、其他约定</h2>
+<div class="party-section">
+  <p class="clause">1. 本合同自双方签字盖章之日起生效。</p>
+  <p class="clause">2. 本合同一式三份，发包方、承包方、乡（镇）人民政府农村土地承包管理部门各执一份，具有同等法律效力。</p>
+  <p class="clause">3. 本合同未尽事宜，由双方协商解决，可签订补充协议。</p>
+  <p class="clause">4. 因履行本合同发生争议的，双方可以协商解决，也可以请求村民委员会、乡（镇）人民政府调解。当事人不愿协商、调解或者协商、调解不成的，可以向农村土地承包仲裁机构申请仲裁，也可以直接向人民法院起诉。</p>
+
+  {% if fbfbm %}
+  <p class="clause" style="margin-top: 12px; color: #555;">发包方编码：{{ fbfbm }}</p>
+  {% endif %}
+</div>
+
+<!-- ====== 签字盖章 ====== -->
+<h2>八、签字盖章</h2>
+<div class="signature-block">
+  <div class="signature-row">
+    <div class="signature-item">
+      <span class="label">发包方（盖章）：</span>
+      <span class="line"></span>
+    </div>
+    <div class="signature-item">
+      <span class="label">承包方（签字/盖章）：</span>
+      <span class="line"></span>
+    </div>
+  </div>
+  <div class="signature-row">
+    <div class="signature-item">
+      <span class="label">负责人签字：</span>
+      <span class="line"></span>
+    </div>
+    <div class="signature-item">
+      <span class="label">承包方代表签字：</span>
+      <span class="line"></span>
+    </div>
+  </div>
+  {% for member in household_head %}
+  <div class="signature-row" style="margin-top: 8px;">
+    <div class="signature-item" style="font-size: 13px; text-align: left; padding-left: 40px;">
+      承包方代表：{{ member.cyxm }}　　身份证号：{{ member.cyzjhm }}
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="date-line">
+    <span>签订日期：{{ qdsj }}</span>
+  </div>
+  <div class="date-line">
+    <span>签订地点：____________</span>
+  </div>
+</div>
+
+<!-- ====== 鉴证/备案 ====== -->
+<div style="margin-top: 24px; padding-top: 16px; border-top: 1px dashed #ccc;">
+  <p style="font-size: 12px; color: #666;">本合同已于 ____年____月____日报乡（镇）人民政府农村土地承包管理部门备案。</p>
+  <div style="display: flex; justify-content: flex-end; margin-top: 12px;">
+    <div style="text-align: center;">
+      <span>备案机关（盖章）：</span>
+      <span style="display: inline-block; min-width: 100px; border-bottom: 1px solid #000;"></span>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

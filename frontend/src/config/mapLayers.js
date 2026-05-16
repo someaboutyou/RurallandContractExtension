@@ -66,9 +66,9 @@ export const basemapConfigs = [
 
 export const vectorLayerConfigs = [
   {
-    id: "fallback-geoserver-contract-land",
-    key: "dk3213242017",
-    name: "GeoServer\u5730\u5757\u56fe\u5c42",
+    id: "fallback-geoserver-survey-dk-result",
+    key: "survey_dk_result",
+    name: "\u627f\u5305\u5730\u5757",
     category: "vector",
     groupName: "GeoServer\u56fe\u5c42",
     defaultVisible: true,
@@ -79,7 +79,7 @@ export const vectorLayerConfigs = [
       {
         serviceType: "WMTS",
         serviceUrl:
-          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:DK3213242017&style=&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:survey_dk_result&style=survey_dk_result&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
         projection: "EPSG:4326",
         minZoom: 0,
         maxZoom: 15,
@@ -88,10 +88,249 @@ export const vectorLayerConfigs = [
       {
         serviceType: "WMS",
         serviceUrl:
-          "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:DK3213242017&styles=&format=image/png&transparent=true",
+          "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:survey_dk_result&styles=survey_dk_result&format=image/png&transparent=true",
         projection: "EPSG:4326",
         minZoom: 16,
         maxZoom: 19,
+        enabled: true,
+      },
+    ],
+  },
+  {
+    id: "fallback-geoserver-czkfbj",
+    key: "czkfbj",
+    name: "\u6751\u5e84\u5f00\u53d1\u8fb9\u754c",
+    category: "vector",
+    groupName: "\u56fd\u571f\u7a7a\u95f4\u89c4\u5212",
+    defaultVisible: false,
+    isDefault: false,
+    sortOrder: 20,
+    enabled: true,
+    serviceConfigs: [
+      {
+        serviceType: "WMTS",
+        serviceUrl:
+          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:czkfbj&style=czkfbj&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+        projection: "EPSG:4326",
+        minZoom: 0,
+        maxZoom: 15,
+        enabled: true,
+      },
+      {
+        serviceType: "WMS",
+        serviceUrl:
+          "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:czkfbj&styles=czkfbj&format=image/png&transparent=true",
+        projection: "EPSG:4326",
+        minZoom: 16,
+        maxZoom: 19,
+        enabled: true,
+      },
+    ],
+  },
+  {
+    id: "fallback-geoserver-dltb",
+    key: "dltb",
+    name: "\u5730\u7c7b\u56fe\u6591",
+    category: "vector",
+    groupName: "\u56fd\u571f\u7a7a\u95f4\u89c4\u5212",
+    defaultVisible: false,
+    isDefault: false,
+    sortOrder: 30,
+    enabled: true,
+    serviceConfigs: [
+      {
+        serviceType: "WMTS",
+        serviceUrl:
+          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:dltb&style=dltb&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+        projection: "EPSG:4326",
+        minZoom: 0,
+        maxZoom: 15,
+        enabled: true,
+      },
+      {
+        serviceType: "WMS",
+        serviceUrl:
+          "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:dltb&styles=dltb&format=image/png&transparent=true",
+        projection: "EPSG:4326",
+        minZoom: 16,
+        maxZoom: 19,
+        enabled: true,
+      },
+    ],
+  },
+  {
+    id: "fallback-geoserver-gdbhmb",
+    key: "gdbhmb",
+    name: "\u8015\u5730\u4fdd\u62a4\u76ee\u6807",
+    category: "vector",
+    groupName: "\u56fd\u571f\u7a7a\u95f4\u89c4\u5212",
+    defaultVisible: false,
+    isDefault: false,
+    sortOrder: 40,
+    enabled: true,
+    serviceConfigs: [
+      {
+        serviceType: "WMTS",
+        serviceUrl:
+          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:gdbhmb&style=gdbhmb&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+        projection: "EPSG:4326",
+        minZoom: 0,
+        maxZoom: 15,
+        enabled: true,
+      },
+      {
+        serviceType: "WMS",
+        serviceUrl:
+          "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:gdbhmb&styles=gdbhmb&format=image/png&transparent=true",
+        projection: "EPSG:4326",
+        minZoom: 16,
+        maxZoom: 19,
+        enabled: true,
+      },
+    ],
+  },
+  {
+    id: "fallback-geoserver-stbhhx",
+    key: "stbhhx",
+    name: "\u751f\u6001\u4fdd\u62a4\u7ea2\u7ebf",
+    category: "vector",
+    groupName: "\u56fd\u571f\u7a7a\u95f4\u89c4\u5212",
+    defaultVisible: false,
+    isDefault: false,
+    sortOrder: 50,
+    enabled: true,
+    serviceConfigs: [
+      {
+        serviceType: "WMTS",
+        serviceUrl:
+          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:stbhhx&style=stbhhx&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+        projection: "EPSG:4326",
+        minZoom: 0,
+        maxZoom: 15,
+        enabled: true,
+      },
+      {
+        serviceType: "WMS",
+        serviceUrl:
+          "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:stbhhx&styles=stbhhx&format=image/png&transparent=true",
+        projection: "EPSG:4326",
+        minZoom: 16,
+        maxZoom: 19,
+        enabled: true,
+      },
+    ],
+  },
+  {
+    id: "fallback-geoserver-xzq",
+    key: "xzq",
+    name: "\u884c\u653f\u533a",
+    category: "vector",
+    groupName: "\u884c\u653f\u533a\u5212",
+    defaultVisible: false,
+    isDefault: false,
+    sortOrder: 60,
+    enabled: true,
+    serviceConfigs: [
+      {
+        serviceType: "WMTS",
+        serviceUrl:
+          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:xzq&style=xzq&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+        projection: "EPSG:4326",
+        minZoom: 0,
+        maxZoom: 15,
+        enabled: true,
+      },
+      {
+        serviceType: "WMS",
+        serviceUrl:
+          "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:xzq&styles=xzq&format=image/png&transparent=true",
+        projection: "EPSG:4326",
+        minZoom: 16,
+        maxZoom: 19,
+        enabled: true,
+      },
+    ],
+  },
+  {
+    id: "fallback-geoserver-xzqjx",
+    key: "xzqjx",
+    name: "\u884c\u653f\u533a\u754c\u7ebf",
+    category: "vector",
+    groupName: "\u884c\u653f\u533a\u5212",
+    defaultVisible: false,
+    isDefault: false,
+    sortOrder: 70,
+    enabled: true,
+    serviceConfigs: [
+      {
+        serviceType: "WMTS",
+        serviceUrl:
+          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:xzqjx&style=xzqjx&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+        projection: "EPSG:4326",
+        minZoom: 0,
+        maxZoom: 15,
+        enabled: true,
+      },
+      {
+        serviceType: "WMS",
+        serviceUrl:
+          "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:xzqjx&styles=xzqjx&format=image/png&transparent=true",
+        projection: "EPSG:4326",
+        minZoom: 16,
+        maxZoom: 19,
+        enabled: true,
+      },
+    ],
+  },
+  {
+    id: "fallback-geoserver-yjjbntbhtb",
+    key: "yjjbntbhtb",
+    name: "\u6c38\u4e45\u57fa\u672c\u519c\u7530",
+    category: "vector",
+    groupName: "\u56fd\u571f\u7a7a\u95f4\u89c4\u5212",
+    defaultVisible: false,
+    isDefault: false,
+    sortOrder: 80,
+    enabled: true,
+    serviceConfigs: [
+      {
+        serviceType: "WMTS",
+        serviceUrl:
+          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:yjjbntbhtb&style=yjjbntbhtb&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+        projection: "EPSG:4326",
+        minZoom: 0,
+        maxZoom: 15,
+        enabled: true,
+      },
+      {
+        serviceType: "WMS",
+        serviceUrl:
+          "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:yjjbntbhtb&styles=yjjbntbhtb&format=image/png&transparent=true",
+        projection: "EPSG:4326",
+        minZoom: 16,
+        maxZoom: 19,
+        enabled: true,
+      },
+    ],
+  },
+  {
+    id: "fallback-geoserver-layer-group",
+    key: "rural_land_layers",
+    name: "\u8c03\u67e5\u5730\u5757\u56fe\u5c42\u7ec4",
+    category: "vector",
+    groupName: "GeoServer\u56fe\u5c42",
+    defaultVisible: false,
+    isDefault: false,
+    sortOrder: 100,
+    enabled: true,
+    serviceConfigs: [
+      {
+        serviceType: "WMS",
+        serviceUrl:
+          "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:rural_land_layers&format=image/png&transparent=true",
+        projection: "EPSG:4326",
+        minZoom: 0,
+        maxZoom: 24,
         enabled: true,
       },
     ],

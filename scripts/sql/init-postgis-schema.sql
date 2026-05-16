@@ -23,54 +23,6 @@ SET default_tablespace = '';
 SET default_table_access_method = heap;
 
 --
--- Name: DK3213242017; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public."DK3213242017" (
-    id integer NOT NULL,
-    geom public.geometry(MultiPolygon,4527),
-    "SYQXZ" character varying(2),
-    "DKLB" character varying(2),
-    "TDLYLX" character varying(3),
-    "DLDJ" character varying(2),
-    "TDYT" character varying(1),
-    "SFJBNT" character varying(1),
-    "DKDZ" character varying(50),
-    "DKXZ" character varying(50),
-    "DKNZ" character varying(50),
-    "DKBZ" character varying(50),
-    "ZJRXM" character varying(100),
-    "YSDM" character varying(6),
-    "DKBM" character varying(19),
-    "DKMC" character varying(50),
-    "KJZB" character varying(254),
-    "SCMJ" numeric(15,2),
-    "BSM" integer,
-    "SCMJM" numeric(15,2)
-);
-
-
---
--- Name: DK3213242017_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public."DK3213242017_id_seq"
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: DK3213242017_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public."DK3213242017_id_seq" OWNED BY public."DK3213242017".id;
-
-
---
 -- Name: cbdkxx; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -199,21 +151,6 @@ CREATE TABLE public.qslyzlfj (
     zlfjrq timestamp without time zone NOT NULL,
     fj character varying(254)
 );
-
-
---
--- Name: DK3213242017 id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public."DK3213242017" ALTER COLUMN id SET DEFAULT nextval('public."DK3213242017_id_seq"'::regclass);
-
-
---
--- Name: DK3213242017 DK3213242017_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public."DK3213242017"
-    ADD CONSTRAINT "DK3213242017_pkey" PRIMARY KEY (id);
 
 
 --

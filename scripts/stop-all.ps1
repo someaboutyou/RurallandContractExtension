@@ -104,6 +104,15 @@ Stop-MatchingProcesses {
 Stop-ProcessesOnPort 8000 "Backend"
 Stop-ProcessesOnPort 5173 "Frontend"
 
+Write-Host "Stopping Redis..."
+try {
+    & (Join-Path $PSScriptRoot "stop-redis.ps1")
+} catch {
+    Write-Host "Redis graceful stop failed: $($_.Exception.Message)"
+}
+
+Start-Sleep -Seconds 2
+
 Write-Host "Stopping PostgreSQL..."
 try {
     & (Join-Path $PSScriptRoot "stop-postgres.ps1")
@@ -114,6 +123,12 @@ try {
 Start-Sleep -Seconds 3
 
 $postgresPathPart = (Join-Path $runtimeWindows "postgresql").Replace("/", "\")
+$redisPathPart = (Join-Path $runtimeWindows "redis").Replace("/", "\")
+Stop-MatchingProcesses {
+    param($p)
+    ($p.Name -ieq "redis-server.exe") -and (Test-ProcessMatchesRuntimePath $p $redisPathPart)
+} "Redis runtime"
+Stop-ProcessesOnPort 16379 "Redis"
 Stop-MatchingProcesses {
     param($p)
     ($p.Name -ieq "postgres.exe") -and (Test-ProcessMatchesRuntimePath $p $postgresPathPart)
@@ -123,10 +138,11 @@ Stop-ProcessesOnPort 15432 "PostgreSQL"
 $remaining = @()
 $remaining += @(Get-CimInstance Win32_Process | Where-Object {
     (Test-ProcessMatchesRuntimePath $_ $postgresPathPart) -or
+    (Test-ProcessMatchesRuntimePath $_ $redisPathPart) -or
     (Test-ProcessMatchesRuntimePath $_ $geoPathPart) -or
     (Test-ProcessMatchesRuntimePath $_ $pythonPathPart -and ([string]$_.CommandLine).ToLowerInvariant().Contains("uvicorn"))
 })
-$remainingPorts = @(Get-NetTCPConnection -LocalPort 8000, 8080, 15432, 5173 -State Listen -ErrorAction SilentlyContinue)
+$remainingPorts = @(Get-NetTCPConnection -LocalPort 8000, 8080, 15432, 16379, 5173 -State Listen -ErrorAction SilentlyContinue)
 
 if ($remaining.Count -gt 0 -or $remainingPorts.Count -gt 0) {
     Write-Host "Some related processes or ports are still active:"

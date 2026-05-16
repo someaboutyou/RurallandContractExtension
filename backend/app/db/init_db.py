@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
+from app.models.dictionary import DictionaryItem
 from app.models.fbf import Fbf
 from app.models.map_layer import MapLayer
 from app.models.permission import Permission, role_permissions
@@ -52,6 +53,8 @@ DEFAULT_PERMISSIONS = [
     {"name": "管理角色权限", "code": "roles.manage", "group_name": "人员权限", "category": "action", "description": "允许编辑角色和分配权限。"},
     {"name": "查看区域管理", "code": "regions.view", "group_name": "系统管理", "category": "menu", "description": "允许查看区域主数据。"},
     {"name": "管理区域", "code": "regions.manage", "group_name": "系统管理", "category": "action", "description": "允许维护行政区域及区域代码。"},
+    {"name": "查看字典管理", "code": "dictionaries.view", "group_name": "系统管理", "category": "menu", "description": "允许查看字典管理页面。"},
+    {"name": "管理字典", "code": "dictionaries.manage", "group_name": "系统管理", "category": "action", "description": "允许维护系统字典项。"},
     {"name": "查看发包方", "code": "issuers.view", "group_name": "发包方管理", "category": "menu", "description": "允许查看发包方列表。"},
     {"name": "管理发包方", "code": "issuers.manage", "group_name": "发包方管理", "category": "action", "description": "允许维护发包方信息。"},
     {"name": "查看承包方", "code": "contractors.view", "group_name": "承包方管理", "category": "menu", "description": "允许查看承包方列表。"},
@@ -199,17 +202,17 @@ DEFAULT_MAP_LAYERS = [
         "enabled": True,
     },
     {
-        "name": "GeoServer地块图层",
-        "key": "dk3213242017",
+        "name": "调查地块结果",
+        "key": "survey_dk_result",
         "layer_type": "WMTS",
         "category": "vector",
         "group_name": "GeoServer图层",
-        "service_url": "http://localhost:8080/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao%3ADK3213242017&style=&tilematrixset=EPSG%3A4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image%2Fpng",
+        "service_url": "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:survey_dk_result&styles=survey_dk_result&format=image/png&transparent=true",
         "projection": "EPSG:4326",
         "service_config": [
             {
                 "serviceType": "WMTS",
-                "serviceUrl": "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:DK3213242017&style=&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+                "serviceUrl": "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:survey_dk_result&style=survey_dk_result&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
                 "projection": "EPSG:4326",
                 "minZoom": 0,
                 "maxZoom": 15,
@@ -217,7 +220,7 @@ DEFAULT_MAP_LAYERS = [
             },
             {
                 "serviceType": "WMS",
-                "serviceUrl": "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:DK3213242017&styles=&format=image/png&transparent=true",
+                "serviceUrl": "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:survey_dk_result&styles=survey_dk_result&format=image/png&transparent=true",
                 "projection": "EPSG:4326",
                 "minZoom": 16,
                 "maxZoom": 24,
@@ -229,7 +232,255 @@ DEFAULT_MAP_LAYERS = [
         "sort_order": 5,
         "enabled": True,
     },
+    {
+        "name": "村庄开发边界",
+        "key": "czkfbj",
+        "layer_type": "WMTS",
+        "category": "vector",
+        "group_name": "国土空间规划",
+        "service_url": "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:czkfbj&styles=czkfbj&format=image/png&transparent=true",
+        "projection": "EPSG:4326",
+        "service_config": [
+            {
+                "serviceType": "WMTS",
+                "serviceUrl": "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:czkfbj&style=czkfbj&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+                "projection": "EPSG:4326",
+                "minZoom": 0,
+                "maxZoom": 15,
+                "enabled": True,
+            },
+            {
+                "serviceType": "WMS",
+                "serviceUrl": "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:czkfbj&styles=czkfbj&format=image/png&transparent=true",
+                "projection": "EPSG:4326",
+                "minZoom": 16,
+                "maxZoom": 24,
+                "enabled": True,
+            },
+        ],
+        "default_visible": False,
+        "is_default": False,
+        "sort_order": 20,
+        "enabled": True,
+    },
+    {
+        "name": "地类图斑",
+        "key": "dltb",
+        "layer_type": "WMTS",
+        "category": "vector",
+        "group_name": "国土空间规划",
+        "service_url": "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:dltb&styles=dltb&format=image/png&transparent=true",
+        "projection": "EPSG:4326",
+        "service_config": [
+            {
+                "serviceType": "WMTS",
+                "serviceUrl": "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:dltb&style=dltb&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+                "projection": "EPSG:4326",
+                "minZoom": 0,
+                "maxZoom": 15,
+                "enabled": True,
+            },
+            {
+                "serviceType": "WMS",
+                "serviceUrl": "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:dltb&styles=dltb&format=image/png&transparent=true",
+                "projection": "EPSG:4326",
+                "minZoom": 16,
+                "maxZoom": 24,
+                "enabled": True,
+            },
+        ],
+        "default_visible": False,
+        "is_default": False,
+        "sort_order": 30,
+        "enabled": True,
+    },
+    {
+        "name": "耕地保护目标",
+        "key": "gdbhmb",
+        "layer_type": "WMTS",
+        "category": "vector",
+        "group_name": "国土空间规划",
+        "service_url": "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:gdbhmb&styles=gdbhmb&format=image/png&transparent=true",
+        "projection": "EPSG:4326",
+        "service_config": [
+            {
+                "serviceType": "WMTS",
+                "serviceUrl": "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:gdbhmb&style=gdbhmb&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+                "projection": "EPSG:4326",
+                "minZoom": 0,
+                "maxZoom": 15,
+                "enabled": True,
+            },
+            {
+                "serviceType": "WMS",
+                "serviceUrl": "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:gdbhmb&styles=gdbhmb&format=image/png&transparent=true",
+                "projection": "EPSG:4326",
+                "minZoom": 16,
+                "maxZoom": 24,
+                "enabled": True,
+            },
+        ],
+        "default_visible": False,
+        "is_default": False,
+        "sort_order": 40,
+        "enabled": True,
+    },
+    {
+        "name": "生态保护红线",
+        "key": "stbhhx",
+        "layer_type": "WMTS",
+        "category": "vector",
+        "group_name": "国土空间规划",
+        "service_url": "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:stbhhx&styles=stbhhx&format=image/png&transparent=true",
+        "projection": "EPSG:4326",
+        "service_config": [
+            {
+                "serviceType": "WMTS",
+                "serviceUrl": "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:stbhhx&style=stbhhx&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+                "projection": "EPSG:4326",
+                "minZoom": 0,
+                "maxZoom": 15,
+                "enabled": True,
+            },
+            {
+                "serviceType": "WMS",
+                "serviceUrl": "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:stbhhx&styles=stbhhx&format=image/png&transparent=true",
+                "projection": "EPSG:4326",
+                "minZoom": 16,
+                "maxZoom": 24,
+                "enabled": True,
+            },
+        ],
+        "default_visible": False,
+        "is_default": False,
+        "sort_order": 50,
+        "enabled": True,
+    },
+    {
+        "name": "行政区",
+        "key": "xzq",
+        "layer_type": "WMTS",
+        "category": "vector",
+        "group_name": "行政区划",
+        "service_url": "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:xzq&styles=xzq&format=image/png&transparent=true",
+        "projection": "EPSG:4326",
+        "service_config": [
+            {
+                "serviceType": "WMTS",
+                "serviceUrl": "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:xzq&style=xzq&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+                "projection": "EPSG:4326",
+                "minZoom": 0,
+                "maxZoom": 15,
+                "enabled": True,
+            },
+            {
+                "serviceType": "WMS",
+                "serviceUrl": "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:xzq&styles=xzq&format=image/png&transparent=true",
+                "projection": "EPSG:4326",
+                "minZoom": 16,
+                "maxZoom": 24,
+                "enabled": True,
+            },
+        ],
+        "default_visible": False,
+        "is_default": False,
+        "sort_order": 60,
+        "enabled": True,
+    },
+    {
+        "name": "行政区界线",
+        "key": "xzqjx",
+        "layer_type": "WMTS",
+        "category": "vector",
+        "group_name": "行政区划",
+        "service_url": "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:xzqjx&styles=xzqjx&format=image/png&transparent=true",
+        "projection": "EPSG:4326",
+        "service_config": [
+            {
+                "serviceType": "WMTS",
+                "serviceUrl": "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:xzqjx&style=xzqjx&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+                "projection": "EPSG:4326",
+                "minZoom": 0,
+                "maxZoom": 15,
+                "enabled": True,
+            },
+            {
+                "serviceType": "WMS",
+                "serviceUrl": "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:xzqjx&styles=xzqjx&format=image/png&transparent=true",
+                "projection": "EPSG:4326",
+                "minZoom": 16,
+                "maxZoom": 24,
+                "enabled": True,
+            },
+        ],
+        "default_visible": False,
+        "is_default": False,
+        "sort_order": 70,
+        "enabled": True,
+    },
+    {
+        "name": "永久基本农田",
+        "key": "yjjbntbhtb",
+        "layer_type": "WMTS",
+        "category": "vector",
+        "group_name": "国土空间规划",
+        "service_url": "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:yjjbntbhtb&styles=yjjbntbhtb&format=image/png&transparent=true",
+        "projection": "EPSG:4326",
+        "service_config": [
+            {
+                "serviceType": "WMTS",
+                "serviceUrl": "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:yjjbntbhtb&style=yjjbntbhtb&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+                "projection": "EPSG:4326",
+                "minZoom": 0,
+                "maxZoom": 15,
+                "enabled": True,
+            },
+            {
+                "serviceType": "WMS",
+                "serviceUrl": "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:yjjbntbhtb&styles=yjjbntbhtb&format=image/png&transparent=true",
+                "projection": "EPSG:4326",
+                "minZoom": 16,
+                "maxZoom": 24,
+                "enabled": True,
+            },
+        ],
+        "default_visible": False,
+        "is_default": False,
+        "sort_order": 80,
+        "enabled": True,
+    },
+    {
+        "name": "调查地块图层组",
+        "key": "rural_land_layers",
+        "layer_type": "WMS",
+        "category": "vector",
+        "group_name": "GeoServer图层",
+        "service_url": "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:rural_land_layers&format=image/png&transparent=true",
+        "projection": "EPSG:4326",
+        "service_config": [
+            {
+                "serviceType": "WMS",
+                "serviceUrl": "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:rural_land_layers&format=image/png&transparent=true",
+                "projection": "EPSG:4326",
+                "minZoom": 0,
+                "maxZoom": 24,
+                "enabled": True,
+            },
+        ],
+        "default_visible": False,
+        "is_default": False,
+        "sort_order": 100,
+        "enabled": True,
+    },
 ]
+
+LEGACY_DEFAULT_MAP_LAYER_KEYS = {
+    "contract_land",
+    "issuer_boundary",
+    "contractor_distribution",
+    "workflow_status",
+    "issue_review",
+}
 
 
 def seed_initial_data(db: Session) -> None:
@@ -243,6 +494,7 @@ def seed_initial_data(db: Session) -> None:
     ensure_default_users(db)
     ensure_default_request_workflow_mappings(db)
     ensure_default_map_layers(db)
+    ensure_dictionary_presets(db)
     ensure_default_request_attachment_templates(db)
     ensure_attachment_template_hierarchy(db)
     ensure_demo_request_attachments(db)
@@ -815,6 +1067,13 @@ def ensure_default_map_layers(db: Session) -> None:
     changed = False
     for item in DEFAULT_MAP_LAYERS:
         row = db.scalar(select(MapLayer).where(MapLayer.key == item["key"]))
+        if item["key"] == "survey_dk_result":
+            item = {**item, "name": "\u627f\u5305\u5730\u5757", "group_name": "GeoServer\u56fe\u5c42"}
+        if item["key"] in LEGACY_DEFAULT_MAP_LAYER_KEYS:
+            if row is not None:
+                db.delete(row)
+                changed = True
+            continue
         if row is None:
             row = MapLayer(
                 name=item["name"],
@@ -831,6 +1090,10 @@ def ensure_default_map_layers(db: Session) -> None:
                 enabled=item.get("enabled", True),
             )
             db.add(row)
+            changed = True
+        elif item["key"] == "survey_dk_result" and (row.name != item["name"] or row.group_name != item["group_name"]):
+            row.name = item["name"]
+            row.group_name = item["group_name"]
             changed = True
 
     if changed:
@@ -857,6 +1120,86 @@ def ensure_default_request_workflow_mappings(db: Session) -> None:
                     remark="系统初始化的全局默认流程映射",
                 )
             )
+            changed = True
+
+    if changed:
+        db.commit()
+
+
+def ensure_dictionary_presets(db: Session) -> None:
+    from app.db.dictionary_presets import NYT2539_APPENDIX_C_DICTIONARY_ITEMS
+
+    existing_count = db.scalar(select(func.count()).select_from(DictionaryItem)) or 0
+    if existing_count > 0:
+        _sync_dictionary_group(db, NYT2539_APPENDIX_C_DICTIONARY_ITEMS, "nyt2539_c20_relation_to_head")
+        return
+
+    for dict_type, dict_name, item_value, item_name, sort_order, remark in NYT2539_APPENDIX_C_DICTIONARY_ITEMS:
+        db.add(
+            DictionaryItem(
+                dict_type=dict_type,
+                dict_name=dict_name,
+                item_value=item_value,
+                item_name=item_name,
+                sort_order=sort_order,
+                enabled=True,
+                remark=remark,
+                tenant_code=None,
+            )
+        )
+    db.commit()
+
+
+def _sync_dictionary_group(db: Session, preset_items: list[tuple[str, str, str, str, int, str | None]], dict_type: str) -> None:
+    group_items = [item for item in preset_items if item[0] == dict_type]
+    if not group_items:
+        return
+
+    existing_items = db.scalars(
+        select(DictionaryItem).where(
+            DictionaryItem.dict_type == dict_type,
+            DictionaryItem.tenant_code.is_(None),
+        )
+    ).all()
+    existing_by_value = {item.item_value: item for item in existing_items}
+    expected_values = {item_value for _, _, item_value, _, _, _ in group_items}
+    changed = False
+
+    for dict_type, dict_name, item_value, item_name, sort_order, remark in group_items:
+        existing = existing_by_value.get(item_value)
+        if existing is None:
+            db.add(
+                DictionaryItem(
+                    dict_type=dict_type,
+                    dict_name=dict_name,
+                    item_value=item_value,
+                    item_name=item_name,
+                    sort_order=sort_order,
+                    enabled=True,
+                    remark=remark,
+                    tenant_code=None,
+                )
+            )
+            changed = True
+            continue
+
+        if (
+            existing.dict_name != dict_name
+            or existing.item_name != item_name
+            or existing.sort_order != sort_order
+            or existing.remark != remark
+            or not existing.enabled
+        ):
+            existing.dict_name = dict_name
+            existing.item_name = item_name
+            existing.sort_order = sort_order
+            existing.remark = remark
+            existing.enabled = True
+            changed = True
+
+    for existing in existing_items:
+        if existing.item_value not in expected_values:
+            db.delete(existing)
             changed = True
 
     if changed:

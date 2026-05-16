@@ -69,3 +69,18 @@ class DataImportRow(TenantScopedMixin, TimestampMixin, Base):
     normalized_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     warning_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class DataImportOperation(TenantScopedMixin, TimestampMixin, Base):
+    __tablename__ = "data_import_operations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    import_batch_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    import_file_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    import_row_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    chunk_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    table_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    primary_key: Mapped[dict] = mapped_column(JSON, nullable=False)
+    operation_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    before_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    after_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)

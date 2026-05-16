@@ -1,131 +1,175 @@
-# Startup And Deployment Scripts
+# 脚本与打包能力总览
 
-These scripts support a portable deployment layout where runtime dependencies are stored outside the source code under `runtime/`.
+整套脚本覆盖三个完整阶段：**开发**、**构建**、**生产部署**。
 
-## Recommended Flow
+---
 
-Windows:
+## 开发阶段
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\init.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\start-all.ps1
-```
+日常写代码时使用的脚本。
 
-Linux:
+### start-all-dev — 一键启动（开发模式）
 
-```bash
-bash ./scripts/install.sh
-bash ./scripts/init.sh
-bash ./scripts/start-all.sh
-```
+拉起整个项目：PostGIS 数据库、Redis 缓存、GeoServer 地图服务、FastAPI 后端，以及可选的 Vue 前端 dev server（带热更新）。
 
-If `start-all.ps1` or `start-all.sh` is run before install/init, it exits with a clear reminder telling you which command to run next.
+| 场景 | Windows | Linux |
+|------|---------|-------|
+| 后端 + 基础设施 + 前端 dev | `.\scripts\start-all-dev.cmd -WithFrontend` | `bash ./scripts/start-all-dev.sh` |
+| 仅后端 + 基础设施 | `.\scripts\start-all-dev.cmd` | `bash ./scripts/start-all-dev.sh` |
 
-## Script Roles
+### stop-all — 停止全部服务
 
-- `install.ps1` / `install.sh`: checks whether the portable runtime files exist and writes `runtime/.state/installed.json`.
-- `init.ps1` / `init.sh`: initializes PostgreSQL/PostGIS and GeoServer, then writes `runtime/.state/initialized.json`.
-- `start-all.ps1` / `start-all.sh`: starts PostgreSQL/PostGIS, GeoServer, and the backend after install/init markers exist.
-- `stop-all.ps1` / `stop-all.sh`: stops GeoServer and PostgreSQL/PostGIS.
-- `start-postgres.*`: starts or initializes the portable PostgreSQL/PostGIS runtime.
-- `start-geoserver.*`: starts the portable GeoServer runtime.
-- `start-backend.*`: starts the FastAPI backend.
-- `start-frontend.*`: starts the Vue frontend.
+停止所有相关进程，包括残留的 Java、Python、Node、Redis 进程，并释放占用的端口（8000、8080、15432、16379、5173）。
 
-## Windows Notes
+| Windows | Linux |
+|---------|-------|
+| `.\scripts\stop-all.cmd` | `bash ./scripts/stop-all.sh` |
 
-Expected runtime files:
+---
 
-- `runtime/windows/jdk/bin/java.exe`
-- `runtime/windows/python/python.exe` with `backend/requirements.txt` already installed
-- `runtime/windows/postgresql/bin/pg_ctl.exe`
-- `runtime/windows/postgresql/bin/initdb.exe`
-- `runtime/windows/postgresql/bin/psql.exe`
-- `runtime/windows/postgresql/bin/createdb.exe`
-- `runtime/windows/postgresql/bin/pg_isready.exe`
-- `runtime/windows/geoserver/bin/startup.bat`, or `runtime/windows/geoserver/start.jar`
+## 构建阶段
 
-Start backend dependencies only:
+准备交付时使用。将源码编译为不可读的二进制产物。
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start-all.ps1
-```
+### build — 编译前端与后端
 
-Start backend dependencies plus frontend:
+前端通过 Vite 压缩混淆输出到 `frontend/dist/`，后端通过 Cython 把 `backend/app/` 下几乎所有 `.py` 编译成平台原生的 `.pyd`（Windows）或 `.so`（Linux）二进制扩展。
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start-all.ps1 -WithFrontend
-```
+编译后的代码不可读，无法直接反编译回源码。仅保留 `main.py` 和 `db/bootstrap.py` 两个入口文件保持 `.py` 格式。
 
-## Linux Notes
+| Windows | Linux |
+|---------|-------|
+| `.\scripts\build.cmd` | `bash ./scripts/build.sh` |
 
-Expected runtime files:
+构建后如需恢复源码继续开发，执行 `git checkout -- backend/`。编译产物 `.pyd` / `.so` 已加入 `.gitignore`，不会被提交到仓库。
 
-- `runtime/linux/jdk/bin/java`
-- `runtime/linux/python/bin/python` with `backend/requirements.txt` already installed
-- `runtime/linux/postgresql/bin/pg_ctl`
-- `runtime/linux/postgresql/bin/initdb`
-- `runtime/linux/postgresql/bin/psql`
-- `runtime/linux/postgresql/bin/createdb`
-- `runtime/linux/postgresql/bin/pg_isready`
-- `runtime/linux/geoserver/bin/startup.sh`, or `runtime/linux/geoserver/start.jar`
+---
 
-Backend startup uses only the bundled runtime Python. It does not create or use a development virtual environment.
+## 打包阶段
 
-## Default Database
+### package — 构建并打包
 
-- Host: `127.0.0.1`
-- Port: `15432`
-- Database: `erlunyanbao`
-- User: `RurallandContractExtension`
-- Password: `RurallandContractExtension`
+自动先执行 `build`，然后复制整个项目到临时目录，剔除以下内容：
 
-The portable PostgreSQL runtime uses `15432` by default so it does not conflict with an existing local PostgreSQL on `5432`.
+运行时数据：`runtime/data`、`runtime/logs`、`runtime/.state`（Redis 持久化文件位于 `runtime/data/redis`）
+开发依赖：`frontend/node_modules`、`backend/.venv`
+仓库与缓存：`.git`、`.pytest_cache`、`.mypy_cache`、`backend/build`
+源码：已编译的 `.py` 源文件（入口模块 `main.py`、`bootstrap.py` 除外）
+临时文件：`*.pyc`、`*.c`、`.DS_Store`、`Thumbs.db`
 
-## GeoServer Initialization
+最后压缩成带版本号和时间戳的 zip 或 tar.gz，输出到 `dist/` 目录。打包产物不含任何敏感的本地测试数据或源码，可以直接交付客户。
 
-The initialization script starts GeoServer and prepares:
+| Windows | Linux |
+|---------|-------|
+| `.\scripts\package.cmd` | `bash ./scripts/package.sh` |
 
-- Workspace: `erlunyanbao`
-- PostGIS datastore: `postgis`
-- Default table/layer: `public.DK3213242017` published as `erlunyanbao:DK3213242017`
-- Layer SRS: `EPSG:4527`
+---
 
-The PostGIS table must already exist and contain a geometry column before GeoServer can publish it.
+## 生产部署阶段
 
-## Database Initialization
+客户拿到包后，在目标机器上执行以下步骤。
 
-During `init`, the backend ORM creates the database tables and applies lightweight migrations by running `app.db.bootstrap --schema`. When the backend starts, it only fills framework seed data.
+### 1. 解压
 
-After initialization, the selected runtime settings are written to:
+### 2. install — 验证运行环境
+
+检查 `runtime/` 下的 postgresql、redis、jdk、python、geoserver 可执行文件是否齐全，Python 依赖是否安装。
+
+| Windows | Linux |
+|---------|-------|
+| `powershell -File .\scripts\install.ps1` | `bash ./scripts/install.sh` |
+
+### 3. init — 初始化数据库
+
+创建 PostgreSQL 数据库、启用 PostGIS 扩展、启动 Redis 并固定持久化目录、运行 SQL 初始化脚本、引导后端数据模型、配置 GeoServer 工作区和数据存储。生成随机密码与 Redis 连接配置写入 `runtime/.state/runtime.env`。
+
+| Windows | Linux |
+|---------|-------|
+| `powershell -File .\scripts\init.ps1` | `bash ./scripts/init.sh` |
+
+### 4. start-all — 一键启动（生产模式）
+
+启动 PostGIS、Redis、GeoServer、FastAPI 后端。前端由后端通过 StaticFiles 托管，无需 Node.js 或 npm。
+
+| Windows | Linux |
+|---------|-------|
+| `.\scripts\start-all.cmd` | `bash ./scripts/start-all.sh` |
+
+启动后访问：
+- 后端 API：http://127.0.0.1:8000
+- API 文档：http://127.0.0.1:8000/docs
+- 前端界面：http://127.0.0.1:8000（由后端托管）
+- GeoServer：http://127.0.0.1:8080/geoserver
+
+生产环境运行时不需要 Node.js、npm、Cython 或 C 编译器。
+
+---
+
+## 密码安全机制
+
+整套脚本内置了数据库密码安全策略：
+
+- **首次初始化**：`initdb` 时自动生成 24 位高复杂度随机密码（字符集不含 `@` 以避免连接 URI 解析错误）
+- **密码持久化**：写入 `runtime/.state/runtime.env`，各脚本和 Python 配置均从此文件读取
+- **默认密码检测**：启动时若检测到密码仍为默认值 `RurallandContractExtension`，自动触发密码轮换
+- **原地轮换**：通过 `ALTER ROLE ... PASSWORD` SQL 语句修改密码，不删除数据库数据目录，保护已有数据
+- **URL 编码**：后端连接 URI 对密码进行 `quote_plus` 编码，确保特殊字符不会破坏连接串
+
+---
+
+## 完整工作流
 
 ```text
-runtime/.state/runtime.env
+┌─ 开发 ──────────────────────────────────────────┐
+│  .\scripts\start-all-dev.cmd -WithFrontend       │
+│  写代码 → 热更新 → 调试                           │
+│  .\scripts\stop-all.cmd                          │
+└──────────────────────────────────────────────────┘
+                    │
+                    ▼ 准备交付
+┌─ 构建 ──────────────────────────────────────────┐
+│  .\scripts\build.cmd                             │
+│  前端 Vite 压缩混淆 → frontend/dist/              │
+│  后端 Cython 编译 → .pyd（不可读二进制）           │
+└──────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌─ 打包 ──────────────────────────────────────────┐
+│  .\scripts\package.cmd                           │
+│  排除数据/依赖/源码 → dist/*.zip                  │
+└──────────────────────────────────────────────────┘
+                    │
+                    ▼ 交付客户
+┌─ 部署 ──────────────────────────────────────────┐
+│  1. 解压                                         │
+│  2. install  → 验证运行环境                       │
+│  3. init     → 初始化数据库 + 随机密码             │
+│  4. start-all → 一键启动                          │
+└──────────────────────────────────────────────────┘
 ```
 
-`start-all` and backend startup read this file so deployment and runtime use the same database port, credentials, and service URLs.
+## 默认配置
 
-Non-ORM spatial table DDL should be stored in:
+数据库：`127.0.0.1:15432/erlunyanbao`，用户 `RurallandContractExtension`
+Redis：`127.0.0.1:16379`，持久化目录 `runtime/data/redis`
+GeoServer：`http://127.0.0.1:8080/geoserver`，工作区 `erlunyanbao`
+后端：`http://127.0.0.1:8000`
 
-```text
-scripts/sql/init-postgis-schema.sql
-```
+---
 
-This file is executed against the portable target database during `init`; no production initialization depends on an existing `5432` source database.
+## Runtime 目录要求
 
-For local development only, you can explicitly import table structure from an existing source database before the backend bootstrap runs.
+### Windows
 
-Windows:
+`runtime/windows/jdk/bin/java.exe`
+`runtime/windows/python/python.exe`（已安装 `backend/requirements.txt`）
+`runtime/windows/postgresql/bin/pg_ctl.exe`、`initdb.exe`、`psql.exe`、`createdb.exe`、`pg_isready.exe`
+`runtime/windows/redis/redis-server.exe`、`redis-cli.exe`
+`runtime/windows/geoserver/bin/startup.bat` 或 `start.jar`
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\init.ps1 -ImportSchemaFromSource
-```
+### Linux
 
-Linux:
-
-```bash
-IMPORT_SCHEMA_FROM_SOURCE=1 bash ./scripts/init.sh
-```
-
-The optional source import copies schema only, not business data, from `127.0.0.1:5432/erlunyanbao/public`.
+`runtime/linux/jdk/bin/java`
+`runtime/linux/python/bin/python`（已安装 `backend/requirements.txt`）
+`runtime/linux/postgresql/bin/pg_ctl`、`initdb`、`psql`、`createdb`、`pg_isready`
+`runtime/linux/geoserver/bin/startup.sh` 或 `start.jar`
