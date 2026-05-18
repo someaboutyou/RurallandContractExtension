@@ -19,6 +19,7 @@ from app.models.survey import (
     SurveyCbfJtcyResult,
     SurveyCbfResult,
     SurveyDkResult,
+    SurveyFbfResult,
 )
 
 # ── 枚举值映射 ──────────────────────────────────────────
@@ -51,8 +52,16 @@ TDLYLX_MAP = {
     "111": "设施农用地", "114": "坑塘水面",
 }
 SFJBNT_MAP = {"1": "是", "0": "否", "2": "否"}
+DLDJ_MAP = {
+    "1": "一等地", "2": "二等地", "3": "三等地", "4": "四等地",
+    "5": "五等地", "6": "六等地", "7": "七等地", "8": "八等地",
+    "9": "九等地",
+    "01": "一等地", "02": "二等地", "03": "三等地", "04": "四等地",
+    "05": "五等地", "06": "六等地", "07": "七等地", "08": "八等地",
+    "09": "九等地", "10": "十等地",
+}
 YHZGX_MAP = {
-    "01": "本人", "02": "配偶", "03": "子女", "04": "父母",
+    "01": "户主", "02": "配偶", "03": "子女", "04": "父母",
     "05": "兄弟姐妹", "06": "祖父母", "07": "孙子女",
     "08": "儿媳/女婿", "09": "公婆/岳父母", "99": "其他",
 }
@@ -117,6 +126,15 @@ class ContractTemplateService:
             {"cyxm": m.cyxm, "cyzjhm": m.cyzjhm}
             for m in members if m.yhzgx == "01"
         ]
+        family_members = [
+            {
+                "cyxm": m.cyxm or "",
+                "relation_text": YHZGX_MAP.get(m.yhzgx or "", m.yhzgx or ""),
+                "cyzjhm": m.cyzjhm or "",
+                "remark": getattr(m, "remark", "") or "",
+            }
+            for m in members
+        ]
 
         # ── 地块 ──
         parcels = self._load_parcels(db, contract.cbhtbm, batch_id)
@@ -126,8 +144,12 @@ class ContractTemplateService:
             # 合同
             "cbhtbm": contract.cbhtbm or "",
             "qdsj": _fmt_date(contract.qdsj),
+            "qdsj_cn": _fmt_date_cn(contract.qdsj),
             "cbqxq": _fmt_date(contract.cbqxq),
             "cbqxz": _fmt_date(contract.cbqxz),
+            "cbqxq_iso": _fmt_date_iso(contract.cbqxq),
+            "cbqxz_iso": _fmt_date_iso(contract.cbqxz),
+            "contract_years": _contract_years(contract.cbqxq, contract.cbqxz),
             "cbdkzs": contract.cbdkzs or 0,
             "htzmj": _fmt_decimal(contract.htzmj),
             "htzmjm": _fmt_decimal(contract.htzmjm),
@@ -140,7 +162,10 @@ class ContractTemplateService:
             "fbfbm": issuer.fbfbm if issuer else "",
             "fbfmc": issuer.fbfmc if issuer else "",
             "fbf_fzr": issuer.fbffzrxm if issuer else "",
+            "fbf_fzr_zjhm": issuer.fzrzjhm if issuer else "",
             "fbf_dz": issuer.fbfdz if issuer else "",
+            "fbf_lxdh": issuer.lxdh if issuer else "",
+            "fbf_social_credit_code": getattr(issuer, "tyshxydm", "") if issuer else "",
 
             # 承包方
             "cbfbm": contract.cbfbm or "",
@@ -161,8 +186,138 @@ class ContractTemplateService:
 
             # 户主
             "household_head": household_head,
+            "family_members": family_members,
         }
         template = self._env.get_template("contract.html")
+        return template.render(**ctx)
+
+    def render_survey_contract(
+        self, db: Session, *, cbhtbm: str, batch_id: int, cbfbm: str,
+    ) -> str:
+        """Render a contract preview from survey result data.
+
+        This path is used by the survey screen where parcel results may already
+        carry a contract code, even when the source ``cbht`` row was not imported.
+        """
+        contract = _one(db, select(Cbht).where(Cbht.cbhtbm == cbhtbm))
+
+        contractor = _one(
+            db,
+            select(SurveyCbfResult).where(
+                SurveyCbfResult.batch_id == batch_id,
+                SurveyCbfResult.cbfbm == cbfbm,
+            ),
+        )
+
+        relations = db.scalars(
+            select(SurveyCbdkxxResult).where(
+                SurveyCbdkxxResult.batch_id == batch_id,
+                SurveyCbdkxxResult.cbfbm == cbfbm,
+                SurveyCbdkxxResult.cbhtbm == cbhtbm,
+            )
+        ).all()
+        first_relation = relations[0] if relations else None
+
+        issuer_fbfbm = (
+            (contract.fbfbm if contract else None)
+            or (first_relation.fbfbm if first_relation else None)
+        )
+        issuer = None
+        if issuer_fbfbm:
+            issuer = _one(
+                db,
+                select(SurveyFbfResult).where(
+                    SurveyFbfResult.batch_id == batch_id,
+                    SurveyFbfResult.fbfbm == issuer_fbfbm,
+                ),
+            ) or _one(db, select(Fbf).where(Fbf.fbfbm == issuer_fbfbm))
+
+        members = []
+        if contractor:
+            members = db.scalars(
+                select(SurveyCbfJtcyResult).where(
+                    SurveyCbfJtcyResult.batch_id == batch_id,
+                    SurveyCbfJtcyResult.cbfbm == cbfbm,
+                )
+            ).all()
+
+        household_head = [
+            {"cyxm": m.cyxm, "cyzjhm": m.cyzjhm}
+            for m in members if m.yhzgx == "01"
+        ]
+        family_members = [
+            {
+                "cyxm": m.cyxm or "",
+                "relation_text": YHZGX_MAP.get(m.yhzgx or "", m.yhzgx or ""),
+                "cyzjhm": m.cyzjhm or "",
+                "remark": getattr(m, "remark", "") or "",
+            }
+            for m in members
+        ]
+        parcels = self._load_parcels(db, cbhtbm, batch_id)
+        htzmj = (
+            contract.htzmj if contract and contract.htzmj is not None
+            else sum(float(item.htmj or 0) for item in relations)
+        )
+        htzmjm = (
+            contract.htzmjm if contract and contract.htzmjm is not None
+            else (float(htzmj or 0) / 666.67 if htzmj else None)
+        )
+        cbfs = (contract.cbfs if contract else None) or (
+            first_relation.cbjyqqdfs if first_relation else ""
+        )
+
+        ctx = {
+            "cbhtbm": cbhtbm,
+            "qdsj": _fmt_date(contract.qdsj if contract else None),
+            "qdsj_cn": _fmt_date_cn(contract.qdsj if contract else None),
+            "cbqxq": _fmt_date(contract.cbqxq if contract else None),
+            "cbqxz": _fmt_date(contract.cbqxz if contract else None),
+            "cbqxq_iso": _fmt_date_iso(contract.cbqxq if contract else None),
+            "cbqxz_iso": _fmt_date_iso(contract.cbqxz if contract else None),
+            "contract_years": _contract_years(
+                contract.cbqxq if contract else None,
+                contract.cbqxz if contract else None,
+            ),
+            "cbdkzs": (contract.cbdkzs if contract and contract.cbdkzs is not None else len(parcels)),
+            "htzmj": _fmt_decimal(htzmj),
+            "htzmjm": _fmt_decimal(htzmjm),
+            "yhtzmj": _fmt_decimal(contract.yhtzmj if contract else None),
+            "yhtzmjm": _fmt_decimal(contract.yhtzmjm if contract else None),
+            "cbfs_text": CBFS_MAP.get(cbfs or "", cbfs or ""),
+            "cbjyqqdfs_text": CBJYQQDFS_MAP.get(
+                first_relation.cbjyqqdfs if first_relation else "",
+                first_relation.cbjyqqdfs if first_relation else "",
+            ),
+            "fbfbm": getattr(issuer, "fbfbm", "") if issuer else "",
+            "fbfmc": getattr(issuer, "fbfmc", "") if issuer else "",
+            "fbf_fzr": getattr(issuer, "fbffzrxm", "") if issuer else "",
+            "fbf_fzr_zjhm": getattr(issuer, "fzrzjhm", "") if issuer else "",
+            "fbf_dz": getattr(issuer, "fbfdz", "") if issuer else "",
+            "fbf_lxdh": getattr(issuer, "lxdh", "") if issuer else "",
+            "fbf_social_credit_code": getattr(issuer, "tyshxydm", "") if issuer else "",
+            "cbfbm": cbfbm,
+            "cbfmc": contractor.cbfmc if contractor else "",
+            "cbf_type_text": CBF_TYPE_MAP.get(
+                contractor.cbflx if contractor else "", ""
+            ),
+            "cbf_zjlx_text": ZJLX_MAP.get(
+                contractor.cbfzjlx if contractor else "", ""
+            ),
+            "cbfzjhm": contractor.cbfzjhm if contractor else "",
+            "cbfdz": contractor.cbfdz if contractor else "",
+            "lxdh": contractor.lxdh if contractor else "",
+            "cbfcysl": contractor.cbfcysl if contractor else 0,
+            "parcels": parcels,
+            "household_head": household_head,
+            "family_members": family_members,
+        }
+        template = self._env.get_template("contract.html")
+        return template.render(**ctx)
+
+    def render_plot_sketch_map(self, **ctx) -> str:
+        """Render the contracted parcel sketch map HTML."""
+        template = self._env.get_template("poltsketchmap.html")
         return template.render(**ctx)
 
     # ── helpers ─────────────────────────────────────────
@@ -187,6 +342,8 @@ class ContractTemplateService:
             scmj = float(dk.scmj) if dk and dk.scmj else 0.0
             result.append({
                 "dkbm": dk.dkbm or "",
+                "dkbm_prefix": (dk.dkbm or "")[:14],
+                "dkbm_suffix": (dk.dkbm or "")[14:],
                 "dkmc": dk.dkmc or "",
                 "dklb_text": DK_LB_MAP.get(dk.dklb or "", dk.dklb or ""),
                 "scmj": f"{scmj:.2f}",
@@ -198,6 +355,7 @@ class ContractTemplateService:
                 "sfjbnt_text": SFJBNT_MAP.get(
                     dk.sfjbnt or "", dk.sfjbnt or ""
                 ),
+                "dldj_text": DLDJ_MAP.get(dk.dldj or "", dk.dldj or ""),
                 "tdlylx_text": TDLYLX_MAP.get(
                     dk.tdlylx or "", dk.tdlylx or ""
                 ),
@@ -218,6 +376,31 @@ def _fmt_date(val) -> str:
     if isinstance(val, datetime):
         return val.strftime("%Y年%m月%d日")
     return str(val)
+
+
+def _fmt_date_cn(val) -> str:
+    if val is None:
+        return ""
+    if isinstance(val, datetime):
+        return val.strftime("%Y年%m月%d日")
+    return str(val)
+
+
+def _fmt_date_iso(val) -> str:
+    if val is None:
+        return ""
+    if isinstance(val, datetime):
+        return val.strftime("%Y-%m-%d")
+    return str(val)
+
+
+def _contract_years(start, end) -> str:
+    if isinstance(start, datetime) and isinstance(end, datetime):
+        years = end.year - start.year
+        if (end.month, end.day) >= (start.month, start.day):
+            years += 1
+        return str(years)
+    return "30"
 
 
 def _fmt_decimal(val) -> str:

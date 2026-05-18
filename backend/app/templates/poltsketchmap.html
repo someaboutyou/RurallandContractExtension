@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>承包地块示意图</title>
+<style>
+  @page {
+    size: A4 landscape;
+    margin: 0;
+  }
+
+  * { box-sizing: border-box; }
+
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    color: #000;
+    background: #f2f3f5;
+    font-family: "SimSun", "宋体", serif;
+    font-size: 12px;
+  }
+
+  .page {
+    position: relative;
+    width: 297mm;
+    height: 210mm;
+    margin: 0 auto 12px;
+    padding: 100px 50px 0;
+    background: #fff;
+    page-break-after: always;
+    overflow: hidden;
+  }
+
+  .page:last-child { page-break-after: auto; }
+
+  .sheet {
+    position: relative;
+    display: grid;
+    grid-template-rows: 48px 530px 22px;
+    width: 100%;
+    height: 600px;
+    border: 1px solid #000;
+  }
+
+  .title {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-bottom: 1px solid #000;
+    font-family: "SimHei", "黑体", sans-serif;
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: 0;
+  }
+
+  .content {
+    min-height: 0;
+    display: grid;
+  }
+
+  .content.first {
+    grid-template-columns: 90mm 1fr;
+  }
+
+  .content.continuation {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-column {
+    display: grid;
+    grid-template-rows: 1fr 44mm;
+    min-width: 0;
+    border-right: 1px solid #000;
+  }
+
+  .overview-map {
+    position: relative;
+    min-height: 0;
+    padding: 6mm 5mm;
+  }
+
+  .north-arrow {
+    position: absolute;
+    right: 4mm;
+    bottom: 5mm;
+    width: 9mm;
+    height: 15mm;
+  }
+
+  .info-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    border-top: 1px solid #000;
+    font-size: 14px;
+  }
+
+  .info-table th,
+  .info-table td {
+    height: 11mm;
+    border-right: 1px solid #000;
+    border-bottom: 1px solid #000;
+    padding: 0 2mm;
+    text-align: left;
+    vertical-align: middle;
+    font-weight: 400;
+    word-break: break-all;
+  }
+
+  .info-table tr:last-child th,
+  .info-table tr:last-child td { border-bottom: 0; }
+  .info-table th { width: 37mm; font-weight: 700; }
+  .info-table td:last-child { border-right: 0; }
+  .unit-cell { text-align: right; font-weight: 700; }
+
+  .plots-grid {
+    display: grid;
+    min-height: 0;
+  }
+
+  .plots-grid.first-page {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+
+  .plots-grid.next-page {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+
+  .plot-cell {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    border-right: 1px solid #000;
+    border-bottom: 1px solid #000;
+    overflow: hidden;
+  }
+
+  .plots-grid.first-page .plot-cell:nth-child(3n),
+  .plots-grid.next-page .plot-cell:nth-child(4n) { border-right: 0; }
+
+  .plots-grid.first-page .plot-cell:nth-child(n + 4),
+  .plots-grid.next-page .plot-cell:nth-child(n + 5) { border-bottom: 0; }
+
+  .neighbor {
+    position: absolute;
+    z-index: 2;
+    max-width: 43%;
+    line-height: 1.15;
+    text-align: center;
+    word-break: break-all;
+  }
+
+  .neighbor.north {
+    top: 4mm;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+
+  .neighbor.south {
+    bottom: 3.5mm;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+
+  .neighbor.west {
+    left: 2mm;
+    top: 50%;
+    max-width: 17mm;
+    transform: translateY(-50%);
+    writing-mode: vertical-rl;
+    text-orientation: upright;
+  }
+
+  .neighbor.east {
+    right: 2mm;
+    top: 50%;
+    max-width: 17mm;
+    transform: translateY(-50%);
+    writing-mode: vertical-rl;
+    text-orientation: upright;
+  }
+
+  .plot-map {
+    position: absolute;
+    inset: 13mm 18mm 12mm 18mm;
+    z-index: 1;
+  }
+
+  .plot-label {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    z-index: 3;
+    transform: translate(-50%, -50%);
+    font-family: "Courier New", monospace;
+    font-size: 13px;
+    white-space: nowrap;
+    background: rgba(255, 255, 255, 0.65);
+  }
+
+  .empty-cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: transparent;
+  }
+
+  .map-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  .overview-svg .parcel-line,
+  .plot-svg .parcel-line {
+    fill: none;
+    stroke: #0000ff;
+    stroke-width: 1.2;
+    vector-effect: non-scaling-stroke;
+  }
+
+  .overview-svg .parcel-line {
+    stroke: #58b7ff;
+    stroke-width: 0.75;
+  }
+
+  .overview-svg .highlight-line {
+    fill: none;
+    stroke: #ff2d2d;
+    stroke-width: 1.4;
+    vector-effect: non-scaling-stroke;
+  }
+
+  .footer {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1.15fr 14mm;
+    border-top: 1px solid #000;
+    font-size: 11px;
+    line-height: 22px;
+  }
+
+  .footer > div {
+    min-width: 0;
+    padding: 0 1.5mm;
+    border-right: 1px solid #000;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: clip;
+  }
+
+  .footer > div:last-child {
+    border-right: 0;
+    text-align: center;
+  }
+
+  @media print {
+    html,
+    body { background: #fff; }
+
+    .page {
+      margin: 0;
+      padding: 100px 50px 0;
+    }
+  }
+</style>
+</head>
+<body>
+{% set sample_plots = [
+  {
+    "code": "00287", "area": "0.68", "north": "王传明、王传奇等", "south": "汪文远、王成新",
+    "west": "王传连", "east": "杨师争",
+    "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [62, 6], [118, 5], [119, 24], [57, 23], [0, 18], [0, 0]]]}
+  },
+  {
+    "code": "00072", "area": "0.95", "north": "机耕路", "south": "王集居民地",
+    "west": "王传连", "east": "王传印、孟凡启",
+    "geometry": {"type": "Polygon", "coordinates": [[[31, 0], [75, 2], [55, 118], [8, 127], [31, 0]]]}
+  },
+  {
+    "code": "00014", "area": "1.20", "north": "王集居民地", "south": "机耕路",
+    "west": "王传连", "east": "汪文彬",
+    "geometry": {"type": "Polygon", "coordinates": [[[48, 0], [61, 1], [43, 126], [31, 126], [48, 0]]]}
+  },
+  {
+    "code": "00095", "area": "2.64", "north": "张安七组承包地杨圣利户、王传奇", "south": "沟渠",
+    "west": "王传峰、王传明", "east": "王德将",
+    "geometry": {"type": "Polygon", "coordinates": [[[42, 0], [74, 5], [52, 82], [42, 82], [28, 133], [52, 135], [42, 0]]]}
+  },
+  {
+    "code": "00171", "area": "0.17", "north": "郭思艾", "south": "机耕路",
+    "west": "王传明", "east": "前王集七组集体地",
+    "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [114, 0], [109, 118], [0, 121], [0, 0]]]}
+  }
+] %}
+{% if sketch_plots is defined %}
+  {% set plot_items = sketch_plots %}
+{% elif parcels is defined %}
+  {% set plot_items = parcels %}
+{% else %}
+  {% set plot_items = sample_plots %}
+{% endif %}
+{% set first_page_plots = plot_items[:6] %}
+{% set remaining_plots = plot_items[6:] %}
+{% set total_pages = 1 + ((remaining_plots | length + 7) // 8) %}
+{% set map_overview = overview_geometry | default(total_geometry | default(None, true), true) %}
+{% set highlighted = highlighted_geometry | default(None, true) %}
+{% set audit_text = auditor | default("审核者：" ~ (village_name | default("和谐村前王集一组", true)) ~ "　" ~ (audit_date | default("2026年02月09日", true)), true) %}
+{% set mapper_text = mapper | default("制图者：" ~ (village_name | default("和谐村前王集一组", true)) ~ "　" ~ (map_date | default("2026年02月09日", true)), true) %}
+{% set publisher_text = publisher | default("编制单位：" ~ (compile_unit | default("四川凯普顿信息技术股份有限公司", true)), true) %}
+
+{% macro draw_plot_cell(plot) -%}
+  <div class="plot-cell">
+    <div class="neighbor north">{{ plot.north | default(plot.dkbz | default("", true), true) }}</div>
+    <div class="neighbor south">{{ plot.south | default(plot.dknz | default("", true), true) }}</div>
+    <div class="neighbor west">{{ plot.west | default(plot.dkxz | default("", true), true) }}</div>
+    <div class="neighbor east">{{ plot.east | default(plot.dkdz | default("", true), true) }}</div>
+    <div
+      class="plot-map js-geo-map"
+      data-map-kind="plot"
+      data-geometry='{{ plot.geometry | default(plot.geometry_json | default(plot.geojson | default(None, true), true), true) | tojson }}'
+      data-svg="{{ plot.svg | default('', true) | e }}"
+    ></div>
+    <div class="plot-label">
+      {{ plot.code | default(plot.dkbm_suffix | default(plot.dkbm | default("", true), true), true) }}：{{ plot.area | default(plot.htmj | default(plot.scmj_mu | default("", true), true), true) }}亩
+    </div>
+  </div>
+{%- endmacro %}
+
+{% macro draw_footer(page_index) -%}
+  <div class="footer">
+    <div>{{ audit_text }}</div>
+    <div>{{ mapper_text }}</div>
+    <div>{{ publisher_text }}</div>
+    <div>{{ page_index }}-{{ total_pages }}</div>
+  </div>
+{%- endmacro %}
+
+<section class="page">
+  <div class="sheet">
+    <header class="title">承包地块示意图</header>
+    <main class="content first">
+      <aside class="overview-column">
+        <div class="overview-map">
+          <div
+            class="map-svg js-geo-map"
+            data-map-kind="overview"
+            data-geometry='{{ map_overview | tojson }}'
+            data-highlight='{{ highlighted | tojson }}'
+            data-plots='{{ plot_items | tojson }}'
+            data-svg="{{ overview_svg | default('', true) | e }}"
+          ></div>
+          <svg class="north-arrow" viewBox="0 0 40 66" aria-hidden="true">
+            <circle cx="20" cy="43" r="16" fill="none" stroke="#000" stroke-width="2"/>
+            <path d="M20 2 L31 57 L20 47 L9 57 Z" fill="none" stroke="#000" stroke-width="2"/>
+            <path d="M20 8 L20 47" stroke="#000" stroke-width="2"/>
+            <text x="20" y="13" text-anchor="middle" font-size="12" font-family="serif">N</text>
+          </svg>
+        </div>
+        <table class="info-table">
+          <tbody>
+            <tr>
+              <th>承包方代表姓名</th>
+              <td colspan="2">{{ contractor_name | default(cbfmc | default("", true), true) }}</td>
+            </tr>
+            <tr>
+              <th>承包方编码</th>
+              <td colspan="2">{{ contractor_code | default(cbfbm | default("", true), true) }}</td>
+            </tr>
+            <tr>
+              <th>承包地块总数</th>
+              <td>{{ total_plots | default(plot_items | length, true) }}</td>
+              <td class="unit-cell">块</td>
+            </tr>
+            <tr>
+              <th>承包地块总面积</th>
+              <td>{{ total_area | default(htzmjm | default("", true), true) }}</td>
+              <td class="unit-cell">亩</td>
+            </tr>
+          </tbody>
+        </table>
+      </aside>
+      <section class="plots-grid first-page">
+        {% for plot in first_page_plots %}
+          {{ draw_plot_cell(plot) }}
+        {% endfor %}
+        {% for _ in range(6 - (first_page_plots | length)) %}
+          <div class="plot-cell empty-cell"></div>
+        {% endfor %}
+      </section>
+    </main>
+    {{ draw_footer(1) }}
+  </div>
+</section>
+
+{% for page_plots in remaining_plots | batch(8, none) %}
+<section class="page">
+  <div class="sheet">
+    <header class="title">承包地块示意图</header>
+    <main class="content continuation">
+      <section class="plots-grid next-page">
+        {% for plot in page_plots %}
+          {% if plot %}
+            {{ draw_plot_cell(plot) }}
+          {% else %}
+            <div class="plot-cell empty-cell"></div>
+          {% endif %}
+        {% endfor %}
+      </section>
+    </main>
+    {{ draw_footer(loop.index + 1) }}
+  </div>
+</section>
+{% endfor %}
+
+<script>
+(function () {
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  function parseData(value, fallback) {
+    if (!value || value === 'null') return fallback;
+    try {
+      const parsed = JSON.parse(value);
+      if (typeof parsed === 'string' && parsed.trim().startsWith('{')) {
+        return JSON.parse(parsed);
+      }
+      return parsed;
+    } catch (error) {
+      return fallback;
+    }
+  }
+
+  function collectRings(geometry, rings) {
+    if (!geometry) return rings;
+    if (geometry.type === 'Feature') return collectRings(geometry.geometry, rings);
+    if (geometry.type === 'FeatureCollection') {
+      (geometry.features || []).forEach((feature) => collectRings(feature, rings));
+      return rings;
+    }
+    if (geometry.type === 'GeometryCollection') {
+      (geometry.geometries || []).forEach((item) => collectRings(item, rings));
+      return rings;
+    }
+    if (geometry.type === 'Polygon') {
+      (geometry.coordinates || []).forEach((ring) => rings.push(ring));
+      return rings;
+    }
+    if (geometry.type === 'MultiPolygon') {
+      (geometry.coordinates || []).forEach((polygon) => {
+        (polygon || []).forEach((ring) => rings.push(ring));
+      });
+      return rings;
+    }
+    return rings;
+  }
+
+  function boundsFor(rings) {
+    const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+    rings.forEach((ring) => {
+      (ring || []).forEach((point) => {
+        const x = Number(point[0]);
+        const y = Number(point[1]);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        bounds.minX = Math.min(bounds.minX, x);
+        bounds.minY = Math.min(bounds.minY, y);
+        bounds.maxX = Math.max(bounds.maxX, x);
+        bounds.maxY = Math.max(bounds.maxY, y);
+      });
+    });
+    if (!Number.isFinite(bounds.minX)) return null;
+    if (bounds.maxX === bounds.minX) bounds.maxX += 1;
+    if (bounds.maxY === bounds.minY) bounds.maxY += 1;
+    return bounds;
+  }
+
+  function pathForRing(ring, bounds, width, height, padding) {
+    const dx = bounds.maxX - bounds.minX;
+    const dy = bounds.maxY - bounds.minY;
+    const scale = Math.min((width - padding * 2) / dx, (height - padding * 2) / dy);
+    const offsetX = (width - dx * scale) / 2;
+    const offsetY = (height - dy * scale) / 2;
+    return (ring || []).map((point, index) => {
+      const x = offsetX + (Number(point[0]) - bounds.minX) * scale;
+      const y = height - (offsetY + (Number(point[1]) - bounds.minY) * scale);
+      return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+    }).join(' ') + ' Z';
+  }
+
+  function appendGeometry(svg, geometry, className, sharedBounds) {
+    const rings = collectRings(geometry, []);
+    const bounds = sharedBounds || boundsFor(rings);
+    if (!bounds) return bounds;
+    rings.forEach((ring) => {
+      const path = document.createElementNS(SVG_NS, 'path');
+      path.setAttribute('class', className);
+      path.setAttribute('d', pathForRing(ring, bounds, 1000, 1000, 50));
+      svg.appendChild(path);
+    });
+    return bounds;
+  }
+
+  function renderSvgString(node, svgText) {
+    if (!svgText) return false;
+    node.innerHTML = svgText;
+    const svg = node.querySelector('svg');
+    if (svg) svg.classList.add('map-svg');
+    return true;
+  }
+
+  function renderMap(node) {
+    if (renderSvgString(node, node.dataset.svg)) return;
+
+    const kind = node.dataset.mapKind || 'plot';
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('class', `map-svg ${kind === 'overview' ? 'overview-svg' : 'plot-svg'}`);
+    svg.setAttribute('viewBox', '0 0 1000 1000');
+    svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+
+    if (kind === 'overview') {
+      const geometry = parseData(node.dataset.geometry, null);
+      const plots = parseData(node.dataset.plots, []);
+      const highlight = parseData(node.dataset.highlight, null);
+      const geometries = geometry ? [geometry] : plots.map((plot) => plot.geometry || plot.geojson).filter(Boolean);
+      const allRings = [];
+      geometries.forEach((item) => collectRings(item, allRings));
+      const sharedBounds = boundsFor(allRings);
+      geometries.forEach((item) => appendGeometry(svg, item, 'parcel-line', sharedBounds));
+      if (highlight) appendGeometry(svg, highlight, 'highlight-line', sharedBounds);
+    } else {
+      const geometry = parseData(node.dataset.geometry, null);
+      appendGeometry(svg, geometry, 'parcel-line');
+    }
+
+    node.appendChild(svg);
+  }
+
+  document.querySelectorAll('.js-geo-map').forEach(renderMap);
+})();
+</script>
+</body>
+</html>

@@ -258,12 +258,97 @@
         </div>
 
         <Transition name="gis-property-panel">
-          <aside v-if="propertyPanelVisible" :key="propertyPanelKey" class="gis-property-panel">
-            <div class="gis-property-title">{{ ui.attrTitle }}</div>
-            <div class="gis-attr-card" v-for="item in attrs" :key="item.label">
-              <div class="gis-attr-card-label">{{ item.label }}</div>
-              <div class="gis-attr-card-value">{{ item.value }}</div>
+          <aside v-if="propertyPanelVisible" :key="propertyPanelKey" class="gis-property-panel" :style="propertyPanelDragStyle">
+            <div class="gis-property-head" @pointerdown="startPropertyPanelDrag">
+              <div>
+                <div class="gis-property-title">{{ selectedParcel ? "承包方卡片" : ui.attrTitle }}</div>
+                <div v-if="selectedParcel" class="gis-property-subtitle">{{ selectedParcel.cbfmc || selectedParcel.dkbm || ui.unknown }}</div>
+              </div>
+              <button type="button" class="gis-property-close" :aria-label="ui.clearSelection" @pointerdown.stop @click.stop="clearSelection">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+                  <path d="M6 6l12 12" />
+                  <path d="M18 6 6 18" />
+                </svg>
+              </button>
             </div>
+
+            <template v-if="selectedParcel">
+              <div class="gis-card-tabs">
+                <button
+                  v-for="tab in parcelTabs"
+                  :key="tab.value"
+                  type="button"
+                  class="gis-card-tab"
+                  :class="{ 'is-active': activeParcelTab === tab.value }"
+                  @click="activeParcelTab = tab.value"
+                >
+                  {{ tab.label }}
+                </button>
+              </div>
+
+              <div v-if="activeParcelTab === 'contractor'" class="gis-card-pane">
+                <div class="gis-info-grid">
+                  <div v-for="item in contractorInfoRows" :key="item.label" class="gis-info-cell">
+                    <span>{{ item.label }}</span>
+                    <strong>{{ item.value }}</strong>
+                  </div>
+                </div>
+                <div class="gis-table-title">家庭成员</div>
+                <div class="gis-mini-table">
+                  <div class="gis-mini-table-row gis-mini-table-head">
+                    <span>序号</span>
+                    <span>成员姓名</span>
+                    <span>证件类型</span>
+                    <span>证件号码</span>
+                    <span>与户主关系</span>
+                    <span>是否共有人</span>
+                  </div>
+                  <div v-for="(member, index) in selectedParcel.familyMembers || []" :key="`${member.idNo}-${index}`" class="gis-mini-table-row">
+                    <span>{{ index + 1 }}</span>
+                    <span>{{ member.name || ui.unknown }}</span>
+                    <span>{{ member.idType || ui.unknown }}</span>
+                    <span>{{ member.idNo || ui.unknown }}</span>
+                    <span>{{ member.relationToHead || ui.unknown }}</span>
+                    <span>{{ member.isCoOwner === "1" ? "是" : member.isCoOwner || ui.unknown }}</span>
+                  </div>
+                  <div v-if="!selectedParcel.familyMembers?.length" class="gis-mini-empty">暂无家庭成员数据</div>
+                </div>
+              </div>
+
+              <div v-else-if="activeParcelTab === 'issuer'" class="gis-card-pane">
+                <div class="gis-info-grid">
+                  <div v-for="item in issuerInfoRows" :key="item.label" class="gis-info-cell">
+                    <span>{{ item.label }}</span>
+                    <strong>{{ item.value }}</strong>
+                  </div>
+                </div>
+              </div>
+
+              <div v-else-if="activeParcelTab === 'parcel'" class="gis-card-pane">
+                <div class="gis-info-grid">
+                  <div v-for="item in parcelInfoRows" :key="item.label" class="gis-info-cell">
+                    <span>{{ item.label }}</span>
+                    <strong>{{ item.value }}</strong>
+                  </div>
+                </div>
+              </div>
+
+              <div v-else class="gis-card-pane">
+                <div class="gis-info-grid">
+                  <div v-for="item in contractInfoRows" :key="item.label" class="gis-info-cell">
+                    <span>{{ item.label }}</span>
+                    <strong>{{ item.value }}</strong>
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <template v-else>
+              <div class="gis-attr-card" v-for="item in attrs" :key="item.label">
+                <div class="gis-attr-card-label">{{ item.label }}</div>
+                <div class="gis-attr-card-value">{{ item.value }}</div>
+              </div>
+            </template>
           </aside>
         </Transition>
 
@@ -293,12 +378,15 @@ import OlMap from "ol/Map";
 import View from "ol/View";
 import { ScaleLine } from "ol/control";
 import { Draw } from "ol/interaction";
+import ImageLayer from "ol/layer/Image";
 import TileLayer from "ol/layer/Tile";
 import VectorLayer from "ol/layer/Vector";
 import Overlay from "ol/Overlay";
+import { getCenter } from "ol/extent";
 import WMTSGrid from "ol/tilegrid/WMTS";
 import { fromLonLat, get as getProjection, toLonLat, transformExtent } from "ol/proj";
-import { OSM, TileWMS, Vector as VectorSource, XYZ } from "ol/source";
+import { OSM, Vector as VectorSource, XYZ } from "ol/source";
+import ImageWMS from "ol/source/ImageWMS";
 import WMTS from "ol/source/WMTS";
 import { Fill, Icon, Stroke, Style, Text } from "ol/style";
 import MultiPolygon from "ol/geom/MultiPolygon";
@@ -455,6 +543,8 @@ const basemapRows = ref([]);
 const layerRows = ref([]);
 const searchResult = ref({ requests: [], issuers: [], contractors: [] });
 const selectedParcel = ref(null);
+const activeParcelTab = ref("contractor");
+const propertyPanelPosition = ref(null);
 const propertyPanelVisible = ref(false);
 const propertyPanelKey = ref(0);
 const attrs = ref([]);
@@ -496,6 +586,133 @@ const searchParcelCount = computed(() =>
   activeSearchItems.value.reduce((total, item) => total + Number(item.parcelCount || 0), 0),
 );
 
+const propertyPanelDragStyle = computed(() => {
+  if (!propertyPanelPosition.value) {
+    return {};
+  }
+  return {
+    left: `${propertyPanelPosition.value.x}px`,
+    top: `${propertyPanelPosition.value.y}px`,
+    right: "auto",
+    bottom: "auto",
+  };
+});
+
+const parcelTabs = [
+  { label: "发包方", value: "issuer" },
+  { label: "承包方", value: "contractor" },
+  { label: "承包地块", value: "parcel" },
+  { label: "承包合同", value: "contract" },
+];
+
+function displayValue(value) {
+  return value === undefined || value === null || value === "" ? ui.unknown : value;
+}
+
+function withAreaUnit(value) {
+  return value === undefined || value === null || value === "" ? ui.unknown : `${value} 亩`;
+}
+
+const contractorInfoRows = computed(() => {
+  const parcel = selectedParcel.value || {};
+  return [
+    { label: "承包方编码", value: displayValue(parcel.cbfbm) },
+    { label: "承包方类型", value: displayValue(parcel.cbflx) },
+    { label: "承包方名称", value: displayValue(parcel.cbfmc) },
+    { label: "证件类型", value: displayValue(parcel.cbfzjlx) },
+    { label: "证件号码", value: displayValue(parcel.cbfzjhm) },
+    { label: "承包方地址", value: displayValue(parcel.cbfdz) },
+    { label: "邮政编码", value: displayValue(parcel.cbfyzbm) },
+    { label: "联系电话", value: displayValue(parcel.cbflxdh) },
+    { label: "家庭成员数", value: displayValue(parcel.cbfcysl) },
+    { label: "所属区域编码", value: displayValue(parcel.cbfGroupRegionCode) },
+    { label: "所属区域名称", value: displayValue(parcel.cbfGroupRegionName) },
+    { label: "调查日期", value: displayValue(parcel.cbfdcrq) },
+    { label: "调查员", value: displayValue(parcel.cbfdcy) },
+    { label: "调查记事", value: displayValue(parcel.cbfdcjs) },
+    { label: "公示记事", value: displayValue(parcel.gsjs) },
+    { label: "公示记事人", value: displayValue(parcel.gsjsr) },
+    { label: "公示审核日期", value: displayValue(parcel.gsshrq) },
+    { label: "公示审核人", value: displayValue(parcel.gsshr) },
+    { label: "调查状态", value: displayValue(parcel.cbfSurveyStatus) },
+    { label: "成果状态", value: displayValue(parcel.cbfResultStatus) },
+    { label: "是否变更", value: parcel.cbfIsChanged === true ? "是" : parcel.cbfIsChanged === false ? "否" : ui.unknown },
+    { label: "变更类型", value: displayValue(parcel.cbfChangeType) },
+    { label: "变更原因", value: displayValue(parcel.cbfChangeReason) },
+    { label: "政策依据", value: displayValue(parcel.cbfPolicyBasis) },
+    { label: "证据摘要", value: displayValue(parcel.cbfEvidenceSummary) },
+    { label: "调查处理人", value: displayValue(parcel.cbfInvestigatorName) },
+    { label: "调查处理日期", value: displayValue(parcel.cbfInvestigatedAt) },
+    { label: "复核人", value: displayValue(parcel.cbfReviewerName) },
+    { label: "复核日期", value: displayValue(parcel.cbfReviewedAt) },
+    { label: "确认日期", value: displayValue(parcel.cbfConfirmedAt) },
+    { label: "备注", value: displayValue(parcel.cbfRemark) },
+  ];
+});
+
+const issuerInfoRows = computed(() => {
+  const parcel = selectedParcel.value || {};
+  return [
+    { label: "发包方编码", value: displayValue(parcel.fbfbm) },
+    { label: "发包方名称", value: displayValue(parcel.fbfmc) },
+    { label: "负责人姓名", value: displayValue(parcel.fbffzrxm) },
+    { label: "负责人证件类型", value: displayValue(parcel.fbffzrzjlx) },
+    { label: "负责人证件号码", value: displayValue(parcel.fbffzrzjhm) },
+    { label: "联系电话", value: displayValue(parcel.fbflxdh) },
+    { label: "发包方地址", value: displayValue(parcel.fbfdz) },
+    { label: "邮政编码", value: displayValue(parcel.fbfyzbm) },
+    { label: "发包方调查员", value: displayValue(parcel.fbfdcy) },
+    { label: "发包方调查日期", value: displayValue(parcel.fbfdcrq) },
+    { label: "发包方调查记事", value: displayValue(parcel.fbfdcjs) },
+    { label: "调查状态", value: displayValue(parcel.fbfSurveyStatus) },
+    { label: "成果状态", value: displayValue(parcel.fbfResultStatus) },
+    { label: "是否变更", value: parcel.fbfIsChanged === true ? "是" : parcel.fbfIsChanged === false ? "否" : ui.unknown },
+    { label: "变更类型", value: displayValue(parcel.fbfChangeType) },
+    { label: "变更原因", value: displayValue(parcel.fbfChangeReason) },
+    { label: "区域编码", value: displayValue(parcel.fbfRegionCode) },
+    { label: "租户编码", value: displayValue(parcel.fbfTenantCode) },
+  ];
+});
+
+const parcelInfoRows = computed(() => {
+  const parcel = selectedParcel.value || {};
+  return [
+    { label: "地块编码", value: displayValue(parcel.dkbm) },
+    { label: "地块名称", value: displayValue(parcel.dkmc) },
+    { label: "地块类别", value: displayValue(parcel.dklb) },
+    { label: "土地利用类型", value: displayValue(parcel.tdlylx) },
+    { label: "地力等级", value: displayValue(parcel.dldj) },
+    { label: "土地用途", value: displayValue(parcel.tdyt) },
+    { label: "是否基本农田", value: displayValue(parcel.sfjbnt) },
+    { label: "合同面积", value: withAreaUnit(parcel.htmj) },
+    { label: "实测面积", value: withAreaUnit(parcel.scmj) },
+    { label: "东至", value: displayValue(parcel.dkdz) },
+    { label: "西至", value: displayValue(parcel.dkxz) },
+    { label: "南至", value: displayValue(parcel.dknz) },
+    { label: "北至", value: displayValue(parcel.dkbz) },
+    { label: "备注", value: displayValue(parcel.dkbzxx) },
+  ];
+});
+
+const contractInfoRows = computed(() => {
+  const parcel = selectedParcel.value || {};
+  const contract = parcel.contract || {};
+  return [
+    { label: "承包合同编码", value: displayValue(contract.cbhtbm || parcel.cbhtbm) },
+    { label: "原承包合同编码", value: displayValue(contract.ycbhtbm) },
+    { label: "承包方式", value: displayValue(contract.cbfs || parcel.cbjyqqdfs) },
+    { label: "承包期限起", value: displayValue(contract.cbqxq) },
+    { label: "承包期限止", value: displayValue(contract.cbqxz) },
+    { label: "签订时间", value: displayValue(contract.qdsj) },
+    { label: "承包地块数", value: displayValue(contract.cbdkzs) },
+    { label: "合同总面积", value: withAreaUnit(contract.htzmj) },
+    { label: "原合同总面积", value: withAreaUnit(contract.yhtzmj || parcel.yhtmj) },
+    { label: "合同总面积(平方米)", value: displayValue(contract.htzmjm || parcel.htmjm) },
+    { label: "权证编码", value: displayValue(parcel.cbjyqzbm) },
+    { label: "是否确权确股", value: displayValue(parcel.sfqqqg) },
+  ];
+});
+
 const layerInstances = new globalThis.Map();
 const basemapLayerInstances = new globalThis.Map();
 
@@ -518,6 +735,7 @@ let measureLayer = null;
 let labelLayer = null;
 let parcelHighlightLayer = null;
 let parcelPopupOverlay = null;
+let propertyPanelDragState = null;
 
 function normalizeLayer(item) {
   const rawServiceConfigs =
@@ -876,8 +1094,8 @@ function createParcelHighlightStyle() {
 
 function createWmsLayer(config) {
   const { baseUrl, params } = parseServiceUrl(config.serviceUrl);
-  return new TileLayer({
-    source: new TileWMS({
+  return new ImageLayer({
+    source: new ImageWMS({
       url: baseUrl,
       params: {
         SERVICE: "WMS",
@@ -1059,6 +1277,67 @@ function updateAttrsByEntries(entries) {
   attrs.value = entries;
 }
 
+function clampNumber(value, min, max) {
+  if (max < min) {
+    return min;
+  }
+  return Math.min(Math.max(value, min), max);
+}
+
+function stopPropertyPanelDrag() {
+  if (!propertyPanelDragState) {
+    return;
+  }
+  window.removeEventListener("pointermove", movePropertyPanel);
+  window.removeEventListener("pointerup", stopPropertyPanelDrag);
+  window.removeEventListener("pointercancel", stopPropertyPanelDrag);
+  propertyPanelDragState = null;
+}
+
+function movePropertyPanel(event) {
+  if (!propertyPanelDragState) {
+    return;
+  }
+  const { bounds, offsetX, offsetY, width, height } = propertyPanelDragState;
+  propertyPanelPosition.value = {
+    x: clampNumber(event.clientX - bounds.left - offsetX, 8, bounds.width - width - 8),
+    y: clampNumber(event.clientY - bounds.top - offsetY, 8, bounds.height - height - 8),
+  };
+}
+
+function startPropertyPanelDrag(event) {
+  if (event.button !== 0) {
+    return;
+  }
+  const panel = event.currentTarget.closest(".gis-property-panel");
+  const surface = mapRootRef.value?.closest(".gis-map-surface");
+  if (!panel || !surface) {
+    return;
+  }
+  const panelRect = panel.getBoundingClientRect();
+  const surfaceRect = surface.getBoundingClientRect();
+  propertyPanelDragState = {
+    bounds: {
+      left: surfaceRect.left,
+      top: surfaceRect.top,
+      width: surfaceRect.width,
+      height: surfaceRect.height,
+    },
+    width: panelRect.width,
+    height: panelRect.height,
+    offsetX: event.clientX - panelRect.left,
+    offsetY: event.clientY - panelRect.top,
+  };
+  propertyPanelPosition.value = {
+    x: panelRect.left - surfaceRect.left,
+    y: panelRect.top - surfaceRect.top,
+  };
+  window.addEventListener("pointermove", movePropertyPanel);
+  window.addEventListener("pointerup", stopPropertyPanelDrag);
+  window.addEventListener("pointercancel", stopPropertyPanelDrag);
+  event.preventDefault();
+}
+
 function showMapClickMarker(coordinate) {
   const markerLayer = getOrCreateQueryMarkerLayer();
   const source = markerLayer.getSource();
@@ -1158,11 +1437,13 @@ function highlightParcel(parcel, coordinate, fallbackFeature = null) {
   const source = highlightLayer.getSource();
   source.clear();
 
+  let popupCoordinate = coordinate;
   const feature = readParcelFeature(parcel, fallbackFeature);
   if (feature) {
     source.addFeature(feature);
     const extent = feature.getGeometry()?.getExtent();
     if (extent && extent.every(Number.isFinite)) {
+      popupCoordinate = popupCoordinate || getCenter(extent);
       mapRef.value.getView().fit(extent, {
         padding: [110, 380, 130, 90],
         duration: 450,
@@ -1171,7 +1452,7 @@ function highlightParcel(parcel, coordinate, fallbackFeature = null) {
     }
   }
 
-  parcelPopupOverlay?.setPosition(coordinate);
+  parcelPopupOverlay?.setPosition(popupCoordinate);
 }
 
 function updateAttrsByParcel(parcel) {
@@ -1211,6 +1492,7 @@ async function applyParcelSelection(dkbm, coordinate, fallbackFeature = null) {
   }
 
   selectedParcel.value = parcel;
+  activeParcelTab.value = "contractor";
   updateAttrsByParcel(parcel);
   await showPropertyPanel();
   try {
@@ -1219,6 +1501,36 @@ async function applyParcelSelection(dkbm, coordinate, fallbackFeature = null) {
     console.warn("Failed to highlight parcel:", error);
   }
   queryMessage.value = `${ui.parcelClickHit}${parcel.dkbm}`;
+  return true;
+}
+
+async function locateParcelByCode(dkbm, silent = false) {
+  if (!dkbm) {
+    return false;
+  }
+  let parcel = null;
+  try {
+    const { data } = await fetchGisParcel(dkbm);
+    parcel = data.data;
+  } catch (_error) {
+    return false;
+  }
+  if (!parcel) {
+    return false;
+  }
+
+  selectedParcel.value = parcel;
+  activeParcelTab.value = "contractor";
+  updateAttrsByParcel(parcel);
+  await showPropertyPanel();
+  try {
+    highlightParcel(parcel, null);
+  } catch (error) {
+    console.warn("Failed to locate parcel:", error);
+  }
+  if (!silent) {
+    queryMessage.value = `${ui.parcelClickHit}${parcel.dkbm}`;
+  }
   return true;
 }
 
@@ -1596,7 +1908,12 @@ function clearLabels() {
 }
 
 async function applyRequestResult(item, silent = false) {
-  await fitToPrimaryLayer();
+  const located = await locateParcelByCode(item.primaryParcelCode, true);
+  if (!located) {
+    await fitToPrimaryLayer();
+    selectedParcel.value = null;
+  }
+  activeParcelTab.value = located ? "contract" : "contractor";
   updateAttrsByEntries([
     { label: ui.currentObject, value: ui.objectRequest },
     { label: ui.requestType, value: item.requestType || ui.unknown },
@@ -1614,7 +1931,12 @@ async function applyRequestResult(item, silent = false) {
 }
 
 async function applyIssuerResult(item) {
-  await fitToPrimaryLayer();
+  const located = await locateParcelByCode(item.primaryParcelCode, true);
+  if (!located) {
+    await fitToPrimaryLayer();
+    selectedParcel.value = null;
+  }
+  activeParcelTab.value = located ? "issuer" : "contractor";
   updateAttrsByEntries([
     { label: ui.currentObject, value: ui.objectIssuer },
     { label: ui.issuerName, value: item.name || ui.unknown },
@@ -1630,7 +1952,12 @@ async function applyIssuerResult(item) {
 }
 
 async function applyContractorResult(item) {
-  await fitToPrimaryLayer();
+  const located = await locateParcelByCode(item.primaryParcelCode, true);
+  if (!located) {
+    await fitToPrimaryLayer();
+    selectedParcel.value = null;
+  }
+  activeParcelTab.value = "contractor";
   updateAttrsByEntries([
     { label: ui.currentObject, value: ui.objectContractor },
     { label: ui.contractorName, value: item.name || ui.unknown },
@@ -1718,8 +2045,11 @@ async function performQuery() {
     await applyRequestResult(searchResult.value.requests[0], true);
     queryMessage.value = `${ui.requestMatched}${searchResult.value.requests.length}${ui.requestMatchedSuffix}`;
   } else {
-    queryMessage.value = ui.notFound;
-    await fitToPrimaryLayer();
+    const located = await locateParcelByCode(keyword, true);
+    queryMessage.value = located ? `${ui.parcelClickHit}${keyword}` : ui.notFound;
+    if (!located) {
+      await fitToPrimaryLayer();
+    }
   }
 }
 
@@ -1749,6 +2079,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   clearMeasureInteraction();
   clearLabelInteraction();
+  stopPropertyPanelDrag();
   if (mapRef.value) {
     mapRef.value.setTarget(undefined);
   }

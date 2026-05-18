@@ -17,6 +17,46 @@
       </template>
     </el-alert>
 
+    <!-- 地块操作工具栏 -->
+    <div class="parcel-toolbar">
+      <el-button
+        type="warning"
+        plain
+        size="small"
+        :disabled="!canManage || isResultLocked"
+        @click="emit('swap-parcels')"
+      >
+        地块互换
+      </el-button>
+      <el-button
+        type="success"
+        plain
+        size="small"
+        :disabled="!canManage || isResultLocked"
+        @click="emit('add-parcel')"
+      >
+        新增地块
+      </el-button>
+      <el-button
+        plain
+        size="small"
+        :disabled="!canManage || isResultLocked"
+        @click="emit('split-parcel')"
+      >
+        切割地块
+      </el-button>
+      <el-button
+        type="danger"
+        plain
+        size="small"
+        :disabled="!canManage || isResultLocked || parcels.length === 0"
+        @click="emit('remove-parcel')"
+      >
+        移除地块
+      </el-button>
+      <span v-if="isResultLocked" class="toolbar-lock-hint">（只读）</span>
+    </div>
+
     <div class="parcel-layout">
       <!-- 左侧地图 -->
       <div class="parcel-map-container">
@@ -102,7 +142,11 @@ const props = defineProps({
   contractorUid: { type: String, required: true },
   parcels: { type: Array, default: () => [] },
   parcelsLoading: { type: Boolean, default: false },
+  canManage: { type: Boolean, default: false },
+  isResultLocked: { type: Boolean, default: false },
 });
+
+const emit = defineEmits(["swap-parcels", "add-parcel", "split-parcel", "remove-parcel"]);
 
 const diffViewer = ref(null);
 const mapRoot = ref(null);
@@ -165,7 +209,9 @@ onBeforeUnmount(() => {
 <style scoped>
 .parcel-info-panel { min-height: 400px; }
 .change-alert { margin-bottom: 12px; }
-.parcel-layout { display: flex; gap: 12px; height: calc(92vh - 340px); min-height: 450px; }
+.parcel-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+.toolbar-lock-hint { color: #909399; font-size: 12px; }
+.parcel-layout { display: flex; gap: 12px; height: calc(92vh - 380px); min-height: 450px; }
 .parcel-map-container { flex: 1; position: relative; min-width: 0; border: 1px solid #ebeef5; border-radius: 4px; overflow: hidden; }
 .parcel-map { width: 100%; height: 100%; }
 .basemap-switch { position: absolute; top: 8px; right: 8px; z-index: 10; width: 140px; }

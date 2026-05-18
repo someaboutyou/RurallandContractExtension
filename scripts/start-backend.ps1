@@ -65,7 +65,7 @@ try {
     $backendHost = if ($env:BACKEND_HOST) { $env:BACKEND_HOST } else { "0.0.0.0" }
     $backendPort = if ($env:BACKEND_PORT) { $env:BACKEND_PORT } else { "8000" }
     "[$(Get-Date -Format o)] Starting backend on ${backendHost}:${backendPort}" | Out-File -FilePath $backendLogFile -Append -Encoding utf8
-    & cmd /c "`"$pythonExe`" -m uvicorn app.main:app --host $backendHost --port $backendPort >> `"$backendLogFile`" 2>&1"
+    & cmd /c "`"$pythonExe`" -u -m uvicorn app.main:app --host $backendHost --port $backendPort >> `"$backendLogFile`" 2>&1"
 }
 finally {
     Pop-Location

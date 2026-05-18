@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import date
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
@@ -26,11 +27,13 @@ from app.schemas.survey import (
     SurveyMaintainMembersRequest,
     SurveyDeregisterRequest,
     SurveyAddParcelRequest,
+    SurveyRemoveParcelRequest,
     SurveySplitParcelRequest,
     SurveySwapParcelsRequest,
     SurveySplitHouseholdRequest,
     SurveyMergeHouseholdRequest,
     SurveyGenerateRequest,
+    SurveyPlotSketchMapRead,
     SurveyRestructureCreate,
     SurveyTagCreate,
     SurveyTagDisable,
@@ -403,7 +406,62 @@ def _get_cbhtbm_for_contractor(db: Session, cbfbm: str, batch_id: int) -> str | 
     return cbhtbm
 
 
-@router.get("/batches/{batch_id}/results/{contractor_uid}/contract", response_model=ApiResponse[SurveyContractRead])
+def _get_survey_contract_summary(db: Session, cbfbm: str, cbhtbm: str, batch_id: int) -> dict:
+    """从调查地块关系表汇总合同预览基础信息。"""
+    relations = db.scalars(
+        sa_select(SurveyCbdkxxResult).where(
+            SurveyCbdkxxResult.batch_id == batch_id,
+            SurveyCbdkxxResult.cbfbm == cbfbm,
+            SurveyCbdkxxResult.cbhtbm == cbhtbm,
+        )
+    ).all()
+    if not relations:
+        relations = db.scalars(
+            sa_select(SurveyCbdkxxBase).where(
+                SurveyCbdkxxBase.batch_id == batch_id,
+                SurveyCbdkxxBase.cbfbm == cbfbm,
+                SurveyCbdkxxBase.cbhtbm == cbhtbm,
+            )
+        ).all()
+    total_area = sum(float(item.htmj or 0) for item in relations)
+    return {
+        "cbdkzs": len(relations),
+        "htzmj": total_area if relations else None,
+        "htzmjm": total_area / 666.67 if relations and total_area else None,
+        "cbfs": relations[0].cbjyqqdfs if relations else None,
+        "fbfbm": relations[0].fbfbm if relations else None,
+    }
+
+
+def _fmt_area_mu(value) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _parcel_area_mu(parcel: dict) -> float:
+    for key in ("htmjm", "scmj_mu"):
+        value = parcel.get(key)
+        if value not in (None, ""):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                pass
+    value = parcel.get("htmj") or parcel.get("scmj")
+    try:
+        return float(value) / 666.67 if value not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _fmt_date_cn(value: date) -> str:
+    return f"{value.year}年{value.month:02d}月{value.day:02d}日"
+
+
+@router.get("/batches/{batch_id}/results/{contractor_uid}/contract", response_model=ApiResponse[SurveyContractRead | None])
 def get_survey_contract(
     batch_id: int,
     contractor_uid: str,
@@ -418,26 +476,72 @@ def get_survey_contract(
         return {"data": None}
 
     contract = db.scalar(sa_select(Cbht).where(Cbht.cbhtbm == cbhtbm))
-    if not contract:
-        return {"data": None}
-
-    rendered = contract_template_service.render_contract(
-        db, cbhtbm=cbhtbm, batch_id=batch_id,
+    survey_summary = _get_survey_contract_summary(db, cbfbm, cbhtbm, batch_id)
+    rendered = contract_template_service.render_survey_contract(
+        db, cbhtbm=cbhtbm, batch_id=batch_id, cbfbm=cbfbm,
     )
     return {
         "data": {
-            "cbhtbm": contract.cbhtbm,
-            "ycbhtbm": contract.ycbhtbm,
-            "fbfbm": contract.fbfbm,
+            "cbhtbm": cbhtbm,
+            "ycbhtbm": contract.ycbhtbm if contract else None,
+            "fbfbm": (contract.fbfbm if contract else None) or survey_summary["fbfbm"],
             "fbfmc": None,
-            "cbfbm": contract.cbfbm,
-            "cbfs": contract.cbfs,
-            "cbqxq": str(contract.cbqxq) if contract.cbqxq else None,
-            "cbqxz": str(contract.cbqxz) if contract.cbqxz else None,
-            "htzmj": float(contract.htzmj) if contract.htzmj else None,
-            "htzmjm": float(contract.htzmjm) if contract.htzmjm else None,
-            "cbdkzs": contract.cbdkzs,
-            "qdsj": str(contract.qdsj) if contract.qdsj else None,
+            "cbfbm": contract.cbfbm if contract else cbfbm,
+            "cbfs": (contract.cbfs if contract else None) or survey_summary["cbfs"],
+            "cbqxq": str(contract.cbqxq) if contract and contract.cbqxq else None,
+            "cbqxz": str(contract.cbqxz) if contract and contract.cbqxz else None,
+            "htzmj": (float(contract.htzmj) if contract and contract.htzmj else None) or survey_summary["htzmj"],
+            "htzmjm": (float(contract.htzmjm) if contract and contract.htzmjm else None) or survey_summary["htzmjm"],
+            "cbdkzs": (contract.cbdkzs if contract else None) or survey_summary["cbdkzs"],
+            "qdsj": str(contract.qdsj) if contract and contract.qdsj else None,
+            "renderedHtml": rendered,
+        }
+    }
+
+
+@router.get("/batches/{batch_id}/results/{contractor_uid}/plot-sketch-map", response_model=ApiResponse[SurveyPlotSketchMapRead])
+def get_survey_plot_sketch_map(
+    batch_id: int,
+    contractor_uid: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """Render the contracted parcel sketch map for the survey result."""
+    result = survey_service.get_result(db, batch_id, contractor_uid, current_user)
+    cbfbm = result.get("code", "")
+    parcels = land_parcel_service.get_survey_parcels(db, batch_id, cbfbm, current_user)
+    today_text = _fmt_date_cn(date.today())
+
+    sketch_plots = []
+    for parcel in parcels:
+        area_mu = _parcel_area_mu(parcel)
+        sketch_plots.append({
+            "code": (parcel.get("dkbm") or "")[14:] or parcel.get("dkbm") or "",
+            "dkbm": parcel.get("dkbm") or "",
+            "area": _fmt_area_mu(area_mu),
+            "north": parcel.get("dkbz") or "",
+            "south": parcel.get("dknz") or "",
+            "west": parcel.get("dkxz") or "",
+            "east": parcel.get("dkdz") or "",
+            "geometry": parcel.get("geometry"),
+        })
+
+    total_area = sum(_parcel_area_mu(parcel) for parcel in parcels)
+    rendered = contract_template_service.render_plot_sketch_map(
+        contractor_name=result.get("name") or result.get("cbfmc") or "",
+        contractor_code=cbfbm,
+        total_plots=len(parcels),
+        total_area=_fmt_area_mu(total_area),
+        sketch_plots=sketch_plots,
+        audit_date=today_text,
+        map_date=today_text,
+    )
+    return {
+        "data": {
+            "cbfbm": cbfbm,
+            "cbfmc": result.get("name") or result.get("cbfmc") or "",
+            "plotCount": len(parcels),
+            "totalArea": _fmt_area_mu(total_area),
             "renderedHtml": rendered,
         }
     }
@@ -456,8 +560,8 @@ def print_survey_contract(
     cbhtbm = _get_cbhtbm_for_contractor(db, cbfbm, batch_id)
     if not cbhtbm:
         return Response(content="", media_type="text/html")
-    rendered = contract_template_service.render_contract(
-        db, cbhtbm=cbhtbm, batch_id=batch_id,
+    rendered = contract_template_service.render_survey_contract(
+        db, cbhtbm=cbhtbm, batch_id=batch_id, cbfbm=cbfbm,
     )
     return Response(content=rendered, media_type="text/html; charset=utf-8")
 
@@ -559,6 +663,22 @@ def swap_survey_parcels(
     """地块互换：交换两个承包方的地块归属。"""
     return {
         "data": survey_service.swap_parcels(
+            db, batch_id, contractor_uid, payload.model_dump(), current_user,
+        )
+    }
+
+
+@router.post("/batches/{batch_id}/results/{contractor_uid}/remove-parcel", response_model=ApiResponse[dict])
+def remove_survey_parcel(
+    batch_id: int,
+    contractor_uid: str,
+    payload: SurveyRemoveParcelRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """移除地块：将地块从承包方名下移除。"""
+    return {
+        "data": survey_service.remove_parcel(
             db, batch_id, contractor_uid, payload.model_dump(), current_user,
         )
     }

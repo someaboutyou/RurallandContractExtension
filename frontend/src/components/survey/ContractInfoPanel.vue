@@ -143,10 +143,14 @@ async function loadAttachments() {
 
 async function handlePrint() {
   try {
-    const { data } = await printSurveyContract(props.batchId, props.contractorUid);
+    let html = contract.value?.renderedHtml;
+    if (!html) {
+      const { data } = await printSurveyContract(props.batchId, props.contractorUid);
+      html = data;
+    }
     const w = window.open("", "_blank", "width=900,height=700");
     if (w) {
-      w.document.write(data);
+      w.document.write(html);
       w.document.close();
       setTimeout(() => w.print(), 500);
     }

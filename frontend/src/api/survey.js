@@ -126,6 +126,10 @@ export function fetchSurveyContract(batchId, contractorUid) {
   return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/contract`);
 }
 
+export function fetchSurveyPlotSketchMap(batchId, contractorUid) {
+  return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/plot-sketch-map`);
+}
+
 export function printSurveyContract(batchId, contractorUid) {
   return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/contract/print`);
 }
@@ -154,6 +158,10 @@ export function splitSurveyParcel(batchId, contractorUid, payload) {
 
 export function swapSurveyParcels(batchId, contractorUid, payload) {
   return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/swap-parcels`, payload);
+}
+
+export function removeSurveyParcel(batchId, contractorUid, payload) {
+  return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/remove-parcel`, payload);
 }
 
 export function splitSurveyHousehold(batchId, contractorUid, payload) {

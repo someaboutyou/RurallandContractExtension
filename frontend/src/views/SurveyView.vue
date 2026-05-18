@@ -153,10 +153,6 @@
       <el-button type="danger" plain size="small" @click="handleOpDeregister">注销承包方</el-button>
       <el-button plain size="small" @click="handleOpSplitHousehold">分户</el-button>
       <el-button plain size="small" @click="handleOpMergeHousehold">合户</el-button>
-      <el-divider direction="vertical" />
-      <el-button type="warning" plain size="small" @click="handleOpSwapParcels">地块互换</el-button>
-      <el-button type="success" plain size="small" @click="handleOpAddParcel">新增地块</el-button>
-      <el-button plain size="small" @click="handleOpSplitParcel">切割地块</el-button>
       <span v-if="!canManage || isResultLocked" class="toolbar-lock-hint">（当前为只读模式）</span>
     </div>
 
@@ -178,6 +174,20 @@
           :contractor-uid="resultForm.contractorUid"
           :parcels="parcels"
           :parcels-loading="parcelsLoading"
+          :can-manage="canManage"
+          :is-result-locked="isResultLocked"
+          @swap-parcels="handleOpSwapParcels"
+          @add-parcel="handleOpAddParcel"
+          @split-parcel="handleOpSplitParcel"
+          @remove-parcel="handleOpRemoveParcel"
+        />
+      </el-tab-pane>
+
+      <el-tab-pane label="承包地块示意图" name="plotSketchMap">
+        <PlotSketchMapPanel
+          :batch-id="activeBatch?.id"
+          :contractor-uid="resultForm.contractorUid"
+          :refresh-key="plotSketchRefreshKey"
         />
       </el-tab-pane>
 
@@ -272,6 +282,7 @@
   <SwapParcelsDialog ref="swapParcelsDialog" @done="reloadSurveyResult" />
   <SplitHouseholdDialog ref="splitHouseholdDialog" @done="reloadSurveyResult" />
   <MergeHouseholdDialog ref="mergeHouseholdDialog" @done="handleMergeDone" />
+  <RemoveParcelDialog ref="removeParcelDialog" @done="reloadSurveyResult" />
 </template>
 
 <script setup>
@@ -280,6 +291,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 
 import ContractorMemberPanel from "../components/survey/ContractorMemberPanel.vue";
 import ParcelInfoPanel from "../components/survey/ParcelInfoPanel.vue";
+import PlotSketchMapPanel from "../components/survey/PlotSketchMapPanel.vue";
 import ContractInfoPanel from "../components/survey/ContractInfoPanel.vue";
 import DeregisterDialog from "../components/survey/DeregisterDialog.vue";
 import AddParcelDialog from "../components/survey/AddParcelDialog.vue";
@@ -287,6 +299,7 @@ import SplitParcelDialog from "../components/survey/SplitParcelDialog.vue";
 import SwapParcelsDialog from "../components/survey/SwapParcelsDialog.vue";
 import SplitHouseholdDialog from "../components/survey/SplitHouseholdDialog.vue";
 import MergeHouseholdDialog from "../components/survey/MergeHouseholdDialog.vue";
+import RemoveParcelDialog from "../components/survey/RemoveParcelDialog.vue";
 
 import {
   confirmSurveyResult,
@@ -351,6 +364,7 @@ const taskStatus = ref("");
 const batchDialogVisible = ref(false);
 const resultVisible = ref(false);
 const activeTab = ref("contractor");
+const plotSketchRefreshKey = ref(0);
 const regionTree = ref([]);
 const regionTreeProps = { label: "fullName", children: "children" };
 const batchForm = reactive({ batchName: "", regionId: undefined, regionCode: "", regionName: "", remark: "" });
@@ -371,6 +385,7 @@ const splitParcelDialog = ref(null);
 const swapParcelsDialog = ref(null);
 const splitHouseholdDialog = ref(null);
 const mergeHouseholdDialog = ref(null);
+const removeParcelDialog = ref(null);
 const isResultLocked = computed(() => activeBatch.value?.status === "finished" || resultForm.surveyStatus === "confirmed");
 
 // 计算变化字段列表（供 ContractorInfoPanel 高亮用）
@@ -443,6 +458,13 @@ function handleOpAddParcel() {
 }
 function handleOpSplitParcel() {
   splitParcelDialog.value.open(
+    activeBatch.value.id,
+    activeTask.value.contractorUid,
+    parcels.value,
+  );
+}
+function handleOpRemoveParcel() {
+  removeParcelDialog.value.open(
     activeBatch.value.id,
     activeTask.value.contractorUid,
     parcels.value,
@@ -1205,6 +1227,7 @@ async function reloadSurveyResult() {
     await loadTasks();
     await loadBatches();
     await loadSurveyParcels();
+    plotSketchRefreshKey.value += 1;
   } catch (e) {
     // silently ignore reload errors
   }

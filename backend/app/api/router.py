@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     auth,
+    contract_template,
     contractor,
     data_import,
     dashboard,
@@ -24,6 +25,7 @@ from app.api.v1.endpoints import (
 
 api_router = APIRouter()
 api_router.include_router(auth.router, prefix="/auth", tags=["Auth"])
+api_router.include_router(contract_template.router, prefix="/contract-templates", tags=["ContractTemplates"])
 api_router.include_router(contractor.router, prefix="/contractors", tags=["Contractors"])
 api_router.include_router(land_parcel.router, prefix="/contractors", tags=["Contractors"])
 api_router.include_router(data_import.router, prefix="/data-imports", tags=["DataImports"])

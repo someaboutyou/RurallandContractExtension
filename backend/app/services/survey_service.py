@@ -2601,6 +2601,96 @@ class SurveyService:
         db.commit()
         return self.get_result(db, batch_id, contractor_uid, current_user)
 
+    def remove_parcel(
+        self, db: Session, batch_id: int, contractor_uid: str,
+        payload: dict, current_user: User,
+    ) -> dict:
+        """移除地块：将地块从承包方名下移除（软删除）。"""
+        batch = self._ensure_batch(db, batch_id)
+        if batch.status == "finished":
+            raise HTTPException(400, "调查批次已结束")
+        result = self._get_result(db, batch_id, contractor_uid)
+        if result.survey_status == "confirmed":
+            raise HTTPException(400, "调查成果已确认")
+        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="无权限")
+        now = datetime.now(timezone.utc)
+
+        dkbm = payload["dkbm"]
+
+        # 查找地块关联
+        relation = db.scalars(
+            select(SurveyCbdkxxResult).where(
+                SurveyCbdkxxResult.batch_id == batch_id,
+                SurveyCbdkxxResult.dkbm == dkbm,
+                SurveyCbdkxxResult.cbfbm == result.cbfbm,
+            )
+        ).first()
+        if relation is None:
+            raise HTTPException(404, "地块关联不存在或不属于当前承包方")
+
+        # 查找地块记录
+        parcel = db.scalars(
+            select(SurveyDkResult).where(
+                SurveyDkResult.batch_id == batch_id,
+                SurveyDkResult.dkbm == dkbm,
+            )
+        ).first()
+
+        before_parcels_count = db.scalar(
+            select(func.count(SurveyCbdkxxResult.id)).where(
+                SurveyCbdkxxResult.batch_id == batch_id,
+                SurveyCbdkxxResult.cbfbm == result.cbfbm,
+            )
+        ) or 0
+
+        # 软删除：标记关联关系为已移除
+        relation.result_status = "removed"
+        relation.is_changed = True
+        relation.change_type = "remove_parcel"
+        relation.change_reason = payload.get("reason")
+
+        if parcel:
+            parcel.result_status = "removed"
+            parcel.is_changed = True
+            parcel.change_type = "remove_parcel"
+            parcel.change_reason = payload.get("reason")
+
+        # 变化记录
+        record = self._create_change_record(
+            db, batch_id, contractor_uid, result.cbfbm,
+            change_type="remove_parcel",
+            before_summary={"parcels_count": before_parcels_count},
+            after_summary={
+                "action": "remove_parcel",
+                "dkbm": dkbm,
+                "parcels_count": before_parcels_count - 1,
+            },
+            reason=payload.get("reason"),
+            current_user=current_user, now=now,
+        )
+        db.flush()
+
+        # diffs
+        db.add(SurveyChangeDiff(
+            batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
+            entity_type="parcel", entity_uid=dkbm, entity_name=dkbm,
+            field_name="parcel", field_label="移除地块",
+            before_value=f"归属 {result.cbfbm} {result.cbfmc}",
+            after_value=None,
+            change_reason=payload.get("reason"),
+        ))
+
+        # 更新任务
+        task = self._get_task(db, batch_id, contractor_uid)
+        if task:
+            task.has_change = True
+            task.change_count = (task.change_count or 0) + 1
+            task.investigated_at = now
+
+        result.investigated_at = now
+        db.commit()
+        return self.get_result(db, batch_id, contractor_uid, current_user)
+
     def split_household(
         self, db: Session, batch_id: int, contractor_uid: str,
         payload: dict, current_user: User,

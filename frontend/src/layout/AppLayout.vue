@@ -158,6 +158,7 @@ const navItems = [
       { to: "/workflows", label: "流程设计", permissions: ["roles.manage"] },
       { to: "/layers", label: "图层管理", permissions: ["layers.manage"] },
       { to: "/request-attachment-templates", label: "流程附件", permissions: ["requests.manage"] },
+      { to: "/contract-templates", label: "合同模板", permissions: ["contract_templates.manage"] },
     ],
   },
 ];

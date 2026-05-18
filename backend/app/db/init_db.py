@@ -67,6 +67,7 @@ DEFAULT_PERMISSIONS = [
     {"name": "县级审核", "code": "requests.review.county", "group_name": "业务申请", "category": "action", "description": "允许办理县级审核节点。"},
     {"name": "查看图层管理", "code": "layers.view", "group_name": "系统管理", "category": "menu", "description": "允许查看图层管理页面。"},
     {"name": "管理图层配置", "code": "layers.manage", "group_name": "系统管理", "category": "action", "description": "允许维护矢量图层与底图配置。"},
+    {"name": "管理合同模板", "code": "contract_templates.manage", "group_name": "系统管理", "category": "action", "description": "允许在线编辑合同 HTML 模板。"},
 ]
 
 DEFAULT_ROLE_PERMISSIONS = {

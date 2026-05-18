@@ -18,44 +18,44 @@
 
     <!-- 承包方基本信息（可编辑） -->
     <div class="section-title">承包方信息</div>
-    <el-form :model="contractorForm" label-position="top" class="contractor-form">
+    <el-form :model="result" label-position="top" class="contractor-form">
       <div class="form-grid-3">
         <el-form-item label="承包方编码" :class="changedClass('code')">
-          <el-input v-model="contractorForm.code" placeholder="18位编码" maxlength="18" />
+          <el-input v-model="result.code" placeholder="18位编码" maxlength="18" />
         </el-form-item>
         <el-form-item label="承包方名称" :class="changedClass('name')">
-          <el-input v-model="contractorForm.name" placeholder="承包方名称" maxlength="50" />
+          <el-input v-model="result.name" placeholder="承包方名称" maxlength="50" />
         </el-form-item>
         <el-form-item label="承包方类型" :class="changedClass('typeCode')">
-          <el-select v-model="contractorForm.typeCode">
+          <el-select v-model="result.typeCode">
             <el-option label="农户" value="1" />
             <el-option label="个人" value="2" />
             <el-option label="单位" value="3" />
           </el-select>
         </el-form-item>
         <el-form-item label="证件类型" :class="changedClass('idType')">
-          <el-select v-model="contractorForm.idType">
+          <el-select v-model="result.idType">
             <el-option label="居民身份证" value="1" />
             <el-option label="户口簿" value="2" />
             <el-option label="军官证" value="3" />
           </el-select>
         </el-form-item>
         <el-form-item label="证件号码" :class="changedClass('idNo')">
-          <el-input v-model="contractorForm.idNo" placeholder="证件号码" maxlength="20" />
+          <el-input v-model="result.idNo" placeholder="证件号码" maxlength="20" />
         </el-form-item>
         <el-form-item label="联系电话" :class="changedClass('mobile')">
-          <el-input v-model="contractorForm.mobile" placeholder="联系电话" maxlength="20" />
+          <el-input v-model="result.mobile" placeholder="联系电话" maxlength="20" />
         </el-form-item>
       </div>
       <el-form-item label="承包方地址" :class="changedClass('address')">
-        <el-input v-model="contractorForm.address" placeholder="详细地址" maxlength="100" />
+        <el-input v-model="result.address" placeholder="详细地址" maxlength="100" />
       </el-form-item>
       <div class="form-grid-2">
         <el-form-item label="邮政编码" :class="changedClass('postcode')">
-          <el-input v-model="contractorForm.postcode" placeholder="6位邮编" maxlength="6" />
+          <el-input v-model="result.postcode" placeholder="6位邮编" maxlength="6" />
         </el-form-item>
         <el-form-item label="村民小组" :class="changedClass('groupRegionName')">
-          <el-input v-model="contractorForm.groupRegionName" placeholder="村民小组" maxlength="120" />
+          <el-input v-model="result.groupRegionName" placeholder="村民小组" maxlength="120" />
         </el-form-item>
       </div>
     </el-form>
@@ -82,14 +82,14 @@
       <!-- 姓名 -->
       <el-table-column label="姓名" min-width="100">
         <template #default="{ row }">
-          <el-input v-model="row.name" size="small" :disabled="row._deleted" @change="markModified(row)" />
+          <el-input v-model="row.name" size="small" :disabled="row._deleted" />
         </template>
       </el-table-column>
 
       <!-- 性别 -->
       <el-table-column label="性别" width="80">
         <template #default="{ row }">
-          <el-select v-model="row.gender" size="small" :disabled="row._deleted" @change="markModified(row)">
+          <el-select v-model="row.gender" size="small" :disabled="row._deleted">
             <el-option label="男" value="1" />
             <el-option label="女" value="2" />
           </el-select>
@@ -99,7 +99,7 @@
       <!-- 证件类型 -->
       <el-table-column label="证件类型" width="100">
         <template #default="{ row }">
-          <el-select v-model="row.idType" size="small" :disabled="row._deleted" @change="markModified(row)">
+          <el-select v-model="row.idType" size="small" :disabled="row._deleted">
             <el-option label="身份证" value="1" />
             <el-option label="户口簿" value="2" />
             <el-option label="军官证" value="3" />
@@ -110,20 +110,25 @@
       <!-- 证件号码 -->
       <el-table-column label="证件号码" min-width="160">
         <template #default="{ row }">
-          <el-input v-model="row.idNo" size="small" :disabled="row._deleted" @change="markModified(row)" />
+          <el-input v-model="row.idNo" size="small" :disabled="row._deleted" />
         </template>
       </el-table-column>
 
       <!-- 与户主关系 -->
-      <el-table-column label="与户主关系" width="110">
+      <el-table-column label="与户主关系" width="130">
         <template #default="{ row }">
-          <el-select v-model="row.relationToHead" size="small" :disabled="row._deleted" @change="markModified(row)">
-            <el-option label="本人" value="01" />
-            <el-option label="配偶" value="02" />
-            <el-option label="子女" value="03" />
-            <el-option label="父母" value="06" />
-            <el-option label="兄弟姐妹" value="08" />
-            <el-option label="其他" value="09" />
+          <el-select
+            v-model="row.relationToHead"
+            size="small"
+            filterable
+            :disabled="row._deleted"
+                     >
+            <el-option
+              v-for="opt in relationOptions"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
           </el-select>
         </template>
       </el-table-column>
@@ -131,7 +136,7 @@
       <!-- 共有人 -->
       <el-table-column label="共有人" width="80">
         <template #default="{ row }">
-          <el-select v-model="row.isCoOwner" size="small" :disabled="row._deleted" @change="markModified(row)">
+          <el-select v-model="row.isCoOwner" size="small" :disabled="row._deleted">
             <el-option label="是" value="1" />
             <el-option label="否" value="0" />
           </el-select>
@@ -148,7 +153,7 @@
       <!-- 备注 -->
       <el-table-column label="备注" min-width="120">
         <template #default="{ row }">
-          <el-input v-model="row.note" size="small" :disabled="row._deleted" @change="markModified(row)" />
+          <el-input v-model="row.note" size="small" :disabled="row._deleted" />
         </template>
       </el-table-column>
 
@@ -192,8 +197,9 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import ChangeDiffViewer from "./ChangeDiffViewer.vue";
+import { useDictionary } from "../../composables/useDictionary";
 
 const props = defineProps({
   batchId: { type: Number, required: true },
@@ -204,55 +210,20 @@ const props = defineProps({
 
 const emit = defineEmits(["update:result"]);
 
+const { options: relationOptions } = useDictionary("nyt2539_c20_relation_to_head");
+
 const diffViewer = ref(null);
 
-// 承包方可编辑表单（双向同步到 result）
-const contractorForm = reactive({
-  code: "",
-  name: "",
-  typeCode: "1",
-  idType: "1",
-  idNo: "",
-  mobile: "",
-  address: "",
-  postcode: "",
-  groupRegionName: "",
-});
-
-// 初始化 contractorForm 并保持同步
+// 初始化：如果 groupRegionName 为空但 groupRegionCode 有值，用 code 填充
 watch(
   () => props.result,
   (r) => {
-    if (!r) return;
-    Object.assign(contractorForm, {
-      code: r.code || "",
-      name: r.name || "",
-      typeCode: r.typeCode || "1",
-      idType: r.idType || "1",
-      idNo: r.idNo || "",
-      mobile: r.mobile || "",
-      address: r.address || "",
-      postcode: r.postcode || "",
-      groupRegionName: r.groupRegionName || r.groupRegionCode || "",
-    });
+    if (r && !r.groupRegionName && r.groupRegionCode) {
+      r.groupRegionName = r.groupRegionCode;
+    }
   },
-  { immediate: true, deep: true },
+  { immediate: true },
 );
-
-// 反向同步：表单变更 → result
-watch(contractorForm, () => {
-  const r = props.result;
-  if (!r) return;
-  r.code = contractorForm.code;
-  r.name = contractorForm.name;
-  r.typeCode = contractorForm.typeCode;
-  r.idType = contractorForm.idType;
-  r.idNo = contractorForm.idNo;
-  r.mobile = contractorForm.mobile;
-  r.address = contractorForm.address;
-  r.postcode = contractorForm.postcode;
-  r.groupRegionName = contractorForm.groupRegionName;
-}, { deep: true });
 
 // 记录初始快照用于判断修改
 const initialSnapshots = ref(new Map());
@@ -263,6 +234,9 @@ watch(
     initialSnapshots.value = new Map();
     if (!members) return;
     for (const m of members) {
+      // 为新加载的成员初始化 UI 标记字段
+      if (m._deleted === undefined) m._deleted = false;
+      if (m._isNew === undefined) m._isNew = false;
       if (m.memberUid) {
         initialSnapshots.value.set(m.memberUid, {
           name: m.name,
@@ -279,14 +253,8 @@ watch(
   { immediate: true },
 );
 
-// 可见成员（含被标记删除的，灰色显示）
-const visibleMembers = computed(() => {
-  return (props.result.familyMembers || []).map((m) => ({
-    ...m,
-    _deleted: m._deleted || false,
-    _isNew: m._isNew || false,
-  }));
-});
+// 直接返回原始数组，避免展开拷贝导致 v-model 和回调失效
+const visibleMembers = computed(() => props.result.familyMembers || []);
 
 function isNewRow(row) {
   return row._isNew || (!row.memberUid && row.memberResultStatus === "added");
@@ -305,10 +273,6 @@ function isModifiedRow(row) {
     snap.isCoOwner !== row.isCoOwner ||
     snap.note !== (row.note || "")
   );
-}
-
-function markModified(_row) {
-  // computed 自动判断，无需手动标记
 }
 
 function addMember() {
@@ -338,13 +302,17 @@ function addMember() {
 }
 
 function setAsHead(row) {
-  // 取消其他成员的户主标记
+  // 取消所有成员的户主标记
   for (const m of props.result.familyMembers) {
     m.isHouseholdHead = false;
   }
+  // 设置目标为户主
   row.isHouseholdHead = true;
   row.relationToHead = "01";
-  if (!isNewRow(row)) markModified(row);
+  // 承包方名称默认随户主名称
+  if (row.name) {
+    props.result.name = row.name;
+  }
 }
 
 function toggleDelete(row) {

@@ -20,6 +20,7 @@ const GisView = () => import("../views/GisView.vue");
 const RequestView = () => import("../views/RequestView.vue");
 const RequestAttachmentTemplateView = () => import("../views/RequestAttachmentTemplateView.vue");
 const WorkflowDesignerView = () => import("../views/WorkflowDesignerView.vue");
+const ContractTemplateManagementView = () => import("../views/ContractTemplateManagementView.vue");
 
 const REQUEST_MODULE_PERMISSIONS = [
   "requests.manage",
@@ -64,6 +65,12 @@ const appChildren = [
     name: "request-attachment-templates",
     component: RequestAttachmentTemplateView,
     meta: { requiresAuth: true, permissions: ["requests.manage"] },
+  },
+  {
+    path: "contract-templates",
+    name: "contract-templates",
+    component: ContractTemplateManagementView,
+    meta: { requiresAuth: true, permissions: ["contract_templates.manage"] },
   },
 ];
 

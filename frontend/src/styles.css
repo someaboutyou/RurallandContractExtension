@@ -500,6 +500,133 @@ a {
   flex: 0 0 auto;
 }
 
+.contract-template-page {
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.contract-template-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  border: 1px solid rgba(56, 122, 196, 0.16);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.template-file-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.template-file-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.template-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.template-alert {
+  flex: 0 0 auto;
+  margin-bottom: 10px;
+}
+
+.contract-template-workspace {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(420px, 0.95fr) minmax(520px, 1.05fr);
+  gap: 12px;
+}
+
+.template-editor-pane,
+.template-preview-pane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(56, 122, 196, 0.16);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.pane-head {
+  flex: 0 0 auto;
+  min-height: 42px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  border-bottom: 1px solid rgba(56, 122, 196, 0.12);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pane-head span:first-child {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.template-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.template-editor .el-textarea__inner {
+  height: 100%;
+  min-height: 100%;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #1f2d3d;
+  background: #fbfcfe;
+}
+
+.template-preview-frame {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  background: #eef2f7;
+}
+
+.template-preview-frame iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.template-helper {
+  flex: 0 0 auto;
+  margin-top: 10px;
+}
+
+.template-var-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .table-filter-bar .el-form-item {
   margin-bottom: 0;
 }
@@ -1316,14 +1443,171 @@ a {
   right: 18px;
   bottom: 74px;
   z-index: 2;
-  width: 270px;
-  padding: 10px;
+  width: min(940px, calc(100% - 380px));
+  min-width: 560px;
+  padding: 0;
   border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: var(--radius-xl);
-  background: rgba(11, 34, 58, 0.28);
+  border-radius: var(--radius-lg);
+  background: rgba(247, 251, 255, 0.96);
   backdrop-filter: blur(20px);
   box-shadow: var(--shadow);
   overflow: auto;
+}
+
+.gis-property-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 44px;
+  padding: 8px 14px;
+  background: linear-gradient(180deg, #0975d7, #0664bd);
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+.gis-property-subtitle {
+  margin-top: 2px;
+  color: rgba(238, 247, 255, 0.82);
+  font-size: 12px;
+}
+
+.gis-property-close {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.12);
+  color: #eef7ff;
+  cursor: pointer;
+}
+
+.gis-property-close svg {
+  width: 16px;
+  height: 16px;
+}
+
+.gis-card-tabs {
+  position: sticky;
+  top: 44px;
+  z-index: 2;
+  display: flex;
+  padding: 0 12px;
+  border-bottom: 1px solid #dce5ef;
+  background: #f5f8fc;
+}
+
+.gis-card-tab {
+  min-width: 96px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 0;
+  border-right: 1px solid #dce5ef;
+  background: transparent;
+  color: #5d6d7c;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.gis-card-tab:first-child {
+  border-left: 1px solid #dce5ef;
+}
+
+.gis-card-tab.is-active {
+  background: #ffffff;
+  color: #0873d2;
+}
+
+.gis-card-pane {
+  display: grid;
+  gap: 14px;
+  padding: 12px 14px 16px;
+}
+
+.gis-info-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid #dfe7f0;
+  border-left: 1px solid #dfe7f0;
+  background: #ffffff;
+}
+
+.gis-info-cell {
+  display: grid;
+  grid-template-columns: 118px minmax(0, 1fr);
+  min-height: 34px;
+  border-right: 1px solid #dfe7f0;
+  border-bottom: 1px solid #dfe7f0;
+  color: #314253;
+  font-size: 13px;
+}
+
+.gis-info-cell span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  background: #f7f9fb;
+  color: #526273;
+  font-weight: 700;
+}
+
+.gis-info-cell strong {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  color: #273747;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.gis-table-title {
+  color: #243447;
+  font-weight: 800;
+}
+
+.gis-mini-table {
+  overflow: auto;
+  border-top: 1px solid #dfe7f0;
+  border-left: 1px solid #dfe7f0;
+  background: #ffffff;
+}
+
+.gis-mini-table-row {
+  display: grid;
+  grid-template-columns: 56px minmax(110px, 1fr) minmax(100px, 1fr) minmax(150px, 1.2fr) minmax(110px, 1fr) minmax(100px, 1fr);
+}
+
+.gis-mini-table-row span {
+  min-height: 34px;
+  padding: 8px;
+  border-right: 1px solid #dfe7f0;
+  border-bottom: 1px solid #dfe7f0;
+  color: #314253;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.gis-mini-table-head span {
+  background: #f7f9fb;
+  color: #526273;
+  font-weight: 800;
+}
+
+.gis-mini-empty {
+  padding: 16px;
+  border-right: 1px solid #dfe7f0;
+  border-bottom: 1px solid #dfe7f0;
+  color: #7b8794;
+  text-align: center;
 }
 
 .gis-property-panel-enter-active,
@@ -1344,7 +1628,8 @@ a {
   gap: 4px;
   padding: 8px 10px;
   border-radius: var(--radius-lg);
-  background: rgba(255, 255, 255, 0.1);
+  margin: 10px;
+  background: rgba(14, 56, 94, 0.08);
 }
 
 .gis-attr-card + .gis-attr-card {
@@ -1352,13 +1637,13 @@ a {
 }
 
 .gis-attr-card-label {
-  color: rgba(232, 245, 255, 0.72);
+  color: #607386;
   font-size: 12px;
 }
 
 .gis-attr-card-value {
   font-weight: 700;
-  color: #ffffff;
+  color: #25384a;
 }
 
 .gis-map-crosshair {
@@ -1428,7 +1713,13 @@ a {
 
 @media (max-width: 1200px) {
   .gis-property-panel {
-    width: 236px;
+    left: 18px;
+    width: auto;
+    min-width: 0;
+  }
+
+  .gis-info-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .gis-bottom-bar {
@@ -2644,7 +2935,20 @@ a {
   }
 
   .gis-property-panel {
-    display: none;
+    top: 18px;
+    left: 18px;
+    right: 18px;
+    bottom: 82px;
+    width: auto;
+    min-width: 0;
+  }
+
+  .gis-card-tabs {
+    overflow-x: auto;
+  }
+
+  .gis-info-grid {
+    grid-template-columns: 1fr;
   }
 
   .gis-bottom-bar {

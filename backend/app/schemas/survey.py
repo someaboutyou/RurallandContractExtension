@@ -154,6 +154,14 @@ class SurveyContractRead(BaseModel):
     renderedHtml: str | None = None
 
 
+class SurveyPlotSketchMapRead(BaseModel):
+    cbfbm: str | None = None
+    cbfmc: str | None = None
+    plotCount: int = 0
+    totalArea: str | None = None
+    renderedHtml: str | None = None
+
+
 # ── 调查操作请求 ──────────────────────────────────────
 
 class SurveyChangeHeadRequest(BaseModel):
@@ -197,6 +205,11 @@ class SurveySplitParcelRequest(BaseModel):
     newDkbm: str = Field(min_length=1, max_length=19)
     newDkmc: str = Field(min_length=1, max_length=50)
     newScmj: float = Field(gt=0)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class SurveyRemoveParcelRequest(BaseModel):
+    dkbm: str = Field(min_length=1, max_length=19)
     reason: str | None = Field(default=None, max_length=500)
 
 
