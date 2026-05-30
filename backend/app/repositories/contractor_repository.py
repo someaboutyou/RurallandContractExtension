@@ -50,8 +50,7 @@ class ContractorRepository:
         if member_name:
             condition = exists(
                 select(SurveyCbfJtcyResult.id).where(
-                    SurveyCbfJtcyResult.batch_id == SurveyCbfResult.batch_id,
-                    SurveyCbfJtcyResult.contractor_uid == SurveyCbfResult.contractor_uid,
+                    SurveyCbfJtcyResult.cbfbm == SurveyCbfResult.cbfbm,
                     SurveyCbfJtcyResult.cyxm.ilike(f"%{member_name}%"),
                 )
             )
@@ -63,8 +62,7 @@ class ContractorRepository:
                 SurveyCbfResult.cbfzjhm.ilike(pattern),
                 exists(
                     select(SurveyCbfJtcyResult.id).where(
-                        SurveyCbfJtcyResult.batch_id == SurveyCbfResult.batch_id,
-                        SurveyCbfJtcyResult.contractor_uid == SurveyCbfResult.contractor_uid,
+                        SurveyCbfJtcyResult.cbfbm == SurveyCbfResult.cbfbm,
                         SurveyCbfJtcyResult.cyzjhm.ilike(pattern),
                     )
                 ),
@@ -84,34 +82,41 @@ class ContractorRepository:
         )
 
     def get_contractor_in_batch(self, db: Session, batch_id: int, code: str) -> SurveyCbfResult | None:
+        base = db.scalar(select(SurveyCbfBase).where(SurveyCbfBase.batch_id == batch_id, SurveyCbfBase.cbfbm == code).limit(1))
+        if base is None:
+            return None
         return db.scalar(
             select(SurveyCbfResult)
-            .where(SurveyCbfResult.batch_id == batch_id, SurveyCbfResult.cbfbm == code)
+            .where(SurveyCbfResult.cbfbm == code)
             .order_by(SurveyCbfResult.id.desc())
             .limit(1)
         )
 
     def list_family_members(self, db: Session, contractor: SurveyCbfResult) -> list[SurveyCbfJtcyResult]:
+        base = db.get(SurveyCbfBase, contractor.base_id) if contractor.base_id else None
         stmt = (
             select(SurveyCbfJtcyResult)
             .where(
-                SurveyCbfJtcyResult.batch_id == contractor.batch_id,
-                SurveyCbfJtcyResult.contractor_uid == contractor.contractor_uid,
+                SurveyCbfJtcyResult.cbfbm == contractor.cbfbm,
             )
             .order_by(SurveyCbfJtcyResult.cyxm, SurveyCbfJtcyResult.cyzjhm)
         )
         return list(db.scalars(stmt).all())
 
     def delete_contractor(self, db: Session, contractor: SurveyCbfResult) -> None:
+        base = db.get(SurveyCbfBase, contractor.base_id) if contractor.base_id else None
+        if base is None:
+            db.delete(contractor)
+            db.commit()
+            return
         db.execute(
             delete(SurveyCbfJtcyResult).where(
-                SurveyCbfJtcyResult.batch_id == contractor.batch_id,
                 SurveyCbfJtcyResult.contractor_uid == contractor.contractor_uid,
             )
         )
         db.execute(
             delete(SurveyCbfJtcyBase).where(
-                SurveyCbfJtcyBase.batch_id == contractor.batch_id,
+                SurveyCbfJtcyBase.batch_id == base.batch_id,
                 SurveyCbfJtcyBase.contractor_uid == contractor.contractor_uid,
             )
         )

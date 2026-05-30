@@ -60,5 +60,81 @@ class LandParcelRepository:
             for row in rows
         ]
 
+    def get_nearby_dk_by_codes(
+        self,
+        db: Session,
+        batch_id: int,
+        dkbm_list: list[str],
+        buffer_meters: int = 500,
+        limit: int = 800,
+    ) -> list[dict]:
+        if not dkbm_list:
+            return []
+
+        placeholders = ",".join(f":dkbm_{i}" for i in range(len(dkbm_list)))
+        params = {
+            **{f"dkbm_{i}": value for i, value in enumerate(dkbm_list)},
+            "batch_id": batch_id,
+            "buffer_meters": buffer_meters,
+            "limit": limit,
+        }
+        stmt = text(
+            f"""
+            WITH selected AS (
+                SELECT ST_Collect(geom) AS geom
+                FROM public.survey_dk_result
+                WHERE batch_id = :batch_id
+                  AND dkbm IN ({placeholders})
+                  AND geom IS NOT NULL
+            ),
+            extent AS (
+                SELECT ST_Expand(ST_Envelope(geom), :buffer_meters) AS geom
+                FROM selected
+                WHERE geom IS NOT NULL
+            ),
+            spatial_candidates AS (
+                SELECT dk.dkbm, dk.dkmc, dk.geom
+                FROM public.survey_dk_result AS dk, selected, extent
+                WHERE dk.batch_id = :batch_id
+                  AND dk.geom IS NOT NULL
+                  AND (
+                    ST_Intersects(dk.geom, extent.geom)
+                    OR ST_DWithin(dk.geom, selected.geom, :buffer_meters)
+                  )
+            ),
+            nearest_candidates AS (
+                SELECT dk.dkbm, dk.dkmc, dk.geom
+                FROM public.survey_dk_result AS dk, selected
+                WHERE dk.batch_id = :batch_id
+                  AND dk.geom IS NOT NULL
+                ORDER BY dk.geom <-> selected.geom
+                LIMIT 200
+            ),
+            candidates AS (
+                SELECT * FROM spatial_candidates
+                UNION
+                SELECT * FROM nearest_candidates
+            )
+            SELECT
+                candidates.dkbm,
+                candidates.dkmc,
+                ST_AsGeoJSON(ST_Transform(candidates.geom, 4326)) AS geometry
+            FROM candidates
+            ORDER BY
+              CASE WHEN candidates.dkbm IN ({placeholders}) THEN 0 ELSE 1 END,
+              candidates.dkbm
+            LIMIT :limit
+            """
+        )
+        rows = db.execute(stmt, params).all()
+        return [
+            {
+                "dkbm": row[0],
+                "dkmc": row[1],
+                "geometry": row[2],
+            }
+            for row in rows
+        ]
+
 
 land_parcel_repository = LandParcelRepository()

@@ -15,7 +15,7 @@ class LandParcelService:
         self, db: Session, cbfbm: str, current_user: User
     ) -> list[dict]:
         data_access_service.ensure_code_in_scope(
-            current_user, cbfbm, detail="承包方不在当前数据权限范围内"
+            current_user, cbfbm, detail="鎵垮寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴"
         )
 
         cbdkxx_rows = land_parcel_repository.get_cbdkxx_by_cbfbm(db, cbfbm)
@@ -53,7 +53,7 @@ class LandParcelService:
         self, db: Session, fbfbm: str, current_user: User
     ) -> list[dict]:
         data_access_service.ensure_code_in_scope(
-            current_user, fbfbm, detail="发包方不在当前数据权限范围内"
+            current_user, fbfbm, detail="鍙戝寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴"
         )
 
         cbdkxx_rows = land_parcel_repository.get_cbdkxx_by_fbfbm(db, fbfbm)
@@ -92,12 +92,11 @@ class LandParcelService:
         self, db: Session, batch_id: int, cbfbm: str, current_user: User
     ) -> list[dict]:
         data_access_service.ensure_code_in_scope(
-            current_user, cbfbm, detail="承包方不在当前数据权限范围内"
+            current_user, cbfbm, detail="鎵垮寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴"
         )
 
         cbdkxx_result_rows = db.scalars(
             select(SurveyCbdkxxResult).where(
-                SurveyCbdkxxResult.batch_id == batch_id,
                 SurveyCbdkxxResult.cbfbm == cbfbm,
             ).order_by(SurveyCbdkxxResult.dkbm)
         ).all()
@@ -127,7 +126,6 @@ class LandParcelService:
 
         fbf_result_rows = db.scalars(
             select(SurveyFbfResult).where(
-                SurveyFbfResult.batch_id == batch_id,
                 SurveyFbfResult.fbfbm.in_(fbfbm_list),
             )
         ).all()
@@ -135,9 +133,8 @@ class LandParcelService:
 
         cbf_result_row = db.scalars(
             select(SurveyCbfResult).where(
-                SurveyCbfResult.batch_id == batch_id,
                 SurveyCbfResult.cbfbm == cbfbm,
-            )
+            ).order_by(SurveyCbfResult.id.desc())
         ).first()
 
         result = []
@@ -178,6 +175,39 @@ class LandParcelService:
             }
             result.append(item)
 
+        return result
+
+    def get_nearby_survey_parcels(
+        self,
+        db: Session,
+        batch_id: int,
+        cbfbm: str,
+        current_user: User,
+    ) -> list[dict]:
+        data_access_service.ensure_code_in_scope(
+            current_user, cbfbm, detail="承包方不在当前数据权限范围内"
+        )
+
+        dkbm_list = db.scalars(
+            select(SurveyCbdkxxResult.dkbm).where(
+                SurveyCbdkxxResult.cbfbm == cbfbm,
+            )
+        ).all()
+        rows = land_parcel_repository.get_nearby_dk_by_codes(db, batch_id, dkbm_list)
+
+        result = []
+        for row in rows:
+            geometry = None
+            if row["geometry"]:
+                try:
+                    geometry = json.loads(row["geometry"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            result.append({
+                "dkbm": row["dkbm"],
+                "dkmc": row["dkmc"],
+                "geometry": geometry,
+            })
         return result
 
 

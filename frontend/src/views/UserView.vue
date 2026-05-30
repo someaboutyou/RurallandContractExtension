@@ -224,11 +224,14 @@
             multiple
             show-checkbox
             filterable
+            lazy
             collapse-tags
             collapse-tags-tooltip
             check-strictly
             :data="assignableRegionPermissionTree"
             :props="regionTreeProps"
+            :load="loadRegionPermissionNode"
+            :filter-method="handleRegionPermissionFilter"
             node-key="code"
             placeholder="请选择可操作区域"
           />
@@ -320,11 +323,11 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref } from "vue";
+import { computed, onUnmounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
 import { fetchPermissions } from "../api/permission";
-import { fetchRegions, fetchRegionTree } from "../api/region";
+import { fetchRegionChildren, fetchRegions, searchRegions } from "../api/region";
 import { createRole, deleteRole, fetchRoles, updateRole } from "../api/role";
 import { fetchTenants } from "../api/tenant";
 import { createUser, deleteUser, fetchUsers, resetUserPassword, updateUser } from "../api/user";
@@ -352,7 +355,8 @@ const roleRows = ref([]);
 const roleOptions = ref([]);
 const regionOptions = ref([]);
 const regionPermissionTree = ref([]);
-const regionTreeProps = { label: "fullName", children: "children", disabled: "disabled" };
+const regionTreeProps = { label: "fullName", children: "children", disabled: "disabled", isLeaf: "leaf" };
+const selectedRegionMap = ref(new Map());
 const tenantOptions = ref([]);
 const permissionsCatalog = ref([]);
 
@@ -367,6 +371,7 @@ const editingUserId = ref(0);
 const editingRoleId = ref(0);
 const editingRoleSystem = ref(false);
 const passwordTargetUserId = ref(0);
+let regionPermissionSearchTimer = null;
 
 const userFormRef = ref();
 const roleFormRef = ref();
@@ -414,6 +419,7 @@ const selectedTenantName = computed(() => {
   }
   const selectedRegion =
     regionOptions.value.find((item) => item.code === firstRegionCode) ||
+    selectedRegionMap.value.get(firstRegionCode) ||
     findRegionTreeNode(regionPermissionTree.value, firstRegionCode);
   const tenantCode = selectedRegion?.tenantCode || firstRegionCode.slice(0, 6);
   const tenant = tenantOptions.value.find((item) => item.code === tenantCode);
@@ -570,8 +576,9 @@ async function loadBaseOptions() {
       fetchRegions().then(({ data }) => {
         regionOptions.value = data.data;
       }),
-      fetchRegionTree(null, { includeGroups: true }).then(({ data }) => {
+      fetchRegionChildren({ includeGroups: true }).then(({ data }) => {
         regionPermissionTree.value = data.data;
+        rememberRegions(regionPermissionTree.value);
       }),
       fetchTenants().then(({ data }) => {
         tenantOptions.value = data.data;
@@ -633,7 +640,7 @@ function openCreateUserDialog() {
 
 function getRegionPermissionLabel(item) {
   const region = regionOptions.value.find((option) => option.code === item.regionCode);
-  return region?.fullName || findRegionTreeNode(regionPermissionTree.value, item.regionCode)?.fullName || item.regionCode;
+  return region?.fullName || selectedRegionMap.value.get(item.regionCode)?.fullName || findRegionTreeNode(regionPermissionTree.value, item.regionCode)?.fullName || item.regionCode;
 }
 
 function findRegionTreeNode(nodes, code) {
@@ -647,6 +654,38 @@ function findRegionTreeNode(nodes, code) {
     }
   }
   return null;
+}
+
+function rememberRegions(nodes) {
+  for (const item of nodes || []) {
+    selectedRegionMap.value.set(item.code, item);
+    rememberRegions(item.children || []);
+  }
+}
+
+async function loadRegionPermissionNode(node, resolve) {
+  if (node.level === 0) {
+    resolve(regionPermissionTree.value);
+    return;
+  }
+  const { data } = await fetchRegionChildren({ parentId: node.data.id, includeGroups: true });
+  rememberRegions(data.data);
+  resolve(markAssignedGroupNodes(data.data, editingUserId.value));
+}
+
+function handleRegionPermissionFilter(keyword) {
+  window.clearTimeout(regionPermissionSearchTimer);
+  regionPermissionSearchTimer = window.setTimeout(async () => {
+    if (!keyword) {
+      const { data } = await fetchRegionChildren({ includeGroups: true });
+      regionPermissionTree.value = data.data;
+      rememberRegions(regionPermissionTree.value);
+      return;
+    }
+    const { data } = await searchRegions({ keyword, includeGroups: true, limit: 100 });
+    regionPermissionTree.value = data.data;
+    rememberRegions(regionPermissionTree.value);
+  }, 250);
 }
 
 function markAssignedGroupNodes(nodes, currentUserId) {
@@ -835,4 +874,7 @@ async function handleDeleteRole(row) {
 }
 
 bootstrapPage();
+onUnmounted(() => {
+  window.clearTimeout(regionPermissionSearchTimer);
+});
 </script>

@@ -66,9 +66,12 @@
           v-model="form.regionId"
           clearable
           filterable
+          lazy
           check-strictly
           :data="regionTree"
           :props="regionTreeProps"
+          :load="loadRegionNode"
+          :filter-method="handleRegionFilter"
           node-key="id"
           placeholder="请选择导入区域"
           @change="handleRegionChange"
@@ -151,7 +154,7 @@ import {
   rollbackImport,
   uploadImportGdb,
 } from "../api/dataImport";
-import { fetchRegionTree } from "../api/region";
+import { fetchRegionChildren, searchRegions } from "../api/region";
 import { useAuthStore } from "../stores/auth";
 
 const authStore = useAuthStore();
@@ -174,12 +177,14 @@ const importProgress = ref(null);
 const detailRows = ref([]);
 const rowStatusFilter = ref("");
 const regionTree = ref([]);
-const regionTreeProps = { label: "fullName", children: "children" };
+const regionTreeProps = { label: "fullName", children: "children", isLeaf: "leaf" };
+const selectedRegionMap = ref(new Map());
 const form = reactive({ importName: "", sourceOrg: "", regionId: undefined, regionCode: "", regionName: "", remark: "" });
 const uploadAccept = ".zip,application/zip";
 const importDoneStatuses = ["success", "partial_success", "failed", "canceled"];
 const importActiveBatchStatuses = ["processing"];
 let progressTimer = null;
+let regionSearchTimer = null;
 
 const progressBarStatus = computed(() => {
   if (!importProgress.value) return undefined;
@@ -268,9 +273,45 @@ function flattenRegions(nodes, result = []) {
 }
 
 function handleRegionChange(value) {
-  const selected = flattenRegions(regionTree.value).find((item) => item.id === value);
+  const selected = selectedRegionMap.value.get(value) || flattenRegions(regionTree.value).find((item) => item.id === value);
   form.regionCode = selected?.code || "";
   form.regionName = selected?.fullName || "";
+}
+
+function rememberRegions(nodes) {
+  for (const item of nodes || []) {
+    selectedRegionMap.value.set(item.id, item);
+    rememberRegions(item.children || []);
+  }
+}
+
+async function loadRegionRoots() {
+  const { data } = await fetchRegionChildren({ includeGroups: true });
+  regionTree.value = data.data;
+  rememberRegions(regionTree.value);
+}
+
+async function loadRegionNode(node, resolve) {
+  if (node.level === 0) {
+    resolve(regionTree.value);
+    return;
+  }
+  const { data } = await fetchRegionChildren({ parentId: node.data.id, includeGroups: true });
+  rememberRegions(data.data);
+  resolve(data.data);
+}
+
+function handleRegionFilter(keyword) {
+  window.clearTimeout(regionSearchTimer);
+  regionSearchTimer = window.setTimeout(async () => {
+    if (!keyword) {
+      await loadRegionRoots();
+      return;
+    }
+    const { data } = await searchRegions({ keyword, includeGroups: true, limit: 80 });
+    regionTree.value = data.data;
+    rememberRegions(regionTree.value);
+  }, 250);
 }
 
 function openUploadDialog(row) {
@@ -441,13 +482,15 @@ function handlePageChange(value) {
 }
 
 async function loadRegionTree() {
-  const { data } = await fetchRegionTree();
-  regionTree.value = data.data;
+  await loadRegionRoots();
 }
 
 loadRegionTree();
 loadBatches();
-onUnmounted(stopProgressPolling);
+onUnmounted(() => {
+  stopProgressPolling();
+  window.clearTimeout(regionSearchTimer);
+});
 </script>
 
 <style scoped>

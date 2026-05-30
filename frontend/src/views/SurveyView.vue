@@ -1,117 +1,182 @@
 <template>
-  <section class="panel table-page">
-    <div class="toolbar">
-      <div class="panel-title">串户调查成果</div>
-      <div class="toolbar-actions">
-        <el-tree-select
-          v-model="activeRegionId"
-          clearable
-          filterable
-          check-strictly
-          :data="regionTree"
-          :props="regionTreeProps"
-          node-key="id"
-          placeholder="按区域筛选成果"
-          style="width: 260px"
-          @change="handleActiveRegionChange"
-        />
-        <el-input v-model="batchKeyword" clearable placeholder="搜索调查批次" style="width: 220px" @keyup.enter="loadBatches" />
-        <el-button plain @click="loadBatches">刷新</el-button>
-        <el-button :disabled="!activeBatch" plain type="primary" @click="handleExportResults">导出成果</el-button>
-        <el-button v-if="canManage" :disabled="!activeBatch || activeBatch.status === 'finished'" plain type="warning" @click="handleFinishBatch">
-          结束批次
+  <div class="survey-page">
+    <section class="panel survey-batch-panel">
+      <div class="batch-panel-header">
+        <div class="panel-title">调查批次</div>
+        <div class="batch-panel-actions">
+          <el-select v-model="batchSurveyStatus" clearable placeholder="调查状态" class="batch-header-filter">
+            <el-option label="未调查" value="not_started" />
+            <el-option label="调查中" value="in_progress" />
+            <el-option label="已调查" value="surveyed" />
+            <el-option label="已确认" value="confirmed" />
+            <el-option label="已跳过" value="skipped" />
+          </el-select>
+          <el-tooltip content="新建调查批次" placement="top">
+            <el-button v-if="canManage" :icon="Plus" circle type="success" @click="openCreateBatch" />
+          </el-tooltip>
+        </div>
+      </div>
+      <el-input
+        v-model="batchKeyword"
+        :prefix-icon="Search"
+        clearable
+        placeholder="搜索批次"
+        class="batch-search"
+        @keyup.enter="loadBatches"
+        @clear="loadBatches"
+      />
+
+      <div v-loading="batchLoading" class="batch-card-list">
+        <el-empty v-if="!filteredBatches.length && !batchLoading" description="暂无调查批次" :image-size="88" />
+        <el-tooltip
+          v-for="batch in filteredBatches"
+          :key="batch.id"
+          placement="right"
+          effect="light"
+          :show-after="250"
+          popper-class="batch-detail-tooltip"
+        >
+          <template #content>
+            <div class="batch-tooltip-content">
+              <div><span>批次号</span>{{ batch.batchNo || "-" }}</div>
+              <div><span>创建时间</span>{{ formatDateTime(batch.createdAt) }}</div>
+              <div><span>调查区域</span>{{ batch.regionName || batch.regionCode || "-" }}</div>
+              <div><span>已调查</span>{{ batch.surveyedCount || 0 }} 户</div>
+              <div><span>有变化</span>{{ batch.changedCount || 0 }} 户</div>
+              <div><span>已确认</span>{{ batch.confirmedCount || 0 }} 户</div>
+              <div><span>已跳过</span>{{ batch.skippedCount || 0 }} 户</div>
+            </div>
+          </template>
+          <button
+            type="button"
+            class="batch-card"
+            :class="{ 'is-active': activeBatch?.id === batch.id }"
+            @click="handleBatchSelect(batch)"
+          >
+            <span class="batch-card-title">{{ batch.batchName || batch.batchNo }}</span>
+            <span class="batch-card-status-row">
+              <el-tag :type="batchStatusType(batch.status)" size="small">{{ batchStatusLabel(batch.status) }}</el-tag>
+              <span class="batch-card-progress">{{ batchSurveySummary(batch) }}</span>
+            </span>
+            <span class="batch-card-metrics">
+              <span>
+                <b>{{ batch.taskCount || 0 }}</b>
+                应调查户数
+              </span>
+              <span>
+                <b>{{ batch.surveyedCount || 0 }}</b>
+                已调查
+              </span>
+            </span>
+          </button>
+        </el-tooltip>
+      </div>
+      <div class="batch-footer-actions">
+        <el-button :disabled="!activeBatch" :icon="Download" plain type="primary" @click="handleExportResults">导出</el-button>
+        <el-button
+          v-if="canManage"
+          :disabled="!activeBatch || activeBatch.status === 'finished'"
+          :icon="CircleCheck"
+          plain
+          type="warning"
+          @click="handleFinishBatch"
+        >
+          结束
         </el-button>
-        <el-button v-if="canManage" type="success" @click="openCreateBatch">新建调查批次</el-button>
       </div>
-    </div>
+    </section>
 
-    <el-table v-loading="batchLoading" :data="batches" border highlight-current-row @current-change="handleBatchSelect">
-      <el-table-column prop="batchNo" label="批次号" min-width="160" />
-      <el-table-column prop="batchName" label="批次名称" min-width="220" />
-      <el-table-column prop="regionName" label="调查区域" min-width="180" show-overflow-tooltip />
-      <el-table-column prop="status" label="状态" min-width="100" />
-      <el-table-column prop="taskCount" label="应调查" min-width="90" />
-      <el-table-column prop="surveyedCount" label="已调查" min-width="90" />
-      <el-table-column prop="changedCount" label="有变化" min-width="90" />
-      <el-table-column prop="confirmedCount" label="已确认" min-width="90" />
-      <el-table-column prop="skippedCount" label="已跳过" min-width="90" />
-      <el-table-column prop="createdAt" label="创建时间" min-width="180" />
-    </el-table>
-  </section>
+    <section class="panel table-page survey-work-panel">
+      <el-tabs v-model="surveyPanelTab" class="survey-work-tabs">
+        <el-tab-pane label="承包方调查" name="contractor">
+          <div class="toolbar">
+            <div class="panel-title">{{ taskPanelTitle }}</div>
+            <div class="toolbar-actions">
+              <el-input v-model="taskKeyword" :disabled="!activeBatch" clearable placeholder="搜索承包方" style="width: 220px" @keyup.enter="loadTasks" />
+              <el-select v-model="taskStatus" :disabled="!activeBatch" clearable placeholder="调查状态" style="width: 160px" @change="loadTasks">
+                <el-option label="未调查" value="not_started" />
+                <el-option label="已调查" value="surveyed" />
+                <el-option label="已确认" value="confirmed" />
+                <el-option label="已跳过" value="skipped" />
+              </el-select>
+              <el-button :disabled="!activeBatch" :icon="Search" plain @click="loadTasks">查询</el-button>
+              <el-button v-if="canManage" :disabled="!activeBatch || activeBatch?.status === 'finished'" :icon="Plus" type="primary" @click="openCreateContractor">新增</el-button>
+            </div>
+          </div>
 
-  <section class="panel table-page survey-task-panel">
-    <div class="toolbar">
-      <div class="panel-title">{{ taskPanelTitle }}</div>
-      <div class="toolbar-actions">
-        <el-input v-model="taskKeyword" :disabled="!activeBatch" clearable placeholder="搜索承包方" style="width: 220px" @keyup.enter="loadTasks" />
-        <el-select v-model="taskStatus" :disabled="!activeBatch" clearable placeholder="调查状态" style="width: 160px" @change="loadTasks">
-          <el-option label="未调查" value="not_started" />
-          <el-option label="已调查" value="surveyed" />
-          <el-option label="已确认" value="confirmed" />
-          <el-option label="已跳过" value="skipped" />
-        </el-select>
-        <el-button :disabled="!activeBatch" plain @click="loadTasks">查询</el-button>
-      </div>
-    </div>
+          <el-table v-loading="taskLoading" :data="tasks" border height="100%">
+            <el-table-column prop="cbfbm" label="承包方代码" min-width="170" show-overflow-tooltip />
+            <el-table-column prop="cbfmc" label="承包方名称" min-width="170" show-overflow-tooltip />
+            <el-table-column prop="taskStatus" label="调查状态" width="112">
+              <template #default="{ row }">
+                <el-tag :type="row.hasChange ? 'warning' : row.taskStatus === 'not_started' ? 'info' : 'success'">
+                  {{ taskStatusLabel(row.taskStatus) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="hasChange" label="是否变化" width="92" align="center">
+              <template #default="{ row }">{{ row.hasChange ? "是" : "否" }}</template>
+            </el-table-column>
+            <el-table-column prop="investigatedAt" label="调查时间" min-width="150" show-overflow-tooltip />
+            <el-table-column label="操作" fixed="right" width="190" align="center" class-name="survey-action-column">
+              <template #default="{ row }">
+                <div class="survey-row-actions">
+                  <el-button link type="primary" @click="openResult(row)">调查录入</el-button>
+                  <el-button
+                    v-if="canManage"
+                    :disabled="activeBatch?.status === 'finished' || row.taskStatus === 'confirmed'"
+                    link
+                    type="success"
+                    @click="handleConfirmTask(row)"
+                  >
+                    确认
+                  </el-button>
+                  <el-button
+                    v-if="canManage"
+                    :disabled="activeBatch?.status === 'finished' || row.taskStatus === 'confirmed' || row.taskStatus === 'skipped'"
+                    link
+                    type="warning"
+                    @click="handleSkipTask(row)"
+                  >
+                    跳过
+                  </el-button>
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
 
-    <el-table v-loading="taskLoading" :data="tasks" border>
-      <el-table-column prop="cbfbm" label="承包方代码" min-width="180" />
-      <el-table-column prop="cbfmc" label="承包方名称" min-width="180" />
-      <el-table-column prop="taskStatus" label="调查状态" min-width="120">
-        <template #default="{ row }">
-          <el-tag :type="row.hasChange ? 'warning' : row.taskStatus === 'not_started' ? 'info' : 'success'">
-            {{ taskStatusLabel(row.taskStatus) }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="hasChange" label="是否变化" min-width="100">
-        <template #default="{ row }">{{ row.hasChange ? "是" : "否" }}</template>
-      </el-table-column>
-      <el-table-column prop="investigatedAt" label="调查时间" min-width="180" />
-      <el-table-column label="操作" fixed="right" min-width="120">
-        <template #default="{ row }">
-          <el-button link type="primary" @click="openResult(row)">调查录入</el-button>
-          <el-button
-            v-if="canManage"
-            :disabled="activeBatch?.status === 'finished' || row.taskStatus === 'confirmed'"
-            link
-            type="success"
-            @click="handleConfirmTask(row)"
-          >
-            确认
-          </el-button>
-          <el-button
-            v-if="canManage"
-            :disabled="activeBatch?.status === 'finished' || row.taskStatus === 'confirmed' || row.taskStatus === 'skipped'"
-            link
-            type="warning"
-            @click="handleSkipTask(row)"
-          >
-            跳过
-          </el-button>
-        </template>
-      </el-table-column>
-    </el-table>
-  </section>
+        <el-tab-pane label="发包方调查" name="issuer">
+          <div class="toolbar">
+            <div class="panel-title">发包方调查</div>
+            <div class="toolbar-actions">
+              <el-input v-model="issuerKeyword" :disabled="!activeBatch" clearable placeholder="搜索发包方" style="width: 220px" />
+              <el-button :disabled="!activeBatch" :icon="Search" plain @click="loadIssuerSurveyRows(true)">查询</el-button>
+              <el-button v-if="canManage" :disabled="!activeBatch || activeBatch?.status === 'finished'" :icon="Plus" type="primary" @click="openCreateIssuer">新增</el-button>
+            </div>
+          </div>
 
-  <section class="panel table-page survey-task-panel">
-    <div class="toolbar">
-      <div class="panel-title">调查变化记录</div>
-      <div class="toolbar-actions">
-        <el-button :disabled="!activeBatch" plain @click="loadChanges">刷新</el-button>
-      </div>
-    </div>
-    <el-table v-loading="changeLoading" :data="changes" border>
-      <el-table-column prop="changeNo" label="变化编号" min-width="170" />
-      <el-table-column prop="cbfbm" label="承包方代码" min-width="170" />
-      <el-table-column prop="changeType" label="变化类型" min-width="130" />
-      <el-table-column prop="changeStatus" label="状态" min-width="100" />
-      <el-table-column prop="changeReason" label="变化原因" min-width="240" />
-      <el-table-column prop="policyBasis" label="政策依据" min-width="240" />
-      <el-table-column prop="investigatorName" label="调查人" min-width="120" />
-      <el-table-column prop="createdAt" label="记录时间" min-width="180" />
-    </el-table>
-  </section>
+          <el-table v-loading="issuerLoading" :data="filteredIssuerRows" border height="100%">
+            <el-table-column prop="code" label="发包方代码" min-width="160" />
+            <el-table-column prop="name" label="发包方名称" min-width="180" show-overflow-tooltip />
+            <el-table-column prop="responsibleName" label="负责人" min-width="120" />
+            <el-table-column prop="surveyStatus" label="调查状态" min-width="120">
+              <template #default="{ row }">
+                <el-tag :type="surveyStatusTagType(row.surveyStatus)">{{ taskStatusLabel(row.surveyStatus) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="relatedContractorCount" label="关联承包方" min-width="110" />
+            <el-table-column prop="surveyDate" label="调查日期" min-width="130" />
+            <el-table-column prop="surveyorName" label="调查员" min-width="130" />
+            <el-table-column label="操作" fixed="right" min-width="150">
+              <template #default="{ row }">
+                <el-button link type="primary" @click="openIssuerSurvey(row)">进入调查</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
+      </el-tabs>
+    </section>
 
   <el-dialog v-model="batchDialogVisible" title="新建调查批次" width="640px">
     <el-alert
@@ -147,9 +212,9 @@
     </template>
   </el-dialog>
 
-  <el-dialog v-model="resultVisible" :title="`调查录入 - ${resultForm.name || ''}`" width="92vw" top="3vh" destroy-on-close>
+  <el-dialog v-model="resultVisible" :title="resultDialogTitle" width="92vw" top="3vh" destroy-on-close>
     <!-- 操作工具栏 -->
-    <div class="survey-toolbar">
+    <div v-if="!isCreatingContractorResult" class="survey-toolbar">
       <el-button type="danger" plain size="small" @click="handleOpDeregister">注销承包方</el-button>
       <el-button plain size="small" @click="handleOpSplitHousehold">分户</el-button>
       <el-button plain size="small" @click="handleOpMergeHousehold">合户</el-button>
@@ -158,17 +223,19 @@
 
     <!-- 4 个信息 Tab -->
     <el-tabs v-model="activeTab">
-      <el-tab-pane :label="`承包方及家庭成员（${resultForm.familyMembers.length}人）`" name="contractor">
+      <el-tab-pane :label="`承包方及其家庭成员（${resultForm.familyMembers.length}人）`" name="contractor">
         <ContractorMemberPanel
           ref="contractorMemberPanel"
           :batch-id="activeBatch?.id"
           :contractor-uid="resultForm.contractorUid"
           :result="resultForm"
           :changed-fields="computedChangedFields"
+          :can-generate-code="resultForm.resultStatus === 'added'"
+          @generate-code="generateResultContractorCode"
         />
       </el-tab-pane>
 
-      <el-tab-pane label="地块信息" name="parcels">
+      <el-tab-pane label="地块信息" name="parcels" :disabled="isCreatingContractorResult">
         <ParcelInfoPanel
           :batch-id="activeBatch?.id"
           :contractor-uid="resultForm.contractorUid"
@@ -183,7 +250,7 @@
         />
       </el-tab-pane>
 
-      <el-tab-pane label="承包地块示意图" name="plotSketchMap">
+      <el-tab-pane label="承包地块示意图" name="plotSketchMap" :disabled="isCreatingContractorResult">
         <PlotSketchMapPanel
           :batch-id="activeBatch?.id"
           :contractor-uid="resultForm.contractorUid"
@@ -191,7 +258,7 @@
         />
       </el-tab-pane>
 
-      <el-tab-pane label="合同信息" name="contract">
+      <el-tab-pane label="合同信息" name="contract" :disabled="isCreatingContractorResult">
         <ContractInfoPanel
           :batch-id="activeBatch?.id"
           :contractor-uid="resultForm.contractorUid"
@@ -200,7 +267,7 @@
     </el-tabs>
 
     <!-- 辅助功能面板 -->
-    <el-collapse class="survey-aux-panel">
+    <el-collapse v-if="!isCreatingContractorResult" class="survey-aux-panel">
       <el-collapse-item title="调查附件 & 转业务申请" name="aux">
         <!-- 附件上传 -->
         <div v-if="canManage && !isResultLocked" class="phase2-upload">
@@ -255,22 +322,86 @@
     </el-collapse>
 
     <template #footer>
-      <el-button @click="resultVisible = false">取消</el-button>
+      <el-button @click="closeResultDialog">取消</el-button>
       <el-button
         v-if="canManage && !isResultLocked"
-        :loading="savingResult"
+        :loading="savingResult || creatingContractor"
         type="success"
         @click="handleSaveResult"
       >
-        保存调查结果
+        {{ isCreatingContractorResult ? "新增并保存" : "保存调查结果" }}
       </el-button>
       <el-button
-        v-if="canManage && !isResultLocked && resultForm.surveyStatus !== 'not_surveyed'"
+        v-if="canManage && !isCreatingContractorResult && !isResultLocked && resultForm.surveyStatus !== 'not_surveyed'"
         :loading="confirmingResult"
         type="primary"
         @click="handleConfirmCurrent"
       >
         确认调查结果
+      </el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog v-model="issuerSurveyVisible" :title="issuerSurveyDialogTitle" width="760px">
+    <el-form ref="issuerSurveyFormRef" :model="issuerSurveyForm" :rules="issuerSurveyRules" label-position="top" status-icon class="survey-dialog-form">
+      <div class="form-grid-3">
+        <el-form-item label="发包方编码" prop="code">
+          <el-input :model-value="issuerSurveyForm.code" maxlength="14" @input="handleIssuerCodeInput">
+            <template v-if="isCreatingIssuerSurvey" #append>
+              <el-button @click="generateIssuerCode">生成</el-button>
+            </template>
+          </el-input>
+        </el-form-item>
+        <el-form-item label="发包方名称" prop="name">
+          <el-input v-model="issuerSurveyForm.name" maxlength="50" />
+        </el-form-item>
+        <el-form-item label="负责人姓名" prop="responsibleName">
+          <el-input v-model="issuerSurveyForm.responsibleName" maxlength="50" />
+        </el-form-item>
+        <el-form-item label="负责人证件类型" prop="responsibleIdType">
+          <el-select v-model="issuerSurveyForm.responsibleIdType">
+            <el-option label="居民身份证" value="1" />
+            <el-option label="户口簿" value="2" />
+            <el-option label="军官证" value="3" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="负责人证件号码" prop="responsibleIdNo">
+          <el-input v-model="issuerSurveyForm.responsibleIdNo" maxlength="30" />
+        </el-form-item>
+        <el-form-item label="联系电话" prop="phone">
+          <el-input v-model="issuerSurveyForm.phone" maxlength="15" />
+        </el-form-item>
+      </div>
+      <el-form-item label="发包方地址" prop="address">
+        <el-input v-model="issuerSurveyForm.address" maxlength="100" />
+      </el-form-item>
+      <div class="form-grid-3">
+        <el-form-item label="邮政编码" prop="postcode">
+          <el-input v-model="issuerSurveyForm.postcode" maxlength="6" />
+        </el-form-item>
+        <el-form-item label="调查员">
+          <el-input v-model="issuerSurveyForm.surveyorName" maxlength="254" />
+        </el-form-item>
+        <el-form-item label="调查日期">
+          <el-date-picker v-model="issuerSurveyForm.surveyDate" value-format="YYYY-MM-DD" type="date" style="width: 100%" />
+        </el-form-item>
+      </div>
+      <el-form-item label="调查记事">
+        <el-input v-model="issuerSurveyForm.surveyNote" type="textarea" :rows="2" maxlength="254" show-word-limit />
+      </el-form-item>
+      <el-form-item label="变化原因">
+        <el-input v-model="issuerSurveyForm.changeReason" type="textarea" :rows="2" maxlength="500" />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="closeIssuerSurveyDialog">取消</el-button>
+      <el-button
+        v-if="canManage && activeBatch?.status !== 'finished' && issuerSurveyForm.surveyStatus !== 'confirmed'"
+        :loading="savingIssuerSurvey || creatingIssuer"
+        type="primary"
+        @click="handleSaveIssuerSurvey"
+      >
+        {{ isCreatingIssuerSurvey ? "新增并保存" : "保存发包方调查" }}
       </el-button>
     </template>
   </el-dialog>
@@ -283,11 +414,13 @@
   <SplitHouseholdDialog ref="splitHouseholdDialog" @done="reloadSurveyResult" />
   <MergeHouseholdDialog ref="mergeHouseholdDialog" @done="handleMergeDone" />
   <RemoveParcelDialog ref="removeParcelDialog" @done="reloadSurveyResult" />
+  </div>
 </template>
 
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { CircleCheck, Download, Plus, Search } from "@element-plus/icons-vue";
 
 import ContractorMemberPanel from "../components/survey/ContractorMemberPanel.vue";
 import ParcelInfoPanel from "../components/survey/ParcelInfoPanel.vue";
@@ -305,6 +438,8 @@ import {
   confirmSurveyResult,
   createSurveyAuthorization,
   createSurveyBatch,
+  createSurveyContractor,
+  createSurveyIssuer,
   createSurveyRestructure,
   createSurveyTag,
   deleteSurveyAttachment,
@@ -315,8 +450,9 @@ import {
   downloadSurveyAuthorizationTemplate,
   exportSurveyResults,
   fetchSurveyBatches,
-  fetchSurveyChanges,
   fetchSurveyDiffs,
+  fetchSurveyIssuer,
+  fetchSurveyIssuers,
   fetchSurveyParcels,
   fetchSurveyPhase2,
   fetchSurveyResult,
@@ -327,6 +463,7 @@ import {
   revokeSurveyAuthorization,
   skipSurveyTask,
   updateSurveyResult,
+  updateSurveyIssuer,
   uploadSurveyAttachment,
   uploadSurveyAuthorizationFile,
 } from "../api/survey";
@@ -334,6 +471,7 @@ import { fetchRegionTree } from "../api/region";
 import { useAuthStore } from "../stores/auth";
 import { useDialogMap } from "../composables/useDialogMap";
 import { useDictionary } from "../composables/useDictionary";
+import { validateChinaId, validateMobile, validatePostcode } from "../utils/validators";
 
 const authStore = useAuthStore();
 const canManage = computed(() => authStore.hasPermission("contractors.manage"));
@@ -342,16 +480,16 @@ const { labelOf: yesNoLabel } = useDictionary("nyt2539_c19_yes_no");
 const { labelOf: relationDictionaryLabel } = useDictionary("nyt2539_c20_relation_to_head");
 const batchLoading = ref(false);
 const taskLoading = ref(false);
-const changeLoading = ref(false);
 const diffLoading = ref(false);
 const submittingBatch = ref(false);
 const savingResult = ref(false);
 const confirmingResult = ref(false);
 const batches = ref([]);
 const tasks = ref([]);
-const changes = ref([]);
+const issuerRows = ref([]);
 const diffRows = ref([]);
 const phase2Loading = ref(false);
+const issuerLoading = ref(false);
 const phase2 = reactive({ tags: [], restructures: [], authorizations: [], attachments: [] });
 const activeBatch = ref(null);
 const activeTask = ref(null);
@@ -359,16 +497,27 @@ const activeRegionId = ref(undefined);
 const activeRegionCode = ref("");
 const activeRegionLabel = ref("");
 const batchKeyword = ref("");
+const batchSurveyStatus = ref("");
 const taskKeyword = ref("");
 const taskStatus = ref("");
+const issuerKeyword = ref("");
 const batchDialogVisible = ref(false);
+const issuerSurveyVisible = ref(false);
 const resultVisible = ref(false);
+const isCreatingContractorResult = ref(false);
+const isCreatingIssuerSurvey = ref(false);
+const surveyPanelTab = ref("contractor");
 const activeTab = ref("contractor");
 const plotSketchRefreshKey = ref(0);
 const regionTree = ref([]);
 const regionTreeProps = { label: "fullName", children: "children" };
 const batchForm = reactive({ batchName: "", regionId: undefined, regionCode: "", regionName: "", remark: "" });
+const creatingContractor = ref(false);
+const creatingIssuer = ref(false);
+const savingIssuerSurvey = ref(false);
 const resultForm = reactive(createEmptyResult());
+const issuerSurveyForm = reactive(createEmptyIssuerSurvey());
+const activeIssuer = ref(null);
 const tagForm = reactive({ tagCode: "whole_family_urbanized", reason: "", policyBasis: "" });
 const restructureForm = reactive(createEmptyRestructure());
 const authorizationForm = reactive(createEmptyAuthorization());
@@ -379,6 +528,7 @@ const selectedAttachmentFile = ref(null);
 const authorizationFileInput = ref(null);
 const authorizationUploadTarget = ref(null);
 const contractorMemberPanel = ref(null);
+const issuerSurveyFormRef = ref(null);
 const deregisterDialog = ref(null);
 const addParcelDialog = ref(null);
 const splitParcelDialog = ref(null);
@@ -386,7 +536,94 @@ const swapParcelsDialog = ref(null);
 const splitHouseholdDialog = ref(null);
 const mergeHouseholdDialog = ref(null);
 const removeParcelDialog = ref(null);
-const isResultLocked = computed(() => activeBatch.value?.status === "finished" || resultForm.surveyStatus === "confirmed");
+const isResultLocked = computed(() => activeBatch.value?.status === "finished" || (!isCreatingContractorResult.value && resultForm.surveyStatus === "confirmed"));
+
+const filteredIssuerRows = computed(() => {
+  const keyword = issuerKeyword.value.trim().toLowerCase();
+  if (!keyword) {
+    return issuerRows.value;
+  }
+  return issuerRows.value.filter((row) =>
+    [row.code, row.name, row.responsibleName, row.surveyorName]
+      .some((value) => String(value || "").toLowerCase().includes(keyword)),
+  );
+});
+
+const filteredBatches = computed(() => {
+  if (!batchSurveyStatus.value) {
+    return batches.value;
+  }
+  return batches.value.filter((batch) => batchSurveyStatusValue(batch) === batchSurveyStatus.value);
+});
+
+const resultDialogTitle = computed(() => {
+  const name = resultForm.name ? ` - ${resultForm.name}` : "";
+  return `${isCreatingContractorResult.value ? "新增承包方调查录入" : "承包方调查录入"}${name}`;
+});
+
+const issuerSurveyDialogTitle = computed(() => {
+  const name = issuerSurveyForm.name ? ` - ${issuerSurveyForm.name}` : "";
+  return `${isCreatingIssuerSurvey.value ? "新增发包方调查录入" : "发包方调查录入"}${name}`;
+});
+
+const validateIssuerCodeField = (_rule, value, callback) => {
+  const text = String(value || "").trim();
+  if (!text) {
+    callback(new Error("请输入发包方编码"));
+    return;
+  }
+  if (!/^\d+$/.test(text)) {
+    callback(new Error("发包方编码只能输入数字"));
+    return;
+  }
+  if (text.length !== 14) {
+    callback(new Error("发包方编码必须为14位"));
+    return;
+  }
+  callback();
+};
+
+const validateIssuerIdNoField = (_rule, value, callback) => {
+  const text = String(value || "").trim();
+  if (!text) {
+    callback(new Error("请输入负责人证件号码"));
+    return;
+  }
+  if (issuerSurveyForm.responsibleIdType === "1" && !validateChinaId(text)) {
+    callback(new Error("请输入正确的居民身份证号码"));
+    return;
+  }
+  callback();
+};
+
+const validateIssuerPhoneField = (_rule, value, callback) => {
+  const text = String(value || "").trim();
+  if (text && !validateMobile(text)) {
+    callback(new Error("请输入正确的联系电话"));
+    return;
+  }
+  callback();
+};
+
+const validateIssuerPostcodeField = (_rule, value, callback) => {
+  const text = String(value || "").trim();
+  if (text && !validatePostcode(text)) {
+    callback(new Error("邮政编码必须为6位数字"));
+    return;
+  }
+  callback();
+};
+
+const issuerSurveyRules = {
+  code: [{ validator: validateIssuerCodeField, trigger: "blur" }],
+  name: [{ required: true, message: "请输入发包方名称", trigger: "blur" }],
+  responsibleName: [{ required: true, message: "请输入负责人姓名", trigger: "blur" }],
+  responsibleIdType: [{ required: true, message: "请选择负责人证件类型", trigger: "change" }],
+  responsibleIdNo: [{ validator: validateIssuerIdNoField, trigger: "blur" }],
+  phone: [{ validator: validateIssuerPhoneField, trigger: "blur" }],
+  address: [{ required: true, message: "请输入发包方地址", trigger: "blur" }],
+  postcode: [{ validator: validateIssuerPostcodeField, trigger: "blur" }],
+};
 
 // 计算变化字段列表（供 ContractorInfoPanel 高亮用）
 const computedChangedFields = computed(() => {
@@ -471,8 +708,10 @@ function handleOpRemoveParcel() {
   );
 }
 const taskPanelTitle = computed(() => {
-  const batchName = activeBatch.value?.batchName || "调查任务";
-  return activeRegionLabel.value ? `${batchName} - ${activeRegionLabel.value}` : batchName;
+  if (!activeBatch.value) {
+    return "调查任务";
+  }
+  return activeBatch.value.batchName || "调查任务";
 });
 
 // ---- 地块信息 tab ----
@@ -593,8 +832,10 @@ function createEmptyResult() {
     idType: "1",
     idNo: "",
     address: "",
-    postcode: "",
+    postcode: "000000",
     mobile: "",
+    groupRegionCode: "",
+    groupRegionName: "",
     surveyDate: "",
     surveyorName: "",
     surveyNote: "",
@@ -610,10 +851,112 @@ function createEmptyResult() {
     evidenceSummary: "",
     remark: "",
     baseContractor: null,
+    issuer: null,
+    baseIssuer: null,
     familyMembers: [],
     generatedRequestId: null,
     generatedRequestNo: "",
   };
+}
+
+function createEmptyIssuerSurvey() {
+  return {
+    issuerUid: "",
+    code: "",
+    name: "",
+    responsibleName: "",
+    responsibleIdType: "1",
+    responsibleIdNo: "",
+    phone: "",
+    address: "",
+    postcode: "000000",
+    surveyorName: "",
+    surveyDate: "",
+    surveyNote: "",
+    surveyStatus: "surveyed",
+    resultStatus: "normal",
+    changeType: "none",
+    changeReason: "",
+    remark: "",
+    baseIssuer: null,
+  };
+}
+
+function digitsOnly(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+async function buildNextContractorCode(currentCode = "") {
+  const batchPrefix = digitsOnly(activeBatch.value?.regionCode || activeRegionCode.value);
+  const currentPrefix = digitsOnly(currentCode);
+  const prefix = batchPrefix || currentPrefix.slice(0, Math.min(currentPrefix.length, 14));
+  if (!prefix) return "";
+  if (prefix.length >= 18) return prefix.slice(0, 18);
+  const suffixLength = 18 - prefix.length;
+  let existingRows = tasks.value;
+  if (activeBatch.value) {
+    const { data } = await fetchSurveyTasks(activeBatch.value.id, {
+      page: 1,
+      page_size: 10000,
+      ...buildRegionParams(),
+    });
+    existingRows = data.data.items || [];
+  }
+  const existingSuffixes = existingRows
+    .map((item) => digitsOnly(item.cbfbm))
+    .filter((code) => code.length === 18 && code.startsWith(prefix))
+    .map((code) => Number(code.slice(prefix.length)))
+    .filter(Number.isFinite);
+  const next = (existingSuffixes.length ? Math.max(...existingSuffixes) : 0) + 1;
+  return `${prefix}${String(next).padStart(suffixLength, "0")}`.slice(0, 18);
+}
+
+async function generateResultContractorCode() {
+  const code = await buildNextContractorCode(resultForm.code);
+  if (!code) {
+    ElMessage.warning("请先选择调查批次或输入区域前缀");
+    return;
+  }
+  resultForm.code = code;
+}
+
+function handleIssuerCodeInput(value) {
+  issuerSurveyForm.code = digitsOnly(value).slice(0, 14);
+}
+
+async function buildNextIssuerCode(currentCode = "") {
+  const batchCode = digitsOnly(activeBatch.value?.regionCode || activeRegionCode.value);
+  if (batchCode.length >= 14) return batchCode.slice(0, 14);
+  const currentPrefix = digitsOnly(currentCode);
+  const prefix = batchCode || currentPrefix.slice(0, Math.min(currentPrefix.length, 12));
+  if (!prefix) return "";
+  if (prefix.length >= 14) return prefix.slice(0, 14);
+  const suffixLength = 14 - prefix.length;
+  let existingRows = issuerRows.value;
+  if (activeBatch.value) {
+    const { data } = await fetchSurveyIssuers(activeBatch.value.id, {
+      page: 1,
+      page_size: 10000,
+      ...buildRegionParams(),
+    });
+    existingRows = data.data.items || [];
+  }
+  const existingSuffixes = existingRows
+    .map((item) => digitsOnly(item.code))
+    .filter((code) => code.length === 14 && code.startsWith(prefix))
+    .map((code) => Number(code.slice(prefix.length)))
+    .filter(Number.isFinite);
+  const next = (existingSuffixes.length ? Math.max(...existingSuffixes) : 0) + 1;
+  return `${prefix}${String(next).padStart(suffixLength, "0")}`.slice(0, 14);
+}
+
+async function generateIssuerCode() {
+  const code = await buildNextIssuerCode(issuerSurveyForm.code);
+  if (!code) {
+    ElMessage.warning("请先选择调查批次或输入区域前缀");
+    return;
+  }
+  issuerSurveyForm.code = code;
 }
 
 function createEmptyRestructure() {
@@ -654,7 +997,69 @@ function createEmptyAuthorization() {
 }
 
 function taskStatusLabel(value) {
-  return { not_started: "未调查", surveyed: "已调查", changed: "有变化", unchanged: "无变化", confirmed: "已确认", skipped: "已跳过" }[value] || value;
+  return {
+    not_started: "未调查",
+    not_surveyed: "未调查",
+    in_progress: "调查中",
+    surveyed: "已调查",
+    changed: "有变化",
+    unchanged: "无变化",
+    confirmed: "已确认",
+    skipped: "已跳过",
+  }[value] || value;
+}
+
+function surveyStatusTagType(value) {
+  return {
+    not_started: "info",
+    not_surveyed: "info",
+    surveyed: "success",
+    confirmed: "primary",
+    skipped: "warning",
+  }[value] || "info";
+}
+
+function batchStatusLabel(value) {
+  return { active: "进行中", finished: "已结束", draft: "草稿" }[value] || value || "-";
+}
+
+function batchStatusType(value) {
+  return { active: "success", finished: "info", draft: "warning" }[value] || "info";
+}
+
+function batchSurveySummary(batch) {
+  const total = Number(batch.taskCount || 0);
+  if (!total) {
+    return "暂无任务";
+  }
+  return `${Number(batch.surveyedCount || 0)}/${total} 已调查`;
+}
+
+function batchSurveyStatusValue(batch) {
+  const total = Number(batch.taskCount || 0);
+  const surveyed = Number(batch.surveyedCount || 0);
+  const confirmed = Number(batch.confirmedCount || 0);
+  const skipped = Number(batch.skippedCount || 0);
+  if (!total || surveyed === 0) {
+    return "not_started";
+  }
+  if (confirmed >= total) {
+    return "confirmed";
+  }
+  if (skipped >= total) {
+    return "skipped";
+  }
+  if (surveyed >= total) {
+    return "surveyed";
+  }
+  return "in_progress";
+}
+
+function formatDateTime(value) {
+  if (!value) {
+    return "-";
+  }
+  return String(value).replace("T", " ").slice(0, 19);
 }
 
 const relationToHeadFallback = {
@@ -715,13 +1120,15 @@ async function loadBatches() {
     });
     batches.value = data.data.items;
     const previousBatchId = activeBatch.value?.id;
-    activeBatch.value = batches.value.find((item) => item.id === previousBatchId) || batches.value[0] || null;
+    activeBatch.value = filteredBatches.value.find((item) => item.id === previousBatchId) || filteredBatches.value[0] || null;
     if (activeBatch.value) {
       await loadTasks();
-      await loadChanges();
+      if (surveyPanelTab.value === "issuer") {
+        await loadIssuerSurveyRows(true);
+      }
     } else {
       tasks.value = [];
-      changes.value = [];
+      issuerRows.value = [];
     }
   } finally {
     batchLoading.value = false;
@@ -731,12 +1138,13 @@ async function loadBatches() {
 async function reloadBatchesForRegion() {
   activeBatch.value = null;
   tasks.value = [];
-  changes.value = [];
+  issuerRows.value = [];
   await loadBatches();
 }
 
 function buildRegionParams() {
-  return activeRegionCode.value ? { regionCode: activeRegionCode.value } : {};
+  const regionCode = activeBatch.value?.regionCode || activeRegionCode.value;
+  return regionCode ? { regionCode } : {};
 }
 
 async function handleActiveRegionChange(value) {
@@ -778,29 +1186,42 @@ async function loadTasks() {
       ...buildRegionParams(),
     });
     tasks.value = data.data.items;
+    issuerRows.value = [];
   } finally {
     taskLoading.value = false;
   }
 }
 
-async function loadChanges() {
+async function loadIssuerSurveyRows(force = false) {
   if (!activeBatch.value) {
-    changes.value = [];
+    issuerRows.value = [];
     return;
   }
-  changeLoading.value = true;
+  if (!force && issuerRows.value.length) {
+    return;
+  }
+  issuerLoading.value = true;
   try {
-    const { data } = await fetchSurveyChanges(activeBatch.value.id, { page: 1, page_size: 100, ...buildRegionParams() });
-    changes.value = data.data.items;
+    const { data } = await fetchSurveyIssuers(activeBatch.value.id, {
+      page: 1,
+      page_size: 200,
+      keyword: issuerKeyword.value || undefined,
+      ...buildRegionParams(),
+    });
+    issuerRows.value = data.data.items;
   } finally {
-    changeLoading.value = false;
+    issuerLoading.value = false;
   }
 }
 
 function handleBatchSelect(row) {
   activeBatch.value = row;
-  loadTasks();
-  loadChanges();
+  issuerRows.value = [];
+  loadTasks().then(() => {
+    if (surveyPanelTab.value === "issuer") {
+      loadIssuerSurveyRows(true);
+    }
+  });
 }
 
 function openCreateBatch() {
@@ -835,6 +1256,96 @@ async function handleCreateBatch() {
     ElMessage.error(error.response?.data?.detail || "创建调查批次失败");
   } finally {
     submittingBatch.value = false;
+  }
+}
+
+function openCreateContractor() {
+  if (!activeBatch.value) {
+    return;
+  }
+  isCreatingContractorResult.value = true;
+  activeTask.value = null;
+  selectedParcel.value = null;
+  parcels.value = [];
+  diffRows.value = [];
+  Object.assign(resultForm, createEmptyResult(), {
+    code: activeBatch.value?.regionCode || activeRegionCode.value || "",
+    groupRegionCode: activeBatch.value?.regionCode || activeRegionCode.value || "",
+    groupRegionName: activeBatch.value?.regionName || activeRegionLabel.value || "",
+    resultStatus: "added",
+    changeType: "add_contractor",
+    isChanged: false,
+  });
+  resetPhase2Forms();
+  activeTab.value = "contractor";
+  resultVisible.value = true;
+}
+
+function openCreateIssuer() {
+  if (!activeBatch.value) {
+    return;
+  }
+  isCreatingIssuerSurvey.value = true;
+  activeIssuer.value = null;
+  const regionCode = activeBatch.value?.regionCode || activeRegionCode.value || "";
+  Object.assign(issuerSurveyForm, createEmptyIssuerSurvey(), {
+    code: regionCode.length >= 14 ? regionCode.slice(0, 14) : regionCode,
+  });
+  issuerSurveyVisible.value = true;
+}
+
+async function openIssuerSurvey(row) {
+  if (!activeBatch.value) {
+    return;
+  }
+  isCreatingIssuerSurvey.value = false;
+  activeIssuer.value = row;
+  const { data } = await fetchSurveyIssuer(activeBatch.value.id, row.issuerUid);
+  Object.assign(issuerSurveyForm, createEmptyIssuerSurvey(), data.data);
+  issuerSurveyVisible.value = true;
+}
+
+function closeIssuerSurveyDialog() {
+  issuerSurveyVisible.value = false;
+  isCreatingIssuerSurvey.value = false;
+}
+
+async function handleSaveIssuerSurvey() {
+  if (!activeBatch.value || (!activeIssuer.value && !isCreatingIssuerSurvey.value)) {
+    return;
+  }
+  const valid = await issuerSurveyFormRef.value?.validate().catch(() => false);
+  if (!valid) {
+    return;
+  }
+  savingIssuerSurvey.value = true;
+  creatingIssuer.value = isCreatingIssuerSurvey.value;
+  try {
+    const { baseIssuer, id, isChanged, ...payload } = issuerSurveyForm;
+    let issuerUid = activeIssuer.value?.issuerUid;
+    const cleanPayload = {
+      ...payload,
+      code: payload.code.trim(),
+      name: payload.name.trim(),
+      responsibleName: payload.responsibleName.trim(),
+      responsibleIdNo: payload.responsibleIdNo.trim(),
+      phone: payload.phone?.trim() || null,
+      address: payload.address.trim(),
+      postcode: payload.postcode.trim(),
+    };
+    if (isCreatingIssuerSurvey.value) {
+      const { data } = await createSurveyIssuer(activeBatch.value.id, cleanPayload);
+      issuerUid = data.data.issuerUid;
+    }
+    await updateSurveyIssuer(activeBatch.value.id, issuerUid, cleanPayload);
+    ElMessage.success(isCreatingIssuerSurvey.value ? "发包方调查数据已新增" : "发包方调查已保存");
+    closeIssuerSurveyDialog();
+    await loadIssuerSurveyRows(true);
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || (isCreatingIssuerSurvey.value ? "新增发包方失败" : "保存发包方调查失败"));
+  } finally {
+    savingIssuerSurvey.value = false;
+    creatingIssuer.value = false;
   }
 }
 
@@ -898,6 +1409,7 @@ async function handleExportResults() {
 }
 
 async function openResult(row) {
+  isCreatingContractorResult.value = false;
   activeTask.value = row;
   selectedParcel.value = null;
   mapClearSelection();
@@ -911,6 +1423,11 @@ async function openResult(row) {
   await loadDiffs();
   await loadPhase2();
   loadSurveyParcels();
+}
+
+function closeResultDialog() {
+  resultVisible.value = false;
+  isCreatingContractorResult.value = false;
 }
 
 async function loadDiffs() {
@@ -1140,26 +1657,57 @@ function downloadBlob(data, filename) {
 }
 
 async function handleSaveResult() {
-  if (!activeBatch.value || !activeTask.value) {
+  if (!activeBatch.value || (!activeTask.value && !isCreatingContractorResult.value)) {
+    return;
+  }
+  resultForm.code = digitsOnly(resultForm.code).slice(0, 18);
+  if (resultForm.code.length !== 18) {
+    ElMessage.warning("承包方编码必须为18位数字");
+    return;
+  }
+  if (!resultForm.name?.trim() || !resultForm.idNo?.trim() || !resultForm.address?.trim()) {
+    ElMessage.warning("请填写承包方名称、证件号码和地址");
     return;
   }
   savingResult.value = true;
+  creatingContractor.value = isCreatingContractorResult.value;
   try {
     const validMembers = (resultForm.familyMembers || []).filter((m) => !m._deleted);
     const cleanMembers = validMembers.map(({ _deleted, _isNew, ...rest }) => rest);
-    await updateSurveyResult(activeBatch.value.id, activeTask.value.contractorUid, {
-      ...resultForm,
+    const { issuer, baseIssuer, ...contractorPayload } = resultForm;
+    let contractorUid = activeTask.value?.contractorUid;
+    if (isCreatingContractorResult.value) {
+      const { data } = await createSurveyContractor(activeBatch.value.id, {
+        code: contractorPayload.code.trim(),
+        typeCode: contractorPayload.typeCode,
+        name: contractorPayload.name.trim(),
+        idType: contractorPayload.idType,
+        idNo: contractorPayload.idNo.trim(),
+        address: contractorPayload.address.trim(),
+        postcode: contractorPayload.postcode?.trim() || "000000",
+        mobile: contractorPayload.mobile?.trim() || null,
+        groupRegionCode: contractorPayload.groupRegionCode || activeBatch.value.regionCode || activeRegionCode.value || "",
+        groupRegionName: contractorPayload.groupRegionName || activeBatch.value.regionName || activeRegionLabel.value || "",
+        surveyDate: contractorPayload.surveyDate,
+        surveyorName: contractorPayload.surveyorName,
+        remark: contractorPayload.remark,
+      });
+      contractorUid = data.data.contractorUid;
+    }
+    await updateSurveyResult(activeBatch.value.id, contractorUid, {
+      ...contractorPayload,
+      contractorUid,
       familyMembers: cleanMembers,
     });
-    ElMessage.success("调查结果已保存");
-    resultVisible.value = false;
+    ElMessage.success(isCreatingContractorResult.value ? "承包方调查数据已新增" : "调查结果已保存");
+    closeResultDialog();
     await loadTasks();
     await loadBatches();
-    await loadChanges();
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || "保存调查结果失败");
+    ElMessage.error(error.response?.data?.detail || (isCreatingContractorResult.value ? "新增承包方失败" : "保存调查结果失败"));
   } finally {
     savingResult.value = false;
+    creatingContractor.value = false;
   }
 }
 
@@ -1169,7 +1717,6 @@ async function handleConfirmTask(row) {
     ElMessage.success("调查结果已确认");
     await loadTasks();
     await loadBatches();
-    await loadChanges();
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || "确认失败");
   }
@@ -1207,7 +1754,6 @@ async function handleConfirmCurrent() {
     resultVisible.value = false;
     await loadTasks();
     await loadBatches();
-    await loadChanges();
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || "确认失败");
   } finally {
@@ -1223,7 +1769,6 @@ async function reloadSurveyResult() {
       familyMembers: (data.data.familyMembers || []).map((item) => ({ ...item })),
     });
     await loadDiffs();
-    await loadChanges();
     await loadTasks();
     await loadBatches();
     await loadSurveyParcels();
@@ -1237,19 +1782,23 @@ async function handleDeregisterDone() {
   resultVisible.value = false;
   await loadTasks();
   await loadBatches();
-  await loadChanges();
 }
 
 async function handleMergeDone() {
   resultVisible.value = false;
   await loadTasks();
   await loadBatches();
-  await loadChanges();
 }
 
 watch(activeTab, (tab) => {
   if (tab === "parcels") {
     handleParcelTabEnter();
+  }
+});
+
+watch(surveyPanelTab, (tab) => {
+  if (tab === "issuer") {
+    loadIssuerSurveyRows();
   }
 });
 
@@ -1274,8 +1823,213 @@ loadInitialData();
 </script>
 
 <style scoped>
-.survey-task-panel {
-  margin-top: 16px;
+.survey-page {
+  display: flex;
+  gap: 16px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.survey-batch-panel {
+  display: flex;
+  flex: 0 0 calc(20% - 8px);
+  flex-direction: column;
+  min-width: 220px;
+  max-width: 300px;
+  min-height: 0;
+  padding: 14px;
+}
+
+.survey-work-panel {
+  display: flex;
+  flex: 1 1 auto;
+  margin-top: 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.survey-work-tabs {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+.survey-work-tabs :deep(.el-tabs__content) {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.survey-work-tabs :deep(.el-tab-pane) {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.survey-work-panel :deep(.el-table) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.survey-work-panel :deep(.survey-action-column .cell) {
+  white-space: nowrap;
+}
+
+.survey-row-actions {
+  align-items: center;
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 10px;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.survey-row-actions :deep(.el-button) {
+  margin-left: 0;
+}
+
+.batch-panel-header,
+.batch-footer-actions {
+  align-items: center;
+  display: flex;
+}
+
+.batch-panel-header {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.batch-footer-actions {
+  gap: 8px;
+}
+
+.batch-panel-actions {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 116px) auto;
+}
+
+.batch-header-filter {
+  width: 116px;
+}
+
+.batch-search {
+  margin-top: 12px;
+}
+
+.batch-card-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.batch-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  color: #0f172a;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  text-align: left;
+  transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
+  width: 100%;
+}
+
+.batch-card:hover,
+.batch-card.is-active {
+  background: #f8fafc;
+  border-color: #2563eb;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+}
+
+.batch-card-title {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.batch-card-status-row,
+.batch-card-metrics {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.batch-card-progress {
+  color: #475569;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.batch-card-metrics {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 8px;
+}
+
+.batch-card-metrics span {
+  color: #64748b;
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 2px;
+}
+
+.batch-card-metrics b {
+  color: #0f172a;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.batch-footer-actions {
+  border-top: 1px solid #e2e8f0;
+  flex-shrink: 0;
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.batch-tooltip-content {
+  display: grid;
+  gap: 6px;
+  min-width: 220px;
+}
+
+.batch-tooltip-content div {
+  color: #0f172a;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.batch-tooltip-content span {
+  color: #64748b;
+  flex: 0 0 70px;
+}
+
+@media (max-width: 1080px) {
+  .survey-page {
+    flex-direction: column;
+  }
+
+  .survey-batch-panel {
+    flex-basis: auto;
+    max-width: none;
+    min-height: 240px;
+  }
 }
 
 .survey-dialog-form {

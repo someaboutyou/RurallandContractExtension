@@ -20,6 +20,26 @@ export function fetchSurveyTasks(batchId, params) {
   return http.get(`/surveys/batches/${batchId}/tasks`, { params });
 }
 
+export function createSurveyContractor(batchId, payload) {
+  return http.post(`/surveys/batches/${batchId}/tasks`, payload);
+}
+
+export function fetchSurveyIssuers(batchId, params) {
+  return http.get(`/surveys/batches/${batchId}/issuers`, { params });
+}
+
+export function createSurveyIssuer(batchId, payload) {
+  return http.post(`/surveys/batches/${batchId}/issuers`, payload);
+}
+
+export function fetchSurveyIssuer(batchId, issuerUid) {
+  return http.get(`/surveys/batches/${batchId}/issuers/${issuerUid}`);
+}
+
+export function updateSurveyIssuer(batchId, issuerUid, payload) {
+  return http.put(`/surveys/batches/${batchId}/issuers/${issuerUid}`, payload);
+}
+
 export function skipSurveyTask(batchId, contractorUid, payload) {
   return http.post(`/surveys/batches/${batchId}/tasks/${contractorUid}/skip`, payload);
 }
@@ -132,6 +152,10 @@ export function fetchSurveyPlotSketchMap(batchId, contractorUid) {
 
 export function printSurveyContract(batchId, contractorUid) {
   return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/contract/print`);
+}
+
+export function fetchSurveyRegistrationApplication(batchId, contractorUid) {
+  return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/registration-application`);
 }
 
 // ── 调查操作 ──────────────────────────────────────────

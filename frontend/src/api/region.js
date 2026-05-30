@@ -19,6 +19,32 @@ export function fetchRegionTree(level, options = {}) {
   });
 }
 
+export function fetchRegionChildren(options = {}) {
+  const params = {};
+  if (options.parentId !== undefined && options.parentId !== null) {
+    params.parentId = options.parentId;
+  }
+  if (options.includeGroups) {
+    params.include_groups = true;
+  }
+  return http.get("/regions/children", {
+    params: Object.keys(params).length ? params : undefined,
+  });
+}
+
+export function searchRegions(options = {}) {
+  const params = {
+    keyword: options.keyword || "",
+  };
+  if (options.includeGroups) {
+    params.include_groups = true;
+  }
+  if (options.limit) {
+    params.limit = options.limit;
+  }
+  return http.get("/regions/search", { params });
+}
+
 export function createRegion(payload) {
   return http.post("/regions", payload);
 }

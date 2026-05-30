@@ -228,7 +228,6 @@ def gis_parcel_detail(
     if cbf:
         family_member_filters.append(
             (
-                SurveyCbfJtcyResult.batch_id == cbf.batch_id,
                 SurveyCbfJtcyResult.contractor_uid == cbf.contractor_uid,
             )
         )

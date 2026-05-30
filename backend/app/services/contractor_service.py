@@ -52,12 +52,12 @@ class ContractorService:
     def get_contractor(self, db: Session, code: str, current_user: User) -> dict:
         contractor = contractor_repository.get_contractor(db, code)
         if contractor is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="承包方调查成果不存在")
-        data_access_service.ensure_code_in_scope(current_user, contractor.cbfbm, detail="承包方不在当前数据权限范围内")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="鎵垮寘鏂硅皟鏌ユ垚鏋滀笉瀛樺湪")
+        data_access_service.ensure_code_in_scope(current_user, contractor.cbfbm, detail="鎵垮寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
         return self._serialize_detail(db, contractor)
 
     def create_contractor(self, db: Session, payload: dict, current_user: User) -> dict:
-        data_access_service.ensure_code_in_scope(current_user, payload["code"], detail="承包方不在当前数据权限范围内")
+        data_access_service.ensure_code_in_scope(current_user, payload["code"], detail="鎵垮寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
         group_region_code, group_region_name = self._resolve_group_region(db, payload, current_user)
         batch = self._ensure_edit_batch(db, payload, current_user)
         if contractor_repository.get_contractor_in_batch(db, batch.id, payload["code"]) is not None:
@@ -78,7 +78,6 @@ class ContractorService:
         db.flush()
 
         result = SurveyCbfResult(
-            batch_id=batch.id,
             contractor_uid=contractor_uid,
             base_id=base.id,
             initialized_from_base_id=base.id,
@@ -97,11 +96,12 @@ class ContractorService:
     def update_contractor(self, db: Session, code: str, payload: dict, current_user: User) -> dict:
         contractor = contractor_repository.get_contractor(db, code)
         if contractor is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="承包方调查成果不存在")
-        data_access_service.ensure_code_in_scope(current_user, contractor.cbfbm, detail="承包方不在当前数据权限范围内")
-        data_access_service.ensure_code_in_scope(current_user, payload["code"], detail="承包方不在当前数据权限范围内")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="鎵垮寘鏂硅皟鏌ユ垚鏋滀笉瀛樺湪")
+        data_access_service.ensure_code_in_scope(current_user, contractor.cbfbm, detail="鎵垮寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
+        data_access_service.ensure_code_in_scope(current_user, payload["code"], detail="鎵垮寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
         group_region_code, group_region_name = self._resolve_group_region(db, payload, current_user)
-        existed = contractor_repository.get_contractor_in_batch(db, contractor.batch_id, payload["code"])
+        base = db.get(SurveyCbfBase, contractor.base_id)
+        existed = contractor_repository.get_contractor_in_batch(db, base.batch_id, payload["code"]) if base else None
         if payload["code"] != code and existed is not None and existed.id != contractor.id:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="当前调查批次内承包方代码已存在")
 
@@ -119,8 +119,8 @@ class ContractorService:
     def delete_contractor(self, db: Session, code: str, current_user: User) -> None:
         contractor = contractor_repository.get_contractor(db, code)
         if contractor is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="承包方调查成果不存在")
-        data_access_service.ensure_code_in_scope(current_user, contractor.cbfbm, detail="承包方不在当前数据权限范围内")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="鎵垮寘鏂硅皟鏌ユ垚鏋滀笉瀛樺湪")
+        data_access_service.ensure_code_in_scope(current_user, contractor.cbfbm, detail="鎵垮寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
         contractor_repository.delete_contractor(db, contractor)
 
     def _serialize_summary(self, contractor: SurveyCbfResult) -> dict:
@@ -143,7 +143,7 @@ class ContractorService:
             "publicNoticeReviewer": contractor.gsshr,
             "groupRegionCode": contractor.group_region_code,
             "groupRegionName": contractor.group_region_name,
-            "batchId": contractor.batch_id,
+            "batchId": db.get(SurveyCbfBase, contractor.base_id).batch_id if contractor.base_id and db.get(SurveyCbfBase, contractor.base_id) else None,
             "contractorUid": contractor.contractor_uid,
             "familyMembers": [],
         }
@@ -180,7 +180,7 @@ class ContractorService:
             status="active",
             started_at=now,
             created_by=current_user.id,
-            remark="由承包方管理新增承包方时自动创建",
+            remark="鐢辨壙鍖呮柟绠＄悊鏂板鎵垮寘鏂规椂鑷姩鍒涘缓",
         )
         db.add(batch)
         db.flush()
@@ -236,14 +236,13 @@ class ContractorService:
     def _replace_family_members(self, db: Session, contractor: SurveyCbfResult, family_members: list[dict], now: datetime, sync_base: bool) -> None:
         db.execute(
             delete(SurveyCbfJtcyResult).where(
-                SurveyCbfJtcyResult.batch_id == contractor.batch_id,
                 SurveyCbfJtcyResult.contractor_uid == contractor.contractor_uid,
             )
         )
         if sync_base:
             db.execute(
                 delete(SurveyCbfJtcyBase).where(
-                    SurveyCbfJtcyBase.batch_id == contractor.batch_id,
+                    SurveyCbfJtcyBase.batch_id == db.get(SurveyCbfBase, contractor.base_id).batch_id,
                     SurveyCbfJtcyBase.contractor_uid == contractor.contractor_uid,
                 )
             )
@@ -253,11 +252,12 @@ class ContractorService:
             if member_id in seen_ids:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="家庭成员证件号不能重复")
             seen_ids.add(member_id)
-            member_uid = str(uuid5(NAMESPACE_URL, f"survey:{contractor.batch_id}:member:{contractor.cbfbm}:{member_id}"))
+            base_batch_id = db.get(SurveyCbfBase, contractor.base_id).batch_id if contractor.base_id and db.get(SurveyCbfBase, contractor.base_id) else 0
+            member_uid = str(uuid5(NAMESPACE_URL, f"survey:{base_batch_id}:member:{contractor.cbfbm}:{member_id}"))
             base = None
             if sync_base:
                 base = SurveyCbfJtcyBase(
-                    batch_id=contractor.batch_id,
+                    batch_id=base_batch_id,
                     contractor_uid=contractor.contractor_uid,
                     member_uid=member_uid,
                     base_contractor_code=contractor.cbfbm,
@@ -270,7 +270,6 @@ class ContractorService:
                 db.add(base)
                 db.flush()
             result = SurveyCbfJtcyResult(
-                batch_id=contractor.batch_id,
                 contractor_uid=contractor.contractor_uid,
                 member_uid=member_uid,
                 base_id=base.id if base else None,
@@ -303,7 +302,7 @@ class ContractorService:
         code = (payload.get("groupRegionCode") or "").strip()
         if not code:
             return None, None
-        data_access_service.ensure_region_in_scope(current_user, code, detail="所属组不在当前数据权限范围内")
+        data_access_service.ensure_region_in_scope(current_user, code, detail="group region out of scope")
         region = db.scalar(select(Region).where(Region.code == code).execution_options(skip_tenant_scope=True))
         name = region.full_name if region else (payload.get("groupRegionName") or "")
         return code, name.strip() or None

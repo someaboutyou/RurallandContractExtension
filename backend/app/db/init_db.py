@@ -67,7 +67,7 @@ DEFAULT_PERMISSIONS = [
     {"name": "县级审核", "code": "requests.review.county", "group_name": "业务申请", "category": "action", "description": "允许办理县级审核节点。"},
     {"name": "查看图层管理", "code": "layers.view", "group_name": "系统管理", "category": "menu", "description": "允许查看图层管理页面。"},
     {"name": "管理图层配置", "code": "layers.manage", "group_name": "系统管理", "category": "action", "description": "允许维护矢量图层与底图配置。"},
-    {"name": "管理合同模板", "code": "contract_templates.manage", "group_name": "系统管理", "category": "action", "description": "允许在线编辑合同 HTML 模板。"},
+    {"name": "管理打印模板", "code": "contract_templates.manage", "group_name": "系统管理", "category": "action", "description": "允许在线编辑打印 HTML 模板。"},
 ]
 
 DEFAULT_ROLE_PERMISSIONS = {
@@ -793,8 +793,13 @@ def ensure_default_regions(db: Session) -> None:
 
 
 def sync_regions_from_business_codes(db: Session) -> None:
-    village_codes = db.scalars(select(func.substring(Fbf.fbfbm, 1, 12)).distinct()).all()
-    if not village_codes:
+    group_rows = db.execute(
+        select(Fbf.fbfbm, func.min(Fbf.fbfmc))
+        .where(func.length(Fbf.fbfbm) >= 12)
+        .group_by(Fbf.fbfbm)
+        .order_by(Fbf.fbfbm)
+    ).all()
+    if not group_rows:
         return
 
     created = False
@@ -813,7 +818,11 @@ def sync_regions_from_business_codes(db: Session) -> None:
         db.flush()
         created = True
 
-    for village_code in sorted({code for code in village_codes if code}):
+    for raw_group_code, raw_group_name in group_rows:
+        if not raw_group_code:
+            continue
+        group_code = raw_group_code[:14] if len(raw_group_code) >= 14 else None
+        village_code = raw_group_code[:12]
         county_code = village_code[:6]
         town_code = village_code[:9]
 
@@ -859,6 +868,22 @@ def sync_regions_from_business_codes(db: Session) -> None:
             db.flush()
             created = True
 
+        if group_code:
+            group = db.scalar(select(Region).where(Region.code == group_code))
+            if group is None:
+                group_name = raw_group_name or f"{group_code} 缁勭骇鍖哄煙"
+                group = Region(
+                    name=group_name,
+                    code=group_code,
+                    level="group",
+                    full_name=f"{village.full_name} / {group_name}",
+                    parent_id=village.id,
+                    tenant_code=county_code,
+                )
+                db.add(group)
+                db.flush()
+                created = True
+
     if created:
         db.commit()
 
@@ -888,7 +913,7 @@ def sync_region_tenants(db: Session) -> None:
     changed = False
     regions = db.scalars(select(Region)).all()
     for region in regions:
-        expected_tenant_code = region.code[:6] if region.level in {"county", "town", "village"} else None
+        expected_tenant_code = region.code[:6] if region.level in {"county", "town", "village", "group"} else None
         if region.tenant_code is None and expected_tenant_code is not None:
             region.tenant_code = expected_tenant_code
             changed = True
@@ -928,6 +953,17 @@ def ensure_default_permissions(db: Session) -> None:
                     description=item["description"],
                 )
             )
+            changed = True
+        elif (
+            permission.name != item["name"]
+            or permission.group_name != item["group_name"]
+            or permission.category != item["category"]
+            or permission.description != item["description"]
+        ):
+            permission.name = item["name"]
+            permission.group_name = item["group_name"]
+            permission.category = item["category"]
+            permission.description = item["description"]
             changed = True
     if changed:
         db.commit()

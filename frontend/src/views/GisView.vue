@@ -306,10 +306,10 @@
                   <div v-for="(member, index) in selectedParcel.familyMembers || []" :key="`${member.idNo}-${index}`" class="gis-mini-table-row">
                     <span>{{ index + 1 }}</span>
                     <span>{{ member.name || ui.unknown }}</span>
-                    <span>{{ member.idType || ui.unknown }}</span>
+                    <span>{{ dictDisplay(idDocTypeLabel, member.idType) }}</span>
                     <span>{{ member.idNo || ui.unknown }}</span>
-                    <span>{{ member.relationToHead || ui.unknown }}</span>
-                    <span>{{ member.isCoOwner === "1" ? "是" : member.isCoOwner || ui.unknown }}</span>
+                    <span>{{ dictDisplay(relationLabel, member.relationToHead) }}</span>
+                    <span>{{ booleanDisplay(member.isCoOwner) }}</span>
                   </div>
                   <div v-if="!selectedParcel.familyMembers?.length" class="gis-mini-empty">暂无家庭成员数据</div>
                 </div>
@@ -395,6 +395,7 @@ import Polygon from "ol/geom/Polygon";
 import { getArea, getLength } from "ol/sphere";
 
 import { fetchGisParcel, searchGisBusiness } from "../api/gis";
+import { useDictionary } from "../composables/useDictionary";
 import { fetchMapLayers } from "../api/mapLayer";
 import { basemapConfigs as fallbackBasemaps, vectorLayerConfigs as fallbackVectors } from "../config/mapLayers";
 
@@ -520,6 +521,73 @@ const resetTool = {
   icon: "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6v6h-6'/><path d='M20 12a8 8 0 1 1-2.34-5.66L20 8.7'/></svg>",
 };
 
+// Dictionary label resolvers (NY/T 2539-2016 Appendix C)
+const { labelOf: contractorTypeLabel } = useDictionary("nyt2539_c16_contractor_type");
+const { labelOf: idDocTypeLabel } = useDictionary("nyt2539_c15_id_document_type");
+const { labelOf: yesNoLabel } = useDictionary("nyt2539_c19_yes_no");
+const { labelOf: parcelCategoryLabel } = useDictionary("nyt2539_c07_parcel_category");
+const { labelOf: landGradeLabel } = useDictionary("nyt2539_c08_land_grade");
+const { labelOf: landUseLabel } = useDictionary("nyt2539_c09_land_use");
+const { labelOf: acquireMethodLabel } = useDictionary("nyt2539_c10_right_acquire_method");
+const { labelOf: relationLabel } = useDictionary("nyt2539_c20_relation_to_head");
+
+const surveyStatusMap = {
+  not_surveyed: "未调查",
+  not_started: "未调查",
+  surveyed: "已调查",
+  changed: "有变化",
+  unchanged: "无变化",
+  confirmed: "已确认",
+  skipped: "已跳过",
+};
+
+const resultStatusMap = {
+  normal: "正常",
+  added: "新增",
+  removed: "已移除",
+  extinct: "整户消亡",
+  cancelled: "已注销",
+  deregistered: "已注销",
+  merged: "已合并",
+  deceased: "死亡",
+  urbanized: "转为城镇居民",
+  little_or_no_land: "少地或无地",
+};
+
+const changeTypeMap = {
+  none: "无变化",
+  info_change: "信息变更",
+  change_head: "户主变更",
+  member_maintain: "成员维护",
+  deregister: "注销承包方",
+  add_parcel: "新增地块",
+  split_parcel: "地块分割",
+  swap_parcels: "地块互换",
+  remove_parcel: "移除地块",
+  split_household: "分户",
+  merge_household: "并户",
+  household_extinct: "整户消亡户",
+  household_urbanized: "整户转为城镇居民",
+  little_or_no_land: "少地或无地户",
+};
+
+const landUseTypeMap = {
+  "011": "水田",
+  "012": "水浇地",
+  "013": "旱地",
+  "021": "果园",
+  "022": "茶园",
+  "023": "其他园地",
+  "031": "有林地",
+  "032": "灌木林地",
+  "033": "其他林地",
+  "041": "天然牧草地",
+  "042": "人工牧草地",
+  "111": "设施农用地",
+  "114": "坑塘水面",
+};
+
+
 const mapRootRef = ref(null);
 const scaleLineRef = ref(null);
 const parcelPopupRef = ref(null);
@@ -609,6 +677,20 @@ function displayValue(value) {
   return value === undefined || value === null || value === "" ? ui.unknown : value;
 }
 
+function dictDisplay(labelOf, value) {
+  return displayValue(labelOf(value, value));
+}
+
+function mapDisplay(map, value) {
+  return displayValue(map[value] || value);
+}
+
+function booleanDisplay(value) {
+  if (value === true) return "是";
+  if (value === false) return "否";
+  return dictDisplay(yesNoLabel, value);
+}
+
 function withAreaUnit(value) {
   return value === undefined || value === null || value === "" ? ui.unknown : `${value} 亩`;
 }
@@ -617,9 +699,9 @@ const contractorInfoRows = computed(() => {
   const parcel = selectedParcel.value || {};
   return [
     { label: "承包方编码", value: displayValue(parcel.cbfbm) },
-    { label: "承包方类型", value: displayValue(parcel.cbflx) },
+    { label: "承包方类型", value: dictDisplay(contractorTypeLabel, parcel.cbflx) },
     { label: "承包方名称", value: displayValue(parcel.cbfmc) },
-    { label: "证件类型", value: displayValue(parcel.cbfzjlx) },
+    { label: "证件类型", value: dictDisplay(idDocTypeLabel, parcel.cbfzjlx) },
     { label: "证件号码", value: displayValue(parcel.cbfzjhm) },
     { label: "承包方地址", value: displayValue(parcel.cbfdz) },
     { label: "邮政编码", value: displayValue(parcel.cbfyzbm) },
@@ -634,10 +716,10 @@ const contractorInfoRows = computed(() => {
     { label: "公示记事人", value: displayValue(parcel.gsjsr) },
     { label: "公示审核日期", value: displayValue(parcel.gsshrq) },
     { label: "公示审核人", value: displayValue(parcel.gsshr) },
-    { label: "调查状态", value: displayValue(parcel.cbfSurveyStatus) },
-    { label: "成果状态", value: displayValue(parcel.cbfResultStatus) },
-    { label: "是否变更", value: parcel.cbfIsChanged === true ? "是" : parcel.cbfIsChanged === false ? "否" : ui.unknown },
-    { label: "变更类型", value: displayValue(parcel.cbfChangeType) },
+    { label: "调查状态", value: mapDisplay(surveyStatusMap, parcel.cbfSurveyStatus) },
+    { label: "成果状态", value: mapDisplay(resultStatusMap, parcel.cbfResultStatus) },
+    { label: "是否变更", value: booleanDisplay(parcel.cbfIsChanged) },
+    { label: "变更类型", value: mapDisplay(changeTypeMap, parcel.cbfChangeType) },
     { label: "变更原因", value: displayValue(parcel.cbfChangeReason) },
     { label: "政策依据", value: displayValue(parcel.cbfPolicyBasis) },
     { label: "证据摘要", value: displayValue(parcel.cbfEvidenceSummary) },
@@ -656,7 +738,7 @@ const issuerInfoRows = computed(() => {
     { label: "发包方编码", value: displayValue(parcel.fbfbm) },
     { label: "发包方名称", value: displayValue(parcel.fbfmc) },
     { label: "负责人姓名", value: displayValue(parcel.fbffzrxm) },
-    { label: "负责人证件类型", value: displayValue(parcel.fbffzrzjlx) },
+    { label: "负责人证件类型", value: dictDisplay(idDocTypeLabel, parcel.fbffzrzjlx) },
     { label: "负责人证件号码", value: displayValue(parcel.fbffzrzjhm) },
     { label: "联系电话", value: displayValue(parcel.fbflxdh) },
     { label: "发包方地址", value: displayValue(parcel.fbfdz) },
@@ -664,10 +746,10 @@ const issuerInfoRows = computed(() => {
     { label: "发包方调查员", value: displayValue(parcel.fbfdcy) },
     { label: "发包方调查日期", value: displayValue(parcel.fbfdcrq) },
     { label: "发包方调查记事", value: displayValue(parcel.fbfdcjs) },
-    { label: "调查状态", value: displayValue(parcel.fbfSurveyStatus) },
-    { label: "成果状态", value: displayValue(parcel.fbfResultStatus) },
-    { label: "是否变更", value: parcel.fbfIsChanged === true ? "是" : parcel.fbfIsChanged === false ? "否" : ui.unknown },
-    { label: "变更类型", value: displayValue(parcel.fbfChangeType) },
+    { label: "调查状态", value: mapDisplay(surveyStatusMap, parcel.fbfSurveyStatus) },
+    { label: "成果状态", value: mapDisplay(resultStatusMap, parcel.fbfResultStatus) },
+    { label: "是否变更", value: booleanDisplay(parcel.fbfIsChanged) },
+    { label: "变更类型", value: mapDisplay(changeTypeMap, parcel.fbfChangeType) },
     { label: "变更原因", value: displayValue(parcel.fbfChangeReason) },
     { label: "区域编码", value: displayValue(parcel.fbfRegionCode) },
     { label: "租户编码", value: displayValue(parcel.fbfTenantCode) },
@@ -679,11 +761,11 @@ const parcelInfoRows = computed(() => {
   return [
     { label: "地块编码", value: displayValue(parcel.dkbm) },
     { label: "地块名称", value: displayValue(parcel.dkmc) },
-    { label: "地块类别", value: displayValue(parcel.dklb) },
-    { label: "土地利用类型", value: displayValue(parcel.tdlylx) },
-    { label: "地力等级", value: displayValue(parcel.dldj) },
-    { label: "土地用途", value: displayValue(parcel.tdyt) },
-    { label: "是否基本农田", value: displayValue(parcel.sfjbnt) },
+    { label: "地块类别", value: dictDisplay(parcelCategoryLabel, parcel.dklb) },
+    { label: "土地利用类型", value: mapDisplay(landUseTypeMap, parcel.tdlylx) },
+    { label: "地力等级", value: dictDisplay(landGradeLabel, parcel.dldj) },
+    { label: "土地用途", value: dictDisplay(landUseLabel, parcel.tdyt) },
+    { label: "是否基本农田", value: booleanDisplay(parcel.sfjbnt) },
     { label: "合同面积", value: withAreaUnit(parcel.htmj) },
     { label: "实测面积", value: withAreaUnit(parcel.scmj) },
     { label: "东至", value: displayValue(parcel.dkdz) },
@@ -700,7 +782,7 @@ const contractInfoRows = computed(() => {
   return [
     { label: "承包合同编码", value: displayValue(contract.cbhtbm || parcel.cbhtbm) },
     { label: "原承包合同编码", value: displayValue(contract.ycbhtbm) },
-    { label: "承包方式", value: displayValue(contract.cbfs || parcel.cbjyqqdfs) },
+    { label: "承包方式", value: dictDisplay(acquireMethodLabel, contract.cbfs || parcel.cbjyqqdfs) },
     { label: "承包期限起", value: displayValue(contract.cbqxq) },
     { label: "承包期限止", value: displayValue(contract.cbqxz) },
     { label: "签订时间", value: displayValue(contract.qdsj) },
@@ -709,7 +791,7 @@ const contractInfoRows = computed(() => {
     { label: "原合同总面积", value: withAreaUnit(contract.yhtzmj || parcel.yhtmj) },
     { label: "合同总面积(平方米)", value: displayValue(contract.htzmjm || parcel.htmjm) },
     { label: "权证编码", value: displayValue(parcel.cbjyqzbm) },
-    { label: "是否确权确股", value: displayValue(parcel.sfqqqg) },
+    { label: "是否确权确股", value: booleanDisplay(parcel.sfqqqg) },
   ];
 });
 
@@ -1965,7 +2047,7 @@ async function applyContractorResult(item) {
     { label: ui.idNo, value: item.idNo || ui.unknown },
     { label: ui.mobile, value: item.mobile || ui.unknown },
     { label: ui.address, value: item.address || ui.unknown },
-    { label: ui.contractorType, value: item.type || ui.unknown },
+    { label: ui.contractorType, value: dictDisplay(contractorTypeLabel, item.type) },
     { label: ui.coord, value: currentCoord.value },
   ]);
   await showPropertyPanel();

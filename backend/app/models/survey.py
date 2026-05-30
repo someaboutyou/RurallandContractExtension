@@ -82,7 +82,6 @@ class SurveyCbfResult(TenantScopedMixin, TimestampMixin, Base):
     __tablename__ = "survey_cbf_result"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    batch_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     contractor_uid: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     base_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     cbfbm: Mapped[str] = mapped_column(String(18), nullable=False, index=True)
@@ -162,7 +161,6 @@ class SurveyCbfJtcyResult(TenantScopedMixin, TimestampMixin, Base):
     __tablename__ = "survey_cbf_jtcy_result"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    batch_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     contractor_uid: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     member_uid: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     base_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
@@ -239,7 +237,6 @@ class SurveyFbfResult(TenantScopedMixin, TimestampMixin, Base):
     __tablename__ = "survey_fbf_result"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    batch_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     issuer_uid: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     base_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     fbfbm: Mapped[str] = mapped_column(String(14), nullable=False, index=True)
@@ -300,7 +297,6 @@ class SurveyCbdkxxResult(TenantScopedMixin, TimestampMixin, Base):
     __tablename__ = "survey_cbdkxx_result"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    batch_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     parcel_info_uid: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     base_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     dkbm: Mapped[str] = mapped_column(String(19), nullable=False, index=True)
@@ -367,7 +363,6 @@ class SurveyDkResult(TenantScopedMixin, TimestampMixin, Base):
     __tablename__ = "survey_dk_result"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    batch_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     parcel_uid: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     base_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     bsm: Mapped[int | None] = mapped_column(Integer, nullable=True)

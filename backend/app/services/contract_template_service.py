@@ -1,7 +1,7 @@
 """
 Contract template rendering service.
 
-Renders the 农村土地承包合同 HTML template with live contract data,
+Renders the 鍐滄潙鍦熷湴鎵垮寘鍚堝悓 HTML template with live contract data,
 supporting both screen preview and print-ready output.
 """
 
@@ -22,7 +22,7 @@ from app.models.survey import (
     SurveyFbfResult,
 )
 
-# ── 枚举值映射 ──────────────────────────────────────────
+# 鈹€鈹€ 鏋氫妇鍊兼槧灏?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 CBF_TYPE_MAP = {
     "1": "农户", "2": "个人", "3": "其他方式承包",
@@ -55,10 +55,10 @@ SFJBNT_MAP = {"1": "是", "0": "否", "2": "否"}
 DLDJ_MAP = {
     "1": "一等地", "2": "二等地", "3": "三等地", "4": "四等地",
     "5": "五等地", "6": "六等地", "7": "七等地", "8": "八等地",
-    "9": "九等地",
+    "9": "九等地", "10": "十等地",
     "01": "一等地", "02": "二等地", "03": "三等地", "04": "四等地",
     "05": "五等地", "06": "六等地", "07": "七等地", "08": "八等地",
-    "09": "九等地", "10": "十等地",
+    "09": "九等地",
 }
 YHZGX_MAP = {
     "01": "户主", "02": "配偶", "03": "子女", "04": "父母",
@@ -77,7 +77,7 @@ class ContractTemplateService:
             autoescape=False,
         )
 
-    # ── public ──────────────────────────────────────────
+    # 鈹€鈹€ public 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
     def render_contract(
         self, db: Session, *, cbhtbm: str, batch_id: int | None = None,
@@ -92,19 +92,15 @@ class ContractTemplateService:
         if contract is None:
             raise ValueError(f"Contract not found: {cbhtbm}")
 
-        # ── 承包方 ──
+        # 鈹€鈹€ 鎵垮寘鏂?鈹€鈹€
         contractor = None
         if contract.cbfbm:
             cbf_query = select(SurveyCbfResult).where(
                 SurveyCbfResult.cbfbm == contract.cbfbm
-            )
-            if batch_id is not None:
-                cbf_query = cbf_query.where(
-                    SurveyCbfResult.batch_id == batch_id
-                )
+            ).order_by(SurveyCbfResult.id.desc())
             contractor = _one(db, cbf_query)
 
-        # ── 发包方（从合同或承包方获取 fbfbm） ──
+        # 鈹€鈹€ 鍙戝寘鏂癸紙浠庡悎鍚屾垨鎵垮寘鏂硅幏鍙?fbfbm锛?鈹€鈹€
         issuer_fbfbm = contract.fbfbm
         if not issuer_fbfbm and contractor:
             issuer_fbfbm = getattr(contractor, "fbfbm", None)
@@ -112,14 +108,12 @@ class ContractTemplateService:
         if issuer_fbfbm:
             issuer = _one(db, select(Fbf).where(Fbf.fbfbm == issuer_fbfbm))
 
-        # ── 家庭成员 ──
+        # 鈹€鈹€ 瀹跺涵鎴愬憳 鈹€鈹€
         members = []
         if contractor:
             mq = select(SurveyCbfJtcyResult).where(
                 SurveyCbfJtcyResult.cbfbm == contract.cbfbm
             )
-            if batch_id is not None:
-                mq = mq.where(SurveyCbfJtcyResult.batch_id == batch_id)
             members = db.scalars(mq).all()
 
         household_head = [
@@ -136,12 +130,12 @@ class ContractTemplateService:
             for m in members
         ]
 
-        # ── 地块 ──
+        # 鈹€鈹€ 鍦板潡 鈹€鈹€
         parcels = self._load_parcels(db, contract.cbhtbm, batch_id)
 
-        # ── 模板上下文 ──
+        # 鈹€鈹€ 妯℃澘涓婁笅鏂?鈹€鈹€
         ctx = {
-            # 合同
+            # 鍚堝悓
             "cbhtbm": contract.cbhtbm or "",
             "qdsj": _fmt_date(contract.qdsj),
             "qdsj_cn": _fmt_date_cn(contract.qdsj),
@@ -158,7 +152,7 @@ class ContractTemplateService:
             "cbfs_text": CBFS_MAP.get(contract.cbfs or "", contract.cbfs or ""),
             "cbjyqqdfs_text": "",
 
-            # 发包方
+            # 鍙戝寘鏂?
             "fbfbm": issuer.fbfbm if issuer else "",
             "fbfmc": issuer.fbfmc if issuer else "",
             "fbf_fzr": issuer.fbffzrxm if issuer else "",
@@ -167,7 +161,7 @@ class ContractTemplateService:
             "fbf_lxdh": issuer.lxdh if issuer else "",
             "fbf_social_credit_code": getattr(issuer, "tyshxydm", "") if issuer else "",
 
-            # 承包方
+            # 鎵垮寘鏂?
             "cbfbm": contract.cbfbm or "",
             "cbfmc": contractor.cbfmc if contractor else "",
             "cbf_type_text": CBF_TYPE_MAP.get(
@@ -181,10 +175,10 @@ class ContractTemplateService:
             "lxdh": contractor.lxdh if contractor else "",
             "cbfcysl": contractor.cbfcysl if contractor else 0,
 
-            # 地块
+            # 鍦板潡
             "parcels": parcels,
 
-            # 户主
+            # 鎴蜂富
             "household_head": household_head,
             "family_members": family_members,
         }
@@ -204,14 +198,12 @@ class ContractTemplateService:
         contractor = _one(
             db,
             select(SurveyCbfResult).where(
-                SurveyCbfResult.batch_id == batch_id,
                 SurveyCbfResult.cbfbm == cbfbm,
-            ),
+            ).order_by(SurveyCbfResult.id.desc()),
         )
 
         relations = db.scalars(
             select(SurveyCbdkxxResult).where(
-                SurveyCbdkxxResult.batch_id == batch_id,
                 SurveyCbdkxxResult.cbfbm == cbfbm,
                 SurveyCbdkxxResult.cbhtbm == cbhtbm,
             )
@@ -227,7 +219,6 @@ class ContractTemplateService:
             issuer = _one(
                 db,
                 select(SurveyFbfResult).where(
-                    SurveyFbfResult.batch_id == batch_id,
                     SurveyFbfResult.fbfbm == issuer_fbfbm,
                 ),
             ) or _one(db, select(Fbf).where(Fbf.fbfbm == issuer_fbfbm))
@@ -236,7 +227,6 @@ class ContractTemplateService:
         if contractor:
             members = db.scalars(
                 select(SurveyCbfJtcyResult).where(
-                    SurveyCbfJtcyResult.batch_id == batch_id,
                     SurveyCbfJtcyResult.cbfbm == cbfbm,
                 )
             ).all()
@@ -320,7 +310,121 @@ class ContractTemplateService:
         template = self._env.get_template("poltsketchmap.html")
         return template.render(**ctx)
 
-    # ── helpers ─────────────────────────────────────────
+
+    def render_registration_application(
+        self, db, *, batch_id, cbfbm, contractor_uid,
+    ):
+        """Render the registration application form from survey result data."""
+        from sqlalchemy import select as sa_select
+        from app.models.fbf import Fbf
+        from app.models.cbht import Cbht
+        from app.models.survey import (
+            SurveyCbfResult,
+            SurveyCbfJtcyResult,
+            SurveyCbdkxxResult,
+            SurveyFbfResult,
+        )
+
+        contractor = _one(
+            db,
+            sa_select(SurveyCbfResult).where(
+                SurveyCbfResult.cbfbm == cbfbm,
+            ).order_by(SurveyCbfResult.id.desc()),
+        )
+
+        relations = db.scalars(
+            sa_select(SurveyCbdkxxResult).where(
+                SurveyCbdkxxResult.cbfbm == cbfbm,
+            )
+        ).all()
+        first_relation = relations[0] if relations else None
+
+        cbhtbm = first_relation.cbhtbm if first_relation else None
+        contract = None
+        if cbhtbm:
+            contract = _one(db, sa_select(Cbht).where(Cbht.cbhtbm == cbhtbm))
+
+        issuer_fbfbm = (
+            (contract.fbfbm if contract else None)
+            or (first_relation.fbfbm if first_relation else None)
+        )
+        issuer = None
+        if issuer_fbfbm:
+            issuer = _one(
+                db,
+                sa_select(SurveyFbfResult).where(
+                    SurveyFbfResult.fbfbm == issuer_fbfbm,
+                ),
+            ) or _one(db, sa_select(Fbf).where(Fbf.fbfbm == issuer_fbfbm))
+
+        # Family members
+        members = []
+        if contractor:
+            members = db.scalars(
+                sa_select(SurveyCbfJtcyResult).where(
+                    SurveyCbfJtcyResult.cbfbm == cbfbm,
+                )
+            ).all()
+
+        family_members = []
+        for m in members:
+            family_members.append({
+                "name": m.cyxm or "",
+                "id_type": ZJLX_MAP.get(m.cyzjlx or "", m.cyzjlx or ""),
+                "id_number": m.cyzjhm or "",
+                "relation": YHZGX_MAP.get(m.yhzgx or "", m.yhzgx or ""),
+                "phone": "",
+            })
+
+        # Parcels
+        parcels_raw = self._load_parcels(db, cbhtbm or "", batch_id) if cbhtbm else []
+        total_area_mu = sum(float(p.get("scmj_mu", 0) or 0) for p in parcels_raw)
+
+        parcels = []
+        for p in parcels_raw:
+            boundaries = "涓?" + (p.get("dkdz", "") or "") + " 瑗?" + (p.get("dkxz", "") or "") + " 鍗?" + (p.get("dknz", "") or "") + " 鍖?" + (p.get("dkbz", "") or "")
+            parcels.append({
+                "code": p.get("dkbm", ""),
+                "boundaries": boundaries,
+                "area_mu": p.get("scmj_mu", ""),
+                "is_basic_farmland": p.get("sfjbnt_text", "") == "是",
+                "remarks": "",
+            })
+
+        # Contract method
+        cbfs = (contract.cbfs if contract else None) or (first_relation.cbjyqqdfs if first_relation else "")
+        contract_method = "family" if cbfs in ("001", "") else "other"
+
+        ctx = {
+            "right_type": "land_contract",
+            "reg_type": "first",
+            "rep_name": contractor.cbfmc if contractor else "",
+            "rep_id_type": ZJLX_MAP.get(contractor.cbfzjlx, "") if contractor else "",
+            "rep_id_number": contractor.cbfzjhm if contractor else "",
+            "rep_phone": contractor.lxdh if contractor else "",
+            "family_members": family_members,
+            "agent1_name": "",
+            "issuer_name": getattr(issuer, "fbfmc", "") if issuer else "",
+            "issuer_id_type": "",
+            "issuer_id_number": getattr(issuer, "tyshxydm", "") if issuer else "",
+            "issuer_phone": getattr(issuer, "lxdh", "") if issuer else "",
+            "agent2_name": "",
+            "agent2_id_type": "身份证",
+            "right_start_date": str(contract.cbqxq) if contract and contract.cbqxq else "",
+            "right_end_date": str(contract.cbqxz) if contract and contract.cbqxz else "",
+            "applicant_remarks": "",
+            "contract_method": contract_method,
+            "total_area_mu": f"{total_area_mu:.4f}" if total_area_mu else "",
+            "total_parcels": str(len(parcels_raw)) if parcels_raw else "",
+            "parcels": parcels,
+            "inquiry_q1": "yes",
+            "inquiry_q2": "yes",
+            "inquiry_q3": "",
+        }
+        template = self._env.get_template("registration_application.html")
+        return template.render(**ctx)
+
+    # 鈹€鈹€ helpers 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
     def _load_parcels(
         self, db: Session, cbhtbm: str, batch_id: int | None,
@@ -364,7 +468,7 @@ class ContractTemplateService:
         return result
 
 
-# ── module-level utilities ─────────────────────────────
+# 鈹€鈹€ module-level utilities 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 def _one(db: Session, stmt):
     return db.scalar(stmt)

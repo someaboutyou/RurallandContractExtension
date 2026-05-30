@@ -6,6 +6,7 @@ def upgrade_schema(engine: Engine) -> None:
     _upgrade_data_import_operations(engine)
     _upgrade_import_trace_columns(engine)
     _upgrade_import_performance_indexes(engine)
+    _upgrade_survey_search_indexes(engine)
     _upgrade_contractor_group_region(engine)
     _upgrade_survey_phase2(engine)
     _upgrade_map_layers(engine)
@@ -20,6 +21,7 @@ def upgrade_schema(engine: Engine) -> None:
     _upgrade_workflow_definition_versions(engine)
     _upgrade_request_workflow_mappings(engine)
     _upgrade_tenant_scope_columns(engine)
+    _drop_survey_result_batch_ids(engine)
     _migrate_legacy_cbf_tables_to_survey(engine)
     _upgrade_survey_dk_postgis_geometry(engine)
     _upgrade_spatial_tables(engine)
@@ -354,25 +356,56 @@ def _upgrade_import_performance_indexes(engine: Engine) -> None:
         ("data_import_rows", "ix_data_import_rows_batch_status_id_desc", ("import_batch_id", "status", "id"), "import_batch_id, status, id DESC"),
         ("data_import_operations", "ix_data_import_operations_batch_id_desc", ("import_batch_id", "id"), "import_batch_id, id DESC"),
         ("survey_cbf_base", "ix_survey_cbf_base_batch_source_cbfbm", ("batch_id", "source_cbfbm"), "batch_id, source_cbfbm"),
-        ("survey_cbf_result", "ix_survey_cbf_result_batch_base_id", ("batch_id", "base_id"), "batch_id, base_id"),
+        ("survey_cbf_result", "ix_survey_cbf_result_base_id", ("base_id",), "base_id"),
+        ("survey_cbf_result", "ix_survey_cbf_result_cbfbm_id", ("cbfbm", "id"), "cbfbm, id DESC"),
         (
             "survey_cbf_jtcy_base",
             "ix_survey_cbf_jtcy_base_batch_contractor_member",
             ("batch_id", "base_contractor_code", "base_member_id_no"),
             "batch_id, base_contractor_code, base_member_id_no",
         ),
-        ("survey_cbf_jtcy_result", "ix_survey_cbf_jtcy_result_batch_base_id", ("batch_id", "base_id"), "batch_id, base_id"),
+        ("survey_cbf_jtcy_result", "ix_survey_cbf_jtcy_result_base_id", ("base_id",), "base_id"),
+        ("survey_cbf_jtcy_result", "ix_survey_cbf_jtcy_result_cbfbm_cyzjhm_id", ("cbfbm", "cyzjhm", "id"), "cbfbm, cyzjhm, id DESC"),
         ("survey_fbf_base", "ix_survey_fbf_base_batch_source_fbfbm", ("batch_id", "source_fbfbm"), "batch_id, source_fbfbm"),
-        ("survey_fbf_result", "ix_survey_fbf_result_batch_base_id", ("batch_id", "base_id"), "batch_id, base_id"),
+        ("survey_fbf_result", "ix_survey_fbf_result_base_id", ("base_id",), "base_id"),
+        ("survey_fbf_result", "ix_survey_fbf_result_fbfbm_id", ("fbfbm", "id"), "fbfbm, id DESC"),
         ("survey_cbdkxx_base", "ix_survey_cbdkxx_base_batch_source_dkbm_cbfbm", ("batch_id", "source_dkbm", "cbfbm"), "batch_id, source_dkbm, cbfbm"),
-        ("survey_cbdkxx_result", "ix_survey_cbdkxx_result_batch_base_id", ("batch_id", "base_id"), "batch_id, base_id"),
+        ("survey_cbdkxx_result", "ix_survey_cbdkxx_result_base_id", ("base_id",), "base_id"),
+        ("survey_cbdkxx_result", "ix_survey_cbdkxx_result_dkbm_cbfbm_id", ("dkbm", "cbfbm", "id"), "dkbm, cbfbm, id DESC"),
+        ("survey_cbdkxx_result", "ix_survey_cbdkxx_result_fbfbm_cbfbm", ("fbfbm", "cbfbm"), "fbfbm, cbfbm"),
         ("survey_dk_base", "ix_survey_dk_base_batch_source_dkbm", ("batch_id", "source_dkbm"), "batch_id, source_dkbm"),
-        ("survey_dk_result", "ix_survey_dk_result_batch_base_id", ("batch_id", "base_id"), "batch_id, base_id"),
+        ("survey_dk_result", "ix_survey_dk_result_base_id", ("base_id",), "base_id"),
+        ("survey_dk_result", "ix_survey_dk_result_dkbm_id", ("dkbm", "id"), "dkbm, id DESC"),
         ("survey_contractor_tasks", "ix_survey_contractor_tasks_batch_cbfbm", ("batch_id", "cbfbm"), "batch_id, cbfbm"),
+        ("survey_contractor_tasks", "ix_survey_contractor_tasks_batch_status_cbfbm", ("batch_id", "task_status", "cbfbm"), "batch_id, task_status, cbfbm"),
+        ("survey_contractor_tasks", "ix_survey_contractor_tasks_batch_region_cbfbm", ("batch_id", "region_code", "cbfbm"), "batch_id, region_code, cbfbm"),
     ]
     with engine.begin() as connection:
         for table_name, index_name, columns, expression in index_specs:
             _create_index_if_columns_exist(connection, inspector, table_name, index_name, columns, expression)
+
+
+def _upgrade_survey_search_indexes(engine: Engine) -> None:
+    if engine.dialect.name != "postgresql":
+        return
+    inspector = inspect(engine)
+    index_specs = [
+        ("survey_contractor_tasks", "ix_survey_contractor_tasks_cbfbm_trgm", ("cbfbm",), "cbfbm"),
+        ("survey_contractor_tasks", "ix_survey_contractor_tasks_cbfmc_trgm", ("cbfmc",), "cbfmc"),
+        ("survey_fbf_result", "ix_survey_fbf_result_fbfbm_trgm", ("fbfbm",), "fbfbm"),
+        ("survey_fbf_result", "ix_survey_fbf_result_fbfmc_trgm", ("fbfmc",), "fbfmc"),
+        ("survey_fbf_result", "ix_survey_fbf_result_fbffzrxm_trgm", ("fbffzrxm",), "fbffzrxm"),
+    ]
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+        for table_name, index_name, columns, column_name in index_specs:
+            if not inspector.has_table(table_name):
+                continue
+            existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
+            if all(column in existing_columns for column in columns):
+                connection.exec_driver_sql(
+                    f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} USING GIN ({column_name} gin_trgm_ops)"
+                )
 
 
 def _upgrade_survey_dk_postgis_geometry(engine: Engine) -> None:
@@ -527,7 +560,7 @@ def _migrate_legacy_cbf_tables_to_survey(engine: Engine) -> None:
         connection.exec_driver_sql(
             f"""
             INSERT INTO survey_cbf_result (
-                tenant_code, region_code, batch_id, contractor_uid, base_id, cbfbm, cbflx, cbfmc,
+                tenant_code, region_code, contractor_uid, base_id, cbfbm, cbflx, cbfmc,
                 cbfzjlx, cbfzjhm, cbfdz, yzbm, lxdh, cbfcysl, cbfdcrq, cbfdcy, cbfdcjs,
                 gsjs, gsjsr, gsshrq, gsshr, group_region_code, group_region_name,
                 survey_status, result_status, is_changed, change_type,
@@ -535,7 +568,7 @@ def _migrate_legacy_cbf_tables_to_survey(engine: Engine) -> None:
                 initialized_from_base_id, initialized_at, created_at, updated_at
             )
             SELECT
-                b.tenant_code, b.region_code, b.batch_id, b.contractor_uid, b.id, b.cbfbm, b.cbflx, b.cbfmc,
+                b.tenant_code, b.region_code, b.contractor_uid, b.id, b.cbfbm, b.cbflx, b.cbfmc,
                 b.cbfzjlx, b.cbfzjhm, b.cbfdz, b.yzbm, b.lxdh, b.cbfcysl, b.cbfdcrq, b.cbfdcy, b.cbfdcjs,
                 b.gsjs, b.gsjsr, b.gsshrq, b.gsshr, b.group_region_code, b.group_region_name,
                 'not_surveyed', 'normal', FALSE, 'none',
@@ -545,7 +578,7 @@ def _migrate_legacy_cbf_tables_to_survey(engine: Engine) -> None:
             WHERE b.batch_id = {batch_id}
               AND NOT EXISTS (
                   SELECT 1 FROM survey_cbf_result AS r
-                  WHERE r.batch_id = b.batch_id AND r.base_id = b.id
+                  WHERE r.base_id = b.id
               )
             """
         )
@@ -592,7 +625,7 @@ def _migrate_legacy_cbf_tables_to_survey(engine: Engine) -> None:
             connection.exec_driver_sql(
                 f"""
                 INSERT INTO survey_cbf_jtcy_result (
-                    tenant_code, region_code, batch_id, contractor_uid, member_uid, base_id,
+                    tenant_code, region_code, contractor_uid, member_uid, base_id,
                     cbfbm, cyxm, cyzjlx, cyzjhm, cyxb, yhzgx, cybz, sfgyr, cybzsm,
                     member_result_status, survey_status, is_changed, is_household_head,
                     is_urban_settled, is_married_out_woman, is_deceased, is_five_guarantees,
@@ -600,7 +633,7 @@ def _migrate_legacy_cbf_tables_to_survey(engine: Engine) -> None:
                     initialized_from_base_id, initialized_at, created_at, updated_at
                 )
                 SELECT
-                    mb.tenant_code, mb.region_code, mb.batch_id, mb.contractor_uid, mb.member_uid, mb.id,
+                    mb.tenant_code, mb.region_code, mb.contractor_uid, mb.member_uid, mb.id,
                     mb.cbfbm, mb.cyxm, mb.cyzjlx, mb.cyzjhm, mb.cyxb, mb.yhzgx, mb.cybz, mb.sfgyr, mb.cybzsm,
                     'normal', 'not_surveyed', FALSE,
                     CASE WHEN mb.yhzgx = '01' THEN TRUE ELSE FALSE END,
@@ -611,12 +644,69 @@ def _migrate_legacy_cbf_tables_to_survey(engine: Engine) -> None:
                 WHERE mb.batch_id = {batch_id}
                   AND NOT EXISTS (
                       SELECT 1 FROM survey_cbf_jtcy_result AS mr
-                      WHERE mr.batch_id = mb.batch_id AND mr.base_id = mb.id
+                      WHERE mr.base_id = mb.id
                   )
                 """
             )
         connection.exec_driver_sql("DROP TABLE IF EXISTS cbf_jtcy")
         connection.exec_driver_sql("DROP TABLE IF EXISTS cbf")
+
+
+def _drop_survey_result_batch_ids(engine: Engine) -> None:
+    inspector = inspect(engine)
+    result_tables = (
+        "survey_cbf_result",
+        "survey_cbf_jtcy_result",
+        "survey_fbf_result",
+        "survey_cbdkxx_result",
+        "survey_dk_result",
+    )
+    existing_tables = [table_name for table_name in result_tables if inspector.has_table(table_name)]
+    if not existing_tables:
+        return
+    with engine.begin() as connection:
+        legacy_indexes = (
+            "ix_survey_cbf_result_batch_id",
+            "ix_survey_cbf_result_batch_base_id",
+            "ix_survey_cbf_jtcy_result_batch_id",
+            "ix_survey_cbf_jtcy_result_batch_base_id",
+            "ix_survey_fbf_result_batch_id",
+            "ix_survey_fbf_result_batch_base_id",
+            "ix_survey_fbf_result_batch_fbfbm",
+            "ix_survey_cbdkxx_result_batch_id",
+            "ix_survey_cbdkxx_result_batch_base_id",
+            "ix_survey_cbdkxx_result_batch_fbfbm_cbfbm",
+            "ix_survey_dk_result_batch_id",
+            "ix_survey_dk_result_batch_base_id",
+        )
+        for index_name in legacy_indexes:
+            connection.exec_driver_sql(f"DROP INDEX IF EXISTS {index_name}")
+        for table_name in existing_tables:
+            columns = {column["name"] for column in inspector.get_columns(table_name)}
+            if "batch_id" in columns:
+                connection.exec_driver_sql(f"ALTER TABLE {table_name} DROP COLUMN IF EXISTS batch_id")
+        if "survey_cbf_result" in existing_tables:
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_survey_cbf_result_base_id ON survey_cbf_result(base_id)")
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_survey_cbf_result_cbfbm_id ON survey_cbf_result(cbfbm, id DESC)")
+        if "survey_cbf_jtcy_result" in existing_tables:
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_survey_cbf_jtcy_result_base_id ON survey_cbf_jtcy_result(base_id)")
+            connection.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_survey_cbf_jtcy_result_cbfbm_cyzjhm_id ON survey_cbf_jtcy_result(cbfbm, cyzjhm, id DESC)"
+            )
+        if "survey_fbf_result" in existing_tables:
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_survey_fbf_result_base_id ON survey_fbf_result(base_id)")
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_survey_fbf_result_fbfbm_id ON survey_fbf_result(fbfbm, id DESC)")
+        if "survey_cbdkxx_result" in existing_tables:
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_survey_cbdkxx_result_base_id ON survey_cbdkxx_result(base_id)")
+            connection.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_survey_cbdkxx_result_dkbm_cbfbm_id ON survey_cbdkxx_result(dkbm, cbfbm, id DESC)"
+            )
+            connection.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_survey_cbdkxx_result_fbfbm_cbfbm ON survey_cbdkxx_result(fbfbm, cbfbm)"
+            )
+        if "survey_dk_result" in existing_tables:
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_survey_dk_result_base_id ON survey_dk_result(base_id)")
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_survey_dk_result_dkbm_id ON survey_dk_result(dkbm, id DESC)")
 
 
 def _upgrade_survey_phase2(engine: Engine) -> None:

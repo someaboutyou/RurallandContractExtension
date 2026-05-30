@@ -41,7 +41,7 @@
                   v-for="item in systemNavItems"
                   :key="item.to"
                   :command="item.to"
-                  :class="{ 'is-current': isActive(item.to) }"
+                  :class="{ 'is-current': isActive(item.to) || isRoutePrefixActive(item.activePrefix) }"
                 >
                   {{ item.label }}
                 </el-dropdown-item>
@@ -107,6 +107,21 @@ const REQUEST_MODULE_PERMISSIONS = [
   "requests.review.county",
 ];
 
+const PRINT_TEMPLATE_NAV_ITEM = {
+  key: "print-templates",
+  label: "打印模板管理",
+  to: "/print-templates/contract",
+  activePrefix: "/print-templates",
+  permissions: ["contract_templates.manage"],
+  children: [
+    { to: "/print-templates/contract", label: "合同模板", permissions: ["contract_templates.manage"] },
+    { to: "/print-templates/plot-sketch-map", label: "承包地块示意图模板", permissions: ["contract_templates.manage"] },
+    { to: "/print-templates/registration-application", label: "不动产登记申请书模板", permissions: ["contract_templates.manage"] },
+    { to: "/print-templates/cadastral-survey", label: "地籍调查表模板", permissions: ["contract_templates.manage"] },
+    { to: "/print-templates/issuer-survey", label: "发包方调查表模板", permissions: ["contract_templates.manage"] },
+  ],
+};
+
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
@@ -123,7 +138,7 @@ const navItems = [
     key: "business",
     label: "业务办理",
     children: [
-      { to: "/surveys", label: "串户调查成果", permissions: ["contractors.view"] },
+      { to: "/surveys", label: "调查批次", permissions: ["contractors.view"] },
       { to: "/requests", label: "业务申请", permissions: REQUEST_MODULE_PERMISSIONS },
     ],
   },
@@ -158,7 +173,7 @@ const navItems = [
       { to: "/workflows", label: "流程设计", permissions: ["roles.manage"] },
       { to: "/layers", label: "图层管理", permissions: ["layers.manage"] },
       { to: "/request-attachment-templates", label: "流程附件", permissions: ["requests.manage"] },
-      { to: "/contract-templates", label: "合同模板", permissions: ["contract_templates.manage"] },
+      PRINT_TEMPLATE_NAV_ITEM,
     ],
   },
 ];
@@ -196,9 +211,14 @@ const activeTopItem = computed(() =>
   null,
 );
 
-const secondaryNavItems = computed(() => activeTopItem.value?.children || []);
+const secondaryNavItems = computed(() => {
+  if (isRoutePrefixActive(PRINT_TEMPLATE_NAV_ITEM.activePrefix)) {
+    return PRINT_TEMPLATE_NAV_ITEM.children.filter((child) => authStore.hasAnyPermission(child.permissions));
+  }
+  return activeTopItem.value?.children || [];
+});
 const isMapPage = computed(() => route.path === "/gis");
-const userInitial = computed(() => (authStore.displayName || "用").trim().slice(0, 1).toUpperCase());
+const userInitial = computed(() => (authStore.displayName || "用户").trim().slice(0, 1).toUpperCase());
 
 const themeStyle = computed(() => {
   const theme = contentTheme.value || routeThemeMap[activeTopItem.value?.key] || routeThemeMap.system;
@@ -218,6 +238,10 @@ watch(
 
 function isActive(targetPath) {
   return route.path === targetPath;
+}
+
+function isRoutePrefixActive(prefix) {
+  return Boolean(prefix) && (route.path === prefix || route.path.startsWith(`${prefix}/`));
 }
 
 function isGroupActive(item) {

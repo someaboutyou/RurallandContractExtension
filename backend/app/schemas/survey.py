@@ -4,10 +4,9 @@ from pydantic import BaseModel, Field
 
 
 class SurveyBatchCreate(BaseModel):
-    batchName: str = Field(min_length=1, max_length=120)
+    batchName: str | None = Field(default=None, max_length=120)
     regionCode: str | None = Field(default=None, max_length=32)
     regionName: str | None = Field(default=None, max_length=120)
-    surveyType: str = Field(default="household_survey", max_length=32)
     remark: str | None = None
 
 
@@ -40,6 +39,51 @@ class SurveyTaskRead(BaseModel):
     hasChange: bool
     changeCount: int
     investigatedAt: datetime | None = None
+    remark: str | None = None
+
+
+class SurveyIssuerRowRead(BaseModel):
+    id: int
+    batchId: int
+    issuerUid: str
+    code: str
+    name: str
+    responsibleName: str
+    surveyStatus: str
+    relatedContractorCount: int = 0
+    surveyDate: str | None = None
+    surveyorName: str | None = None
+    sourceTask: SurveyTaskRead | None = None
+
+
+class SurveyContractorCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=18)
+    typeCode: str = Field(default="1", min_length=1, max_length=1)
+    name: str = Field(min_length=1, max_length=50)
+    idType: str = Field(default="1", min_length=1, max_length=1)
+    idNo: str = Field(min_length=1, max_length=20)
+    address: str = Field(min_length=1, max_length=100)
+    postcode: str = Field(default="000000", min_length=1, max_length=6)
+    mobile: str | None = Field(default=None, max_length=20)
+    groupRegionCode: str | None = Field(default=None, max_length=32)
+    groupRegionName: str | None = Field(default=None, max_length=120)
+    surveyorName: str | None = Field(default=None, max_length=50)
+    surveyDate: str | None = None
+    remark: str | None = None
+
+
+class SurveyIssuerCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=14)
+    name: str = Field(min_length=1, max_length=50)
+    responsibleName: str = Field(min_length=1, max_length=50)
+    responsibleIdType: str = Field(default="1", min_length=1, max_length=1)
+    responsibleIdNo: str = Field(min_length=1, max_length=30)
+    phone: str | None = Field(default=None, max_length=15)
+    address: str = Field(min_length=1, max_length=100)
+    postcode: str = Field(default="000000", min_length=1, max_length=6)
+    surveyorName: str | None = Field(default=None, max_length=254)
+    surveyDate: str | None = None
+    surveyNote: str | None = Field(default=None, max_length=254)
     remark: str | None = None
 
 
@@ -295,6 +339,27 @@ class SurveyMemberUpdate(BaseModel):
     remark: str | None = None
 
 
+class SurveyIssuerUpdate(BaseModel):
+    issuerUid: str | None = None
+    code: str = Field(min_length=1, max_length=14)
+    name: str = Field(min_length=1, max_length=50)
+    responsibleName: str = Field(min_length=1, max_length=50)
+    responsibleIdType: str = Field(min_length=1, max_length=1)
+    responsibleIdNo: str = Field(min_length=1, max_length=30)
+    phone: str | None = Field(default=None, max_length=15)
+    address: str = Field(min_length=1, max_length=100)
+    postcode: str = Field(min_length=1, max_length=6)
+    surveyorName: str | None = Field(default=None, max_length=254)
+    surveyDate: str | None = None
+    surveyNote: str | None = Field(default=None, max_length=254)
+    surveyStatus: str = "surveyed"
+    resultStatus: str = "normal"
+    changeType: str = "none"
+    changeReason: str | None = None
+    policyBasis: str | None = None
+    remark: str | None = None
+
+
 class SurveyContractorUpdate(BaseModel):
     code: str = Field(min_length=1, max_length=18)
     typeCode: str = Field(min_length=1, max_length=1)
@@ -320,6 +385,7 @@ class SurveyContractorUpdate(BaseModel):
     policyBasis: str | None = None
     evidenceSummary: str | None = None
     remark: str | None = None
+    issuer: SurveyIssuerUpdate | None = None
     familyMembers: list[SurveyMemberUpdate] = []
 
 
@@ -363,6 +429,26 @@ class SurveyBaseContractorRead(BaseModel):
     familyMembers: list[SurveyBaseMemberRead] = []
 
 
+class SurveyIssuerRead(SurveyIssuerUpdate):
+    id: int
+    baseId: int | None = None
+    isChanged: bool = False
+
+
+class SurveyBaseIssuerRead(BaseModel):
+    code: str
+    name: str
+    responsibleName: str
+    responsibleIdType: str
+    responsibleIdNo: str
+    phone: str | None = None
+    address: str
+    postcode: str
+    surveyorName: str | None = None
+    surveyDate: str | None = None
+    surveyNote: str | None = None
+
+
 class SurveyContractorRead(BaseModel):
     id: int
     batchId: int
@@ -395,6 +481,8 @@ class SurveyContractorRead(BaseModel):
     evidenceSummary: str | None = None
     remark: str | None = None
     baseContractor: SurveyBaseContractorRead | None = None
+    issuer: SurveyIssuerRead | None = None
+    baseIssuer: SurveyBaseIssuerRead | None = None
     familyMembers: list[SurveyMemberRead]
     generatedRequestId: int | None = None
     generatedRequestNo: str | None = None

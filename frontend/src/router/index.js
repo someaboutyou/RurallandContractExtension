@@ -69,8 +69,44 @@ const appChildren = [
   {
     path: "contract-templates",
     name: "contract-templates",
-    component: ContractTemplateManagementView,
+    redirect: { name: "print-template-contract" },
     meta: { requiresAuth: true, permissions: ["contract_templates.manage"] },
+  },
+  {
+    path: "print-templates",
+    name: "print-templates",
+    redirect: { name: "print-template-contract" },
+    meta: { requiresAuth: true, permissions: ["contract_templates.manage"] },
+  },
+  {
+    path: "print-templates/contract",
+    name: "print-template-contract",
+    component: ContractTemplateManagementView,
+    meta: { requiresAuth: true, permissions: ["contract_templates.manage"], templateKey: "contract" },
+  },
+  {
+    path: "print-templates/plot-sketch-map",
+    name: "print-template-plot-sketch-map",
+    component: ContractTemplateManagementView,
+    meta: { requiresAuth: true, permissions: ["contract_templates.manage"], templateKey: "plot-sketch-map" },
+  },
+  {
+    path: "print-templates/registration-application",
+    name: "print-template-registration-application",
+    component: ContractTemplateManagementView,
+    meta: { requiresAuth: true, permissions: ["contract_templates.manage"], templateKey: "registration-application" },
+  },
+  {
+    path: "print-templates/cadastral-survey",
+    name: "print-template-cadastral-survey",
+    component: ContractTemplateManagementView,
+    meta: { requiresAuth: true, permissions: ["contract_templates.manage"], templateKey: "cadastral-survey" },
+  },
+  {
+    path: "print-templates/issuer-survey",
+    name: "print-template-issuer-survey",
+    component: ContractTemplateManagementView,
+    meta: { requiresAuth: true, permissions: ["contract_templates.manage"], templateKey: "issuer-survey" },
   },
 ];
 

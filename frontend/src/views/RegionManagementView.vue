@@ -56,9 +56,12 @@
             v-model="form.parentId"
             clearable
             filterable
+            lazy
             check-strictly
             :data="regionTree"
             :props="treeProps"
+            :load="loadParentRegionNode"
+            :filter-method="handleParentRegionFilter"
             node-key="id"
             placeholder="请选择父级区域"
           />
@@ -85,10 +88,10 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref } from "vue";
+import { computed, onUnmounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
-import { createRegion, deleteRegion, fetchRegionTree, updateRegion } from "../api/region";
+import { createRegion, deleteRegion, fetchRegionChildren, fetchRegionTree, searchRegions, updateRegion } from "../api/region";
 import { useAuthStore } from "../stores/auth";
 
 const authStore = useAuthStore();
@@ -99,7 +102,8 @@ const dialogVisible = ref(false);
 const editingId = ref(0);
 const formRef = ref();
 const regionTree = ref([]);
-const treeProps = { label: "fullName", children: "children" };
+const treeProps = { label: "fullName", children: "children", isLeaf: "leaf" };
+let parentRegionSearchTimer = null;
 
 const form = reactive(createEmptyForm());
 const rules = {
@@ -136,6 +140,28 @@ async function loadRegions() {
   } finally {
     loading.value = false;
   }
+}
+
+async function loadParentRegionNode(node, resolve) {
+  if (node.level === 0) {
+    resolve(regionTree.value);
+    return;
+  }
+  const { data } = await fetchRegionChildren({ parentId: node.data.id, includeGroups: true });
+  resolve(data.data);
+}
+
+function handleParentRegionFilter(keyword) {
+  window.clearTimeout(parentRegionSearchTimer);
+  parentRegionSearchTimer = window.setTimeout(async () => {
+    if (!keyword) {
+      const { data } = await fetchRegionTree();
+      regionTree.value = data.data;
+      return;
+    }
+    const { data } = await searchRegions({ keyword, includeGroups: true, limit: 80 });
+    regionTree.value = data.data;
+  }, 250);
 }
 
 function openCreateDialog(parent) {
@@ -206,4 +232,7 @@ async function handleDelete(row) {
 }
 
 loadRegions();
+onUnmounted(() => {
+  window.clearTimeout(parentRegionSearchTimer);
+});
 </script>

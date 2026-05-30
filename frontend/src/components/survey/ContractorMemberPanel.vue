@@ -21,7 +21,11 @@
     <el-form :model="result" label-position="top" class="contractor-form">
       <div class="form-grid-3">
         <el-form-item label="承包方编码" :class="changedClass('code')">
-          <el-input v-model="result.code" placeholder="18位编码" maxlength="18" />
+          <el-input :model-value="result.code" placeholder="18位编码" maxlength="18" @input="handleCodeInput">
+            <template v-if="canGenerateCode" #append>
+              <el-button @click="emit('generate-code')">生成</el-button>
+            </template>
+          </el-input>
         </el-form-item>
         <el-form-item label="承包方名称" :class="changedClass('name')">
           <el-input v-model="result.name" placeholder="承包方名称" maxlength="50" />
@@ -206,13 +210,26 @@ const props = defineProps({
   contractorUid: { type: String, required: true },
   result: { type: Object, required: true },
   changedFields: { type: Array, default: () => [] },
+  canGenerateCode: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["update:result"]);
+const emit = defineEmits(["update:result", "generate-code"]);
 
 const { options: relationOptions } = useDictionary("nyt2539_c20_relation_to_head");
 
 const diffViewer = ref(null);
+
+function normalizeInput(value) {
+  return String(value || "").trim();
+}
+
+function normalizeDigits(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function handleCodeInput(value) {
+  props.result.code = normalizeDigits(value).slice(0, 18);
+}
 
 // 初始化：如果 groupRegionName 为空但 groupRegionCode 有值，用 code 填充
 watch(
@@ -239,13 +256,13 @@ watch(
       if (m._isNew === undefined) m._isNew = false;
       if (m.memberUid) {
         initialSnapshots.value.set(m.memberUid, {
-          name: m.name,
-          gender: m.gender,
-          idType: m.idType,
-          idNo: m.idNo,
-          relationToHead: m.relationToHead,
-          isCoOwner: m.isCoOwner,
-          note: m.note,
+          name: normalizeInput(m.name),
+          gender: normalizeInput(m.gender),
+          idType: normalizeInput(m.idType),
+          idNo: normalizeInput(m.idNo),
+          relationToHead: normalizeInput(m.relationToHead),
+          isCoOwner: normalizeInput(m.isCoOwner),
+          note: normalizeInput(m.note),
         });
       }
     }
@@ -265,13 +282,13 @@ function isModifiedRow(row) {
   const snap = initialSnapshots.value.get(row.memberUid);
   if (!snap) return false;
   return (
-    snap.name !== row.name ||
-    snap.gender !== row.gender ||
-    snap.idType !== row.idType ||
-    snap.idNo !== row.idNo ||
-    snap.relationToHead !== row.relationToHead ||
-    snap.isCoOwner !== row.isCoOwner ||
-    snap.note !== (row.note || "")
+    snap.name !== normalizeInput(row.name) ||
+    snap.gender !== normalizeInput(row.gender) ||
+    snap.idType !== normalizeInput(row.idType) ||
+    snap.idNo !== normalizeInput(row.idNo) ||
+    snap.relationToHead !== normalizeInput(row.relationToHead) ||
+    snap.isCoOwner !== normalizeInput(row.isCoOwner) ||
+    snap.note !== normalizeInput(row.note)
   );
 }
 

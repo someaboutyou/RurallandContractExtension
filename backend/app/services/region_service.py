@@ -14,6 +14,8 @@ class RegionService:
     def list_regions(self, db: Session, current_user: User, level: str | None = None) -> list[dict]:
         tenant_code = self._visible_tenant_code(current_user)
         records = region_repository.list_regions(db, level=level, tenant_code=tenant_code)
+        if level != "group":
+            records = [item for item in records if item.level != "group"]
         records = self._filter_records_by_permission(records, current_user)
         return [self._serialize(item) for item in records]
 
@@ -26,6 +28,8 @@ class RegionService:
     ) -> list[dict]:
         tenant_code = self._visible_tenant_code(current_user)
         records = region_repository.list_regions(db, level=None, tenant_code=tenant_code)
+        if not include_groups and level != "group":
+            records = [item for item in records if item.level != "group"]
         records = self._filter_records_by_permission(records, current_user)
         if level:
             allowed_levels = self._levels_until(level)
@@ -40,11 +44,67 @@ class RegionService:
         def build(item: Region) -> dict:
             node = self._serialize(item)
             node["children"] = [build(child) for child in by_parent.get(item.id, [])]
-            if include_groups and item.level == "village":
-                node["children"].extend(self._group_nodes(db, item, tenant_code, current_user))
             return node
 
         return [build(item) for item in roots]
+
+    def list_children(
+        self,
+        db: Session,
+        current_user: User,
+        parent_id: int | None = None,
+        include_groups: bool = False,
+    ) -> list[dict]:
+        tenant_code = self._visible_tenant_code(current_user)
+        if parent_id is None:
+            records = region_repository.list_regions(db, level=None, tenant_code=tenant_code)
+            if not include_groups:
+                records = [item for item in records if item.level != "group"]
+            records = self._filter_records_by_permission(records, current_user)
+            visible_ids = {item.id for item in records}
+            records = [item for item in records if item.parent_id not in visible_ids]
+        else:
+            records = region_repository.list_children(db, parent_id=parent_id, tenant_code=tenant_code, include_groups=include_groups)
+            records = self._filter_records_by_permission(records, current_user)
+        assigned_by_code = self._assigned_user_by_region_code(db, [item.code for item in records if item.level == "group"])
+        return [
+            self._serialize(
+                item,
+                leaf=self._is_leaf_for_lazy(db, item, tenant_code, include_groups),
+                assigned_user_id=assigned_by_code.get(item.code),
+            )
+            for item in records
+        ]
+
+    def search_regions(
+        self,
+        db: Session,
+        current_user: User,
+        keyword: str,
+        include_groups: bool = False,
+        limit: int = 50,
+    ) -> list[dict]:
+        keyword = keyword.strip()
+        if not keyword:
+            return self.list_children(db, current_user=current_user, parent_id=None, include_groups=include_groups)
+        tenant_code = self._visible_tenant_code(current_user)
+        records = region_repository.search_regions(
+            db,
+            keyword=keyword,
+            tenant_code=tenant_code,
+            include_groups=include_groups,
+            limit=limit,
+        )
+        records = self._filter_records_by_permission(records, current_user)
+        assigned_by_code = self._assigned_user_by_region_code(db, [item.code for item in records if item.level == "group"])
+        return [
+            self._serialize(
+                item,
+                leaf=self._is_leaf_for_lazy(db, item, tenant_code, include_groups),
+                assigned_user_id=assigned_by_code.get(item.code),
+            )
+            for item in records[:limit]
+        ]
 
     def create_region(self, db: Session, payload: dict) -> dict:
         self._validate_payload(db, payload)
@@ -102,8 +162,8 @@ class RegionService:
     def _visible_tenant_code(self, current_user: User) -> str | None:
         return None if current_user.role.data_scope == "all" else current_user.tenant_code
 
-    def _serialize(self, item: Region) -> dict:
-        return {
+    def _serialize(self, item: Region, leaf: bool | None = None, assigned_user_id: int | None = None) -> dict:
+        data = {
             "id": item.id,
             "name": item.name,
             "code": item.code,
@@ -116,7 +176,11 @@ class RegionService:
             "remark": item.remark,
             "createdAt": item.created_at,
             "updatedAt": item.updated_at,
+            "leaf": item.level == "group" if leaf is None else leaf,
         }
+        if assigned_user_id is not None:
+            data["assignedUserId"] = assigned_user_id
+        return data
 
     def _group_nodes(self, db: Session, village: Region, tenant_code: str | None, current_user: User) -> list[dict]:
         stmt = (
@@ -194,9 +258,9 @@ class RegionService:
     def _validate_payload(self, db: Session, payload: dict, exclude_id: int | None = None) -> None:
         code = payload["code"].strip()
         level = payload["level"]
-        if level not in {"province", "county", "town", "village"}:
+        if level not in {"province", "county", "town", "village", "group"}:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="区域级别不合法")
-        expected_lengths = {"county": 6, "town": 9, "village": 12}
+        expected_lengths = {"county": 6, "town": 9, "village": 12, "group": 14}
         if level in expected_lengths and len(code) != expected_lengths[level]:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{self._level_label(level)}代码必须为 {expected_lengths[level]} 位")
         existed = db.scalar(select(Region).where(Region.code == code))
@@ -205,14 +269,14 @@ class RegionService:
         parent = db.get(Region, payload.get("parentId")) if payload.get("parentId") else None
         if level == "province" and parent is not None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="省级区域不能选择父级")
-        expected_parent = {"county": "province", "town": "county", "village": "town"}.get(level)
+        expected_parent = {"county": "province", "town": "county", "village": "town", "group": "village"}.get(level)
         if expected_parent and (parent is None or parent.level != expected_parent):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{self._level_label(level)}必须选择{self._level_label(expected_parent)}父级")
-        if parent and level in {"county", "town", "village"} and not code.startswith(parent.code):
+        if parent and level in {"county", "town", "village", "group"} and not code.startswith(parent.code):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="区域代码必须以前级区域代码开头")
 
     def _derive_tenant_code(self, code: str, level: str) -> str | None:
-        return code[:6] if level in {"county", "town", "village"} and len(code) >= 6 else None
+        return code[:6] if level in {"county", "town", "village", "group"} and len(code) >= 6 else None
 
     def _build_full_name(self, parent: Region | None, name: str) -> str:
         return f"{parent.full_name} / {name}" if parent else name
@@ -234,13 +298,35 @@ class RegionService:
         return False
 
     def _levels_until(self, level: str) -> set[str]:
-        order = ["province", "county", "town", "village"]
+        order = ["province", "county", "town", "village", "group"]
         if level not in order:
             return set(order)
         return set(order[: order.index(level) + 1])
 
     def _level_label(self, level: str) -> str:
         return {"province": "省级", "county": "县级", "town": "镇级", "village": "村级"}.get(level, level)
+
+    def _is_leaf_for_lazy(self, db: Session, item: Region, tenant_code: str | None, include_groups: bool) -> bool:
+        if item.level == "group":
+            return True
+        if item.level == "village" and not include_groups:
+            return True
+        stmt = select(func.count(Region.id)).where(Region.parent_id == item.id)
+        if tenant_code:
+            stmt = stmt.where(Region.tenant_code == tenant_code)
+        if not include_groups:
+            stmt = stmt.where(Region.level != "group")
+        return (db.scalar(stmt) or 0) == 0
+
+    def _assigned_user_by_region_code(self, db: Session, region_codes: list[str]) -> dict[str, int]:
+        if not region_codes:
+            return {}
+        rows = db.scalars(
+            select(UserRegionPermission)
+            .where(UserRegionPermission.level == "group")
+            .where(UserRegionPermission.region_code.in_(region_codes))
+        ).all()
+        return {row.region_code: row.user_id for row in rows}
 
 
 region_service = RegionService()

@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>不动产登记申请书</title>
+<style>
+  {% set parcel_count = parcels | length if parcels else 0 %}
+  {% set first_page_parcels = parcels[:9] if parcels else [] %}
+  {% set remaining_parcels = parcels[9:] if parcels and parcel_count > 9 else [] %}
+  {% set continuation_capacity = 26 %}
+  {% set footer_parcel_capacity = 14 %}
+  {% set remaining_count = remaining_parcels | length %}
+  {% if remaining_count > footer_parcel_capacity %}
+    {% set raw_non_footer_count = ((remaining_count - footer_parcel_capacity + continuation_capacity - 1) // continuation_capacity) * continuation_capacity %}
+    {% set non_footer_count = [raw_non_footer_count, remaining_count] | min %}
+  {% else %}
+    {% set non_footer_count = 0 %}
+  {% endif %}
+  {% set continuation_parcels = remaining_parcels[:non_footer_count] %}
+  {% set footer_parcels = remaining_parcels[non_footer_count:] %}
+
+  @page {
+    size: 383mm 542mm;
+    margin: 0;
+  }
+
+  * { box-sizing: border-box; }
+
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    color: #000;
+    background: #f2f3f5;
+    font-family: "SimSun", "宋体", serif;
+    font-size: 12pt;
+  }
+
+  .print-btn {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 20;
+    padding: 8px 20px;
+    border: 0;
+    border-radius: 4px;
+    color: #fff;
+    background: #409eff;
+    cursor: pointer;
+  }
+
+  .page {
+    width: 383mm;
+    height: 542mm;
+    margin: 0 auto 16px;
+    padding: 26mm 31mm 18mm 32mm;
+    background: #fff;
+    overflow: hidden;
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+
+  .form-title {
+    margin: 0 0 8mm;
+    text-align: center;
+    font-family: "SimHei", "黑体", "SimSun", serif;
+    font-size: 22pt;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+
+  .main-table {
+    width: 320mm;
+    border-collapse: collapse;
+    table-layout: fixed;
+    border: 1px solid #000;
+  }
+
+  .main-table td,
+  .main-table th {
+    border: 1px solid #000;
+    padding: 0 2.5mm;
+    vertical-align: middle;
+    text-align: center;
+    font-size: 10.5pt;
+    line-height: 1.35;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  .c1 { width: 15.8mm; }
+  .c2 { width: 32.8mm; }
+  .c3 { width: 6.6mm; }
+  .c4 { width: 35.7mm; }
+  .c5 { width: 46.9mm; }
+  .c6 { width: 42.1mm; }
+  .c7 { width: 51.6mm; }
+  .c8 { width: 37.1mm; }
+  .c9 { width: 12.2mm; }
+  .c10 { width: 39.2mm; }
+
+  .h-sm { height: 10.8mm; }
+  .h-md { height: 13.6mm; }
+  .h-lg { height: 15.5mm; }
+  .h-xl { height: 17.3mm; }
+  .h-inquiry { height: 62.5mm; }
+  .h-commitment { height: 133.8mm; }
+
+  .section-label {
+    padding: 0;
+    font-weight: 700;
+    letter-spacing: 0;
+    white-space: pre-line;
+  }
+
+  .sub-label {
+    font-weight: 700;
+  }
+
+  .checkbox-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0 12mm;
+    width: 100%;
+    height: 100%;
+    text-align: left;
+  }
+
+  .checkbox-item {
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+  }
+
+  .checked-box {
+    display: inline-block;
+    width: 4.8mm;
+    height: 4.8mm;
+    margin-right: 0.7mm;
+    border: 0;
+    text-align: center;
+    line-height: 4.8mm;
+    font-family: "SimSun", "宋体", serif;
+    font-size: 10.5pt;
+    font-weight: 400;
+    background: transparent;
+  }
+
+  .checkbox-line .checked-box {
+    transform: translateY(0.2mm);
+  }
+
+  .form-input {
+    display: block;
+    width: 100%;
+    min-height: 7mm;
+    border: 0;
+    background: transparent;
+    color: #000;
+    text-align: center;
+    font: inherit;
+    outline: none;
+  }
+
+  .left-text {
+    text-align: left !important;
+  }
+
+  .inquiry-text {
+    padding: 4mm 6mm !important;
+    text-align: left !important;
+    font-size: 10.5pt;
+    line-height: 2;
+  }
+
+  .inquiry-text p {
+    margin: 0 0 2.4mm;
+  }
+
+  .inline-field {
+    display: inline-block;
+    min-width: 70mm;
+    border-bottom: 1px solid #000;
+    vertical-align: baseline;
+    text-align: center;
+  }
+
+  .commitment {
+    padding: 8mm 14mm !important;
+    text-align: left !important;
+    font-size: 10.5pt;
+    line-height: 1.9;
+  }
+
+  .commitment p {
+    margin: 0;
+    text-indent: 2em;
+  }
+
+  .signature-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 22mm;
+    row-gap: 13mm;
+    margin-top: 18mm;
+  }
+
+  .signature-line {
+    display: inline-block;
+    width: 42mm;
+    border-bottom: 1px solid #000;
+    transform: translateY(-1mm);
+  }
+
+  .signature-date {
+    margin-top: 8mm;
+    text-align: right;
+    letter-spacing: 3mm;
+    padding-right: 9mm;
+  }
+
+  @media print {
+    html,
+    body { background: #fff; }
+
+    .page {
+      height: 542mm;
+      margin: 0;
+      box-shadow: none;
+      break-after: page;
+      page-break-after: always;
+      overflow: hidden;
+    }
+
+    .main-table,
+    .main-table tbody {
+      break-inside: auto;
+      page-break-inside: auto;
+    }
+
+    .main-table tr {
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+
+    .page:last-child {
+      break-after: auto;
+      page-break-after: auto;
+    }
+    .print-btn { display: none !important; }
+  }
+
+  @media screen {
+    .page { box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12); }
+  }
+</style>
+</head>
+<body>
+
+<button class="print-btn" onclick="window.print()">打印</button>
+
+<div class="page">
+  <h1 class="form-title">不动产登记申请书</h1>
+
+  <table class="main-table">
+    <colgroup>
+      <col class="c1"><col class="c2"><col class="c3"><col class="c4"><col class="c5">
+      <col class="c6"><col class="c7"><col class="c8"><col class="c9"><col class="c10">
+    </colgroup>
+
+    <tr class="h-lg">
+      <td class="section-label" rowspan="2">申请登记事由</td>
+      <td class="sub-label">权利类型</td>
+      <td colspan="8">
+        <div class="checkbox-line">
+          <span class="checkbox-item"><span class="checked-box">{{ '☑' if right_type == 'land_contract' else '□' }}</span>土地承包经营权</span>
+          <span class="checkbox-item"><span class="checked-box">{{ '☑' if right_type == 'land_management' else '□' }}</span>土地经营权</span>
+        </div>
+      </td>
+    </tr>
+    <tr class="h-md">
+      <td class="sub-label">登记类型</td>
+      <td colspan="8">
+        <div class="checkbox-line">
+          <span class="checkbox-item"><span class="checked-box">{{ '☑' if reg_type == 'first' else '□' }}</span>首次登记</span>
+          <span class="checkbox-item"><span class="checked-box">{{ '☑' if reg_type == 'change' else '□' }}</span>变更登记</span>
+          <span class="checkbox-item"><span class="checked-box">{{ '☑' if reg_type == 'correction' else '□' }}</span>更正登记</span>
+          <span class="checkbox-item"><span class="checked-box">{{ '☑' if reg_type == 'replace' else '□' }}</span>补、换证</span>
+          <span class="checkbox-item"><span class="checked-box">{{ '☑' if reg_type == 'transfer' else '□' }}</span>转移登记</span>
+          <span class="checkbox-item"><span class="checked-box">{{ '☑' if reg_type == 'cancel' else '□' }}</span>注销登记</span>
+          <span class="checkbox-item"><span class="checked-box">{{ '☑' if reg_type == 'other' else '□' }}</span>其他</span>
+        </div>
+      </td>
+    </tr>
+
+    <tr class="h-sm">
+      <td class="section-label" rowspan="21">申 请 人 情 况</td>
+      <td class="sub-label" colspan="9">承包方代表</td>
+    </tr>
+    <tr class="h-sm">
+      <td class="sub-label" colspan="3">姓名(名称)</td>
+      <td class="sub-label">证件种类</td>
+      <td class="sub-label" colspan="2">证 件 号 码</td>
+      <td class="sub-label" colspan="3">联系电话</td>
+    </tr>
+    <tr class="h-sm">
+      <td colspan="3"><input class="form-input" type="text" value="{{ rep_name or '' }}"></td>
+      <td><input class="form-input" type="text" value="{{ rep_id_type or '' }}"></td>
+      <td colspan="2"><input class="form-input" type="text" value="{{ rep_id_number or '' }}"></td>
+      <td colspan="3"><input class="form-input" type="text" value="{{ rep_phone or '' }}"></td>
+    </tr>
+    <tr class="h-sm">
+      <td class="sub-label" colspan="9">承包方家庭成员情况</td>
+    </tr>
+    <tr class="h-md">
+      <td class="sub-label" colspan="3">姓名(名称)</td>
+      <td class="sub-label">证件种类</td>
+      <td class="sub-label" colspan="2">证 件 号 码</td>
+      <td class="sub-label">与承包方代表关系</td>
+      <td class="sub-label" colspan="2">联系电话</td>
+    </tr>
+    {% for member in family_members[:8] %}
+    <tr class="h-sm">
+      <td colspan="3"><input class="form-input" type="text" value="{{ member.name or '' }}"></td>
+      <td><input class="form-input" type="text" value="{{ member.id_type or '' }}"></td>
+      <td colspan="2"><input class="form-input" type="text" value="{{ member.id_number or '' }}"></td>
+      <td><input class="form-input" type="text" value="{{ member.relation or '' }}"></td>
+      <td colspan="2"><input class="form-input" type="text" value="{{ member.phone or '' }}"></td>
+    </tr>
+    {% endfor %}
+    {% for _ in range(8 - (family_members|length if family_members else 0)) %}
+    <tr class="h-sm">
+      <td colspan="3"><input class="form-input" type="text"></td>
+      <td><input class="form-input" type="text"></td>
+      <td colspan="2"><input class="form-input" type="text"></td>
+      <td><input class="form-input" type="text"></td>
+      <td colspan="2"><input class="form-input" type="text"></td>
+    </tr>
+    {% endfor %}
+    <tr class="h-sm">
+      <td class="sub-label" colspan="2">代理人</td>
+      <td><input class="form-input" type="text" value="{{ agent1_name or '' }}"></td>
+      <td><input class="form-input" type="text"></td>
+      <td colspan="2"><input class="form-input" type="text"></td>
+      <td><input class="form-input" type="text"></td>
+      <td colspan="2"><input class="form-input" type="text"></td>
+    </tr>
+    <tr class="h-sm">
+      <td class="sub-label" colspan="9">发包方</td>
+    </tr>
+    <tr class="h-lg">
+      <td class="sub-label" colspan="3">姓名(名称)</td>
+      <td class="sub-label">证件种类</td>
+      <td class="sub-label" colspan="2">证 件 号 码</td>
+      <td class="sub-label" colspan="3">联系电话</td>
+    </tr>
+    <tr class="h-md">
+      <td colspan="3"><input class="form-input" type="text" value="{{ issuer_name or '' }}"></td>
+      <td><input class="form-input" type="text" value="{{ issuer_id_type or '' }}"></td>
+      <td colspan="2"><input class="form-input" type="text" value="{{ issuer_id_number or '' }}"></td>
+      <td colspan="3"><input class="form-input" type="text" value="{{ issuer_phone or '' }}"></td>
+    </tr>
+    <tr class="h-md">
+      <td class="sub-label" colspan="2">代理人</td>
+      <td><input class="form-input" type="text" value="{{ agent2_name or '' }}"></td>
+      <td class="sub-label"><input class="form-input" type="text" value="{{ agent2_id_type or '身份证' }}"></td>
+      <td colspan="2"><input class="form-input" type="text"></td>
+      <td colspan="3"><input class="form-input" type="text"></td>
+    </tr>
+    <tr class="h-md">
+      <td class="sub-label" colspan="5">权利起始时间</td>
+      <td class="sub-label" colspan="4">权利结束时间</td>
+    </tr>
+    <tr class="h-md">
+      <td colspan="5"><input class="form-input" type="text" value="{{ right_start_date or '' }}"></td>
+      <td colspan="4"><input class="form-input" type="text" value="{{ right_end_date or '' }}"></td>
+    </tr>
+    <tr class="h-md">
+      <td class="sub-label" colspan="2">备 注</td>
+      <td colspan="7"><input class="form-input" type="text" value="{{ applicant_remarks or '' }}"></td>
+    </tr>
+
+    <tr class="h-md">
+      <td class="section-label" colspan="3">承包方式</td>
+      <td colspan="7">
+        <div class="checkbox-line">
+          <span class="checkbox-item"><span class="checked-box">{{ '☑' if contract_method == 'family' else '□' }}</span>家庭承包</span>
+          <span class="checkbox-item"><span class="checked-box">{{ '☑' if contract_method == 'other' else '□' }}</span>其他方式承包</span>
+        </div>
+      </td>
+    </tr>
+
+    <tr class="h-lg">
+      <td class="section-label" rowspan="11">不 动 产 情 况</td>
+      <td class="sub-label" colspan="3">承包地块确权总面积<br>(亩)</td>
+      <td colspan="2"><input class="form-input" type="text" value="{{ total_area_mu or '' }}"></td>
+      <td class="sub-label">承包地块总数<br>(块)</td>
+      <td colspan="3"><input class="form-input" type="text" value="{{ total_parcels or '' }}"></td>
+    </tr>
+    <tr class="h-sm">
+      <td class="sub-label" colspan="3">不动产单元号<br>（地块编码）</td>
+      <td class="sub-label" colspan="2">四至</td>
+      <td class="sub-label">确权面积(亩)</td>
+      <td class="sub-label" colspan="2">是否永久<br>基本农田</td>
+      <td class="sub-label">备注</td>
+    </tr>
+    {% for parcel in first_page_parcels %}
+    <tr class="h-xl">
+      <td colspan="3"><input class="form-input" type="text" value="{{ parcel.code or '' }}"></td>
+      <td colspan="2"><input class="form-input" type="text" value="{{ parcel.boundaries or '' }}"></td>
+      <td><input class="form-input" type="text" value="{{ parcel.area_mu or '' }}"></td>
+      <td colspan="2"><span class="checked-box">{{ '☑' if parcel.is_basic_farmland else '□' }}</span></td>
+      <td><input class="form-input" type="text" value="{{ parcel.remarks or '' }}"></td>
+    </tr>
+    {% endfor %}
+    {% for _ in range(9 - (first_page_parcels | length)) %}
+    <tr class="h-xl">
+      <td colspan="3"><input class="form-input" type="text"></td>
+      <td colspan="2"><input class="form-input" type="text"></td>
+      <td><input class="form-input" type="text"></td>
+      <td colspan="2"><span class="checked-box">□</span></td>
+      <td><input class="form-input" type="text"></td>
+    </tr>
+    {% endfor %}
+
+  </table>
+</div>
+
+{% for parcel_page in continuation_parcels | batch(continuation_capacity) %}
+<div class="page">
+  <h1 class="form-title">不动产登记申请书（续）</h1>
+
+  <table class="main-table">
+    <colgroup>
+      <col class="c1"><col class="c2"><col class="c3"><col class="c4"><col class="c5">
+      <col class="c6"><col class="c7"><col class="c8"><col class="c9"><col class="c10">
+    </colgroup>
+
+    <tr class="h-lg">
+      <td class="section-label" rowspan="{{ (parcel_page | length) + 2 }}">不 动 产 情 况<br>（续）</td>
+      <td class="sub-label" colspan="3">承包地块确权总面积<br>(亩)</td>
+      <td colspan="2"><input class="form-input" type="text" value="{{ total_area_mu or '' }}"></td>
+      <td class="sub-label">承包地块总数<br>(块)</td>
+      <td colspan="3"><input class="form-input" type="text" value="{{ total_parcels or '' }}"></td>
+    </tr>
+    <tr class="h-sm">
+      <td class="sub-label" colspan="3">不动产单元号<br>（地块编码）</td>
+      <td class="sub-label" colspan="2">四至</td>
+      <td class="sub-label">确权面积(亩)</td>
+      <td class="sub-label" colspan="2">是否永久<br>基本农田</td>
+      <td class="sub-label">备注</td>
+    </tr>
+    {% for parcel in parcel_page %}
+    <tr class="h-xl">
+      <td colspan="3"><input class="form-input" type="text" value="{{ parcel.code or '' }}"></td>
+      <td colspan="2"><input class="form-input" type="text" value="{{ parcel.boundaries or '' }}"></td>
+      <td><input class="form-input" type="text" value="{{ parcel.area_mu or '' }}"></td>
+      <td colspan="2"><span class="checked-box">{{ '☑' if parcel.is_basic_farmland else '□' }}</span></td>
+      <td><input class="form-input" type="text" value="{{ parcel.remarks or '' }}"></td>
+    </tr>
+    {% endfor %}
+
+  </table>
+</div>
+{% endfor %}
+
+<div class="page">
+  <h1 class="form-title">{{ '不动产登记申请书（续）' if footer_parcels else '不动产登记申请书' }}</h1>
+
+  <table class="main-table">
+    <colgroup>
+      <col class="c1"><col class="c2"><col class="c3"><col class="c4"><col class="c5">
+      <col class="c6"><col class="c7"><col class="c8"><col class="c9"><col class="c10">
+    </colgroup>
+
+    {% if footer_parcels %}
+    <tr class="h-lg">
+      <td class="section-label" rowspan="{{ (footer_parcels | length) + 2 }}">不 动 产 情 况<br>（续）</td>
+      <td class="sub-label" colspan="3">承包地块确权总面积<br>(亩)</td>
+      <td colspan="2"><input class="form-input" type="text" value="{{ total_area_mu or '' }}"></td>
+      <td class="sub-label">承包地块总数<br>(块)</td>
+      <td colspan="3"><input class="form-input" type="text" value="{{ total_parcels or '' }}"></td>
+    </tr>
+    <tr class="h-sm">
+      <td class="sub-label" colspan="3">不动产单元号<br>（地块编码）</td>
+      <td class="sub-label" colspan="2">四至</td>
+      <td class="sub-label">确权面积(亩)</td>
+      <td class="sub-label" colspan="2">是否永久<br>基本农田</td>
+      <td class="sub-label">备注</td>
+    </tr>
+    {% for parcel in footer_parcels %}
+    <tr class="h-xl">
+      <td colspan="3"><input class="form-input" type="text" value="{{ parcel.code or '' }}"></td>
+      <td colspan="2"><input class="form-input" type="text" value="{{ parcel.boundaries or '' }}"></td>
+      <td><input class="form-input" type="text" value="{{ parcel.area_mu or '' }}"></td>
+      <td colspan="2"><span class="checked-box">{{ '☑' if parcel.is_basic_farmland else '□' }}</span></td>
+      <td><input class="form-input" type="text" value="{{ parcel.remarks or '' }}"></td>
+    </tr>
+    {% endfor %}
+    {% endif %}
+
+    <tr class="h-inquiry">
+      <td class="section-label">询问记录</td>
+      <td class="inquiry-text" colspan="9">
+        <p>
+          1.申请登记事项是否为申请人真实意思表示？&nbsp;&nbsp;回答：
+          <span class="checked-box">{{ '☑' if inquiry_q1 == 'yes' else '□' }}</span>是
+          &nbsp;&nbsp;
+          <span class="checked-box">{{ '☑' if inquiry_q1 == 'no' else '□' }}</span>否
+        </p>
+        <p>
+          2.申请人申请登记所提交资料（包括但不限于数据电文形式）是否真实？&nbsp;&nbsp;回答：
+          <span class="checked-box">{{ '☑' if inquiry_q2 == 'yes' else '□' }}</span>是
+          &nbsp;&nbsp;
+          <span class="checked-box">{{ '☑' if inquiry_q2 == 'no' else '□' }}</span>否
+        </p>
+        <p>3.其他需询问事项：</p>
+        <p>回答：<span class="inline-field">{{ inquiry_q3 or '' }}</span></p>
+      </td>
+    </tr>
+
+    <tr class="h-commitment">
+      <td class="commitment" colspan="10">
+        <p>本申请人(代理人)承诺所提交的登记申请材料、申请信息真实、合法、有效，询问事项经确认无误。如有任何虚假，由申请人(代理人)承担由此引致的法律责任。</p>
+        <div class="signature-grid">
+          <div>承包方户主或户主代表(签名或盖章)：<span class="signature-line"></span></div>
+          <div>发包方(盖章)：<span class="signature-line"></span></div>
+          <div>代理人(签名或盖章)：<span class="signature-line"></span></div>
+          <div>代理人(签名或盖章)：<span class="signature-line"></span></div>
+        </div>
+        <div class="signature-date">年 月 日</div>
+      </td>
+    </tr>
+  </table>
+</div>
+
+</body>
+</html>

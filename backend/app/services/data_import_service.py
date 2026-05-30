@@ -51,36 +51,36 @@ class DataImportService:
     progress_update_interval = 100
     cbf_field_map = {
         "cbfbm": ["cbfbm", "承包方代码", "code"],
-        "region_code": ["region_code", "区域代码", "regionCode"],
-        "region_name": ["region_name", "区域名称", "regionName"],
+        "region_code": ["region_code", "鍖哄煙浠ｇ爜", "regionCode"],
+        "region_name": ["region_name", "鍖哄煙鍚嶇О", "regionName"],
         "cbflx": ["cbflx", "承包方类型", "typeCode"],
         "cbfmc": ["cbfmc", "承包方名称", "承包方(代表)名称", "name"],
         "cbfzjlx": ["cbfzjlx", "证件类型", "承包方(代表)证件类型", "idType"],
         "cbfzjhm": ["cbfzjhm", "证件号码", "承包方(代表)证件号码", "idNo"],
-        "cbfdz": ["cbfdz", "承包方地址", "address"],
-        "yzbm": ["yzbm", "邮政编码", "postcode"],
-        "lxdh": ["lxdh", "联系电话", "mobile"],
+        "cbfdz": ["cbfdz", "鎵垮寘鏂瑰湴鍧€", "address"],
+        "yzbm": ["yzbm", "閭斂缂栫爜", "postcode"],
+        "lxdh": ["lxdh", "鑱旂郴鐢佃瘽", "mobile"],
         "cbfcysl": ["cbfcysl", "承包方成员数量", "家庭成员数", "memberCount"],
         "cbfdcrq": ["cbfdcrq", "承包方调查日期", "surveyDate"],
-        "cbfdcy": ["cbfdcy", "承包方调查员", "surveyorName"],
+        "cbfdcy": ["cbfdcy", "鎵垮寘鏂硅皟鏌ュ憳", "surveyorName"],
         "cbfdcjs": ["cbfdcjs", "承包方调查记事", "surveyNote"],
-        "gsjs": ["gsjs", "公示记事", "publicNoticeNote"],
+        "gsjs": ["gsjs", "鍏ず璁颁簨", "publicNoticeNote"],
         "gsjsr": ["gsjsr", "公示记事人", "publicNoticeRecorder"],
-        "gsshrq": ["gsshrq", "公示审核日期", "publicNoticeReviewDate"],
+        "gsshrq": ["gsshrq", "鍏ず瀹℃牳鏃ユ湡", "publicNoticeReviewDate"],
         "gsshr": ["gsshr", "公示审核人", "publicNoticeReviewer"],
-        "group_region_code": ["group_region_code", "所属组代码", "groupRegionCode"],
-        "group_region_name": ["group_region_name", "所属组名称", "groupRegionName"],
+        "group_region_code": ["group_region_code", "鎵€灞炵粍浠ｇ爜", "groupRegionCode"],
+        "group_region_name": ["group_region_name", "鎵€灞炵粍鍚嶇О", "groupRegionName"],
     }
     member_field_map = {
         "cbfbm": ["cbfbm", "承包方代码", "contractorCode"],
-        "cyxm": ["cyxm", "成员姓名", "姓名", "name"],
-        "cyzjlx": ["cyzjlx", "证件类型", "idType"],
-        "cyzjhm": ["cyzjhm", "证件号码", "身份证号", "idNo"],
-        "cyxb": ["cyxb", "性别", "gender"],
+        "cyxm": ["cyxm", "鎴愬憳濮撳悕", "濮撳悕", "name"],
+        "cyzjlx": ["cyzjlx", "璇佷欢绫诲瀷", "idType"],
+        "cyzjhm": ["cyzjhm", "璇佷欢鍙风爜", "韬唤璇佸彿", "idNo"],
+        "cyxb": ["cyxb", "鎬у埆", "gender"],
         "yhzgx": ["yhzgx", "与户主关系", "relationToHead"],
-        "cybz": ["cybz", "成员备注代码", "备注代码", "noteCode"],
+        "cybz": ["cybz", "鎴愬憳澶囨敞浠ｇ爜", "澶囨敞浠ｇ爜", "noteCode"],
         "sfgyr": ["sfgyr", "是否共有人", "isCoOwner"],
-        "cybzsm": ["cybzsm", "成员备注说明", "备注说明", "note"],
+        "cybzsm": ["cybzsm", "鎴愬憳澶囨敞璇存槑", "澶囨敞璇存槑", "note"],
     }
     fbf_field_map = {
         "fbfbm": ["fbfbm", "FBFBM", "code"],
@@ -142,34 +142,22 @@ class DataImportService:
     }
     template_headers = {
         "cbf": [
-            "承包方代码",
-            "区域代码",
-            "区域名称",
-            "承包方类型",
-            "承包方名称",
-            "证件类型",
-            "证件号码",
-            "承包方地址",
-            "邮政编码",
-            "联系电话",
-            "家庭成员数",
-            "承包方调查日期",
-            "承包方调查员",
-            "承包方调查记事",
-            "公示记事",
-            "公示记事人",
-            "公示审核日期",
-            "公示审核人",
-            "所属组代码",
-            "所属组名称",
+            "承包方代码", "区域代码", "区域名称", "承包方类型", "承包方名称",
+            "证件类型", "证件号码", "承包方地址", "邮政编码", "联系电话",
+            "家庭成员数", "承包方调查日期", "承包方调查员", "承包方调查记事",
+            "公示记事", "公示记事人", "公示审核日期", "公示审核人",
+            "所属组代码", "所属组名称",
         ],
-        "cbf_jtcy": ["承包方代码", "成员姓名", "证件类型", "证件号码", "性别", "与户主关系", "成员备注代码", "是否共有人", "成员备注说明"],
+        "cbf_jtcy": [
+            "承包方代码", "成员姓名", "证件类型", "证件号码", "性别",
+            "与户主关系", "成员备注代码", "是否共有人", "成员备注说明",
+        ],
     }
     template_field_notes = {
         "cbf": [
             ("承包方代码", "必填，18位承包方代码"),
-            ("区域代码", "必填，填写本条承包方实际所属村/组等区域代码，导入到 survey 表的 region_code 使用该值"),
-            ("区域名称", "选填，区域代码存在于区域表时会按代码取区域全称"),
+            ("区域代码", "必填，填写实际所属村/组等区域代码"),
+            ("区域名称", "选填，留空时可按区域代码补全"),
             ("承包方类型", "必填，1=农户，2=个人，3=单位"),
             ("承包方名称", "必填，农户填写户主或代表名称"),
             ("证件类型", "必填，1=居民身份证，4=户口簿，9=其他"),
@@ -177,7 +165,7 @@ class DataImportService:
             ("承包方地址", "必填"),
             ("邮政编码", "必填，6位"),
             ("联系电话", "选填"),
-            ("家庭成员数", "选填，导入成员后会自动回算"),
+            ("家庭成员数", "选填，导入成员后会自动回填"),
             ("承包方调查日期", "选填，格式 YYYY-MM-DD"),
             ("承包方调查员", "必填"),
             ("承包方调查记事", "选填"),
@@ -185,7 +173,7 @@ class DataImportService:
             ("公示记事人", "选填"),
             ("公示审核日期", "选填，格式 YYYY-MM-DD"),
             ("公示审核人", "选填"),
-            ("所属组代码", "选填，必须在当前调查员可操作的区域权限范围内"),
+            ("所属组代码", "选填，必须在当前调查员可操作的数据权限范围内"),
             ("所属组名称", "选填，留空时按所属组代码自动取区域全称"),
         ],
         "cbf_jtcy": [
@@ -247,14 +235,14 @@ class DataImportService:
 
     async def upload_csv(self, db: Session, batch_id: int, file_type: str, upload_file: UploadFile, current_user: User) -> dict:
         if file_type not in {"cbf", "cbf_jtcy"}:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="仅支持 cbf 或 cbf_jtcy 数据类型")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="浠呮敮鎸?cbf 鎴?cbf_jtcy 鏁版嵁绫诲瀷")
         batch = db.get(DataImportBatch, batch_id)
         if batch is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导入批次不存在")
 
         content = await upload_file.read()
         if not content:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="上传文件为空")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="涓婁紶鏂囦欢涓虹┖")
 
         now = datetime.now(timezone.utc)
         stats = self._process_csv_content(
@@ -281,20 +269,20 @@ class DataImportService:
     async def upload_archive(self, db: Session, batch_id: int, upload_file: UploadFile, current_user: User) -> dict:
         batch = db.get(DataImportBatch, batch_id)
         if batch is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导入批次不存在")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="import batch not found")
 
         content = await upload_file.read()
         if not content:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="上传文件为空")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="uploaded file is empty")
 
         filename = upload_file.filename or "import.zip"
         if not filename.lower().endswith(".zip"):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请上传 ZIP 压缩包")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="please upload a ZIP archive")
 
         try:
             archive = zipfile.ZipFile(io.BytesIO(content))
         except zipfile.BadZipFile as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无法读取 ZIP 压缩包") from exc
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="failed to read ZIP archive") from exc
 
         csv_files: dict[str, tuple[str, bytes]] = {}
         for item in archive.infolist():
@@ -307,12 +295,12 @@ class DataImportService:
             if inferred_type is None:
                 continue
             if inferred_type in csv_files:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"压缩包内存在多个 {inferred_type} CSV 文件")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"duplicate {inferred_type} CSV file in archive")
             csv_files[inferred_type] = (inner_name, archive.read(item))
 
-        missing = [label for key, label in (("cbf", "承包方"), ("cbf_jtcy", "家庭成员")) if key not in csv_files]
+        missing = [label for key, label in (("cbf", "contractor"), ("cbf_jtcy", "member")) if key not in csv_files]
         if missing:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"压缩包缺少{','.join(missing)} CSV 文件")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"archive missing {",".join(missing)} CSV file")
 
         now = datetime.now(timezone.utc)
         batch.source_type = "zip"
@@ -327,7 +315,7 @@ class DataImportService:
             row_count=0,
             uploaded_by=current_user.id,
             uploaded_at=now,
-            remark="承包方与家庭成员合并上传压缩包",
+            remark="contractor and member archive upload",
         )
         db.add(archive_file)
         db.flush()
@@ -344,7 +332,7 @@ class DataImportService:
                 content=inner_content,
                 current_user=current_user,
                 now=now,
-                remark=f"来自压缩包：{filename}",
+                remark=f"鏉ヨ嚜鍘嬬缉鍖咃細{filename}",
             )
             stats_list.append(stats)
 
@@ -367,11 +355,11 @@ class DataImportService:
         if batch is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导入批次不存在")
         if not batch.region_code:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="导入 GDB 前请先选择导入区域")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="瀵煎叆 GDB 鍓嶈鍏堥€夋嫨瀵煎叆鍖哄煙")
 
         content = await upload_file.read()
         if not content:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="上传文件为空")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="涓婁紶鏂囦欢涓虹┖")
 
         filename = upload_file.filename or "import_gdb.zip"
         return self._process_gdb_archive_content(db, batch, filename, content, upload_file.content_type, current_user)
@@ -381,15 +369,15 @@ class DataImportService:
         if batch is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导入批次不存在")
         if not batch.region_code:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="导入 GDB 前请先选择导入区域")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="瀵煎叆 GDB 鍓嶈鍏堥€夋嫨瀵煎叆鍖哄煙")
 
         content = await upload_file.read()
         if not content:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="上传文件为空")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="涓婁紶鏂囦欢涓虹┖")
 
         filename = upload_file.filename or "import_gdb.zip"
         if not filename.lower().endswith(".zip"):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请上传包含 .gdb 目录的 ZIP 压缩包")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="please upload a ZIP archive containing a .gdb directory")
 
         storage_dir = Path(__file__).resolve().parents[1] / "storage" / "data_imports" / str(batch.id)
         storage_dir.mkdir(parents=True, exist_ok=True)
@@ -409,7 +397,7 @@ class DataImportService:
             job_id,
             {
                 "status": "queued",
-                "message": "文件已上传，等待后台导入",
+                "message": "鏂囦欢宸蹭笂浼狅紝绛夊緟鍚庡彴瀵煎叆",
                 "filename": filename,
                 "fileSize": len(content),
             },
@@ -423,10 +411,10 @@ class DataImportService:
             current_user = db.get(User, user_id)
             batch = db.get(DataImportBatch, batch_id)
             if current_user is None or batch is None:
-                data_import_progress.update(batch_id, status="failed", message="导入批次或用户不存在")
+                data_import_progress.update(batch_id, status="failed", message="import context not found")
                 return
             set_current_user(db, current_user)
-            data_import_progress.update(batch_id, status="running", message="后台导入已开始")
+            data_import_progress.update(batch_id, status="running", message="background import started")
             content = Path(stored_path).read_bytes()
             self._process_gdb_archive_content(db, batch, filename, content, content_type, current_user, job_id=job_id)
         except ImportCanceled:
@@ -435,7 +423,7 @@ class DataImportService:
             if batch is not None:
                 batch.status = "canceled"
                 db.commit()
-            data_import_progress.update(batch_id, status="canceled", message="导入已取消")
+            data_import_progress.update(batch_id, status="canceled", message="import canceled")
             logger.info("GDB import canceled: batch_id=%s", batch_id)
         except Exception:
             db.rollback()
@@ -443,7 +431,7 @@ class DataImportService:
             if batch is not None:
                 batch.status = "failed"
                 db.commit()
-            data_import_progress.update(batch_id, status="failed", message="导入失败，详见后端日志")
+            data_import_progress.update(batch_id, status="failed", message="import failed; see backend logs")
             logger.exception("GDB import job failed: batch_id=%s filename=%s", batch_id, filename)
         finally:
             db.close()
@@ -459,7 +447,7 @@ class DataImportService:
         job_id: str | None = None,
     ) -> dict:
         if not filename.lower().endswith(".zip"):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请上传包含 .gdb 目录的 ZIP 压缩包")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="please upload a ZIP archive containing a .gdb directory")
 
         try:
             logger.info(
@@ -474,7 +462,7 @@ class DataImportService:
             archive = zipfile.ZipFile(io.BytesIO(content))
         except zipfile.BadZipFile as exc:
             logger.warning("GDB import rejected: invalid zip batch_id=%s filename=%s", batch.id, filename)
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无法读取 ZIP 压缩包") from exc
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="failed to read ZIP archive") from exc
 
         now = datetime.now(timezone.utc)
         batch.source_type = "gdb"
@@ -489,7 +477,7 @@ class DataImportService:
             row_count=0,
             uploaded_by=current_user.id,
             uploaded_at=now,
-            remark="GDB 全量导入压缩包",
+            remark="GDB archive import",
         )
         db.add(archive_file)
         db.flush()
@@ -520,16 +508,16 @@ class DataImportService:
             batch.success_count,
             batch.failed_count,
         )
-        data_import_progress.update(batch.id, status=batch.status, message="导入完成")
+        data_import_progress.update(batch.id, status=batch.status, message="瀵煎叆瀹屾垚")
         return self._serialize_batch(batch)
 
     def _extract_zip_safely(self, archive: zipfile.ZipFile, target_dir: str) -> None:
         for item in archive.infolist():
             if "\\" in item.filename:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ZIP 压缩包包含非法路径")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ZIP archive contains an unsafe path")
             item_path = PurePosixPath(item.filename)
             if item_path.is_absolute() or ".." in item_path.parts:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ZIP 压缩包包含非法路径")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ZIP archive contains an unsafe path")
         archive.extractall(target_dir)
 
     def _find_gdb_path(self, root_dir: str) -> str:
@@ -538,7 +526,7 @@ class DataImportService:
         for path in Path(root_dir).rglob("*.gdb"):
             if path.is_dir():
                 return str(path)
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ZIP 压缩包中未找到 .gdb 目录")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ZIP 鍘嬬缉鍖呬腑鏈壘鍒?.gdb 鐩綍")
 
     def _process_gdb_layers(
         self,
@@ -551,12 +539,12 @@ class DataImportService:
         try:
             import fiona
         except ImportError as exc:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="后端缺少 Fiona/GDAL，无法读取 GDB") from exc
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="鍚庣缂哄皯 Fiona/GDAL锛屾棤娉曡鍙?GDB") from exc
 
         try:
             available_layers = list(fiona.listlayers(gdb_path))
         except Exception as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"无法读取 GDB 图层：{exc}") from exc
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"failed to read GDB layer: {exc}") from exc
 
         logger.info("GDB layers discovered: gdb_path=%s layers=%s", gdb_path, available_layers)
         layer_map: dict[str, str] = {}
@@ -572,7 +560,7 @@ class DataImportService:
                     total_rows += len(source)
             except Exception:
                 logger.exception("Failed to count GDB layer rows: gdb_path=%s layer=%s", gdb_path, layer_name)
-        data_import_progress.update(batch.id, totalRows=total_rows, processedRows=0, successRows=0, failedRows=0, status="running", message="开始读取 GDB 图层")
+        data_import_progress.update(batch.id, totalRows=total_rows, processedRows=0, successRows=0, failedRows=0, status="running", message="寮€濮嬭鍙?GDB 鍥惧眰")
 
         stats_list = []
         for file_type in self.gdb_layer_order:
@@ -582,7 +570,7 @@ class DataImportService:
             stats_list.append(self._process_gdb_layer(db, batch, gdb_path, layer_name, file_type, current_user, now, fiona))
 
         if not stats_list:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="GDB 中未识别到 FBF、CBF、CBF_JTCY、CBDKXX 或 DK 图层")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="GDB 涓湭璇嗗埆鍒?FBF銆丆BF銆丆BF_JTCY銆丆BDKXX 鎴?DK 鍥惧眰")
         return stats_list
 
     def _process_gdb_layer(
@@ -607,7 +595,7 @@ class DataImportService:
             row_count=0,
             uploaded_by=current_user.id,
             uploaded_at=now,
-            remark=f"来自 GDB 图层：{layer_name}",
+            remark=f"from GDB layer: {layer_name}",
         )
         db.add(import_file)
         db.flush()
@@ -618,7 +606,6 @@ class DataImportService:
         seen_keys: set[str] = set()
         affected_contractors: set[str] = set()
         survey_batch = self._ensure_import_survey_batch(db, batch, current_user, now)
-        existing_state = self._build_import_existing_state(db, survey_batch, file_type)
         progress = data_import_progress.get(batch.id) or {}
         progress_state = {
             "processedRows": int(progress.get("processedRows") or 0),
@@ -635,46 +622,14 @@ class DataImportService:
                 processedRows=progress_state["processedRows"],
                 successRows=progress_state["successRows"],
                 failedRows=progress_state["failedRows"],
-                message=f"正在导入 {current_layer}",
+                message=f"姝ｅ湪瀵煎叆 {current_layer}",
             )
 
         def process_items(items: list[dict]) -> None:
             nonlocal success_count, failed_count
             if not items:
                 return
-            if self._can_bulk_insert_new_items(file_type, existing_state):
-                try:
-                    with db.begin_nested():
-                        bulk_success, bulk_failed, bulk_affected = self._bulk_insert_new_items(
-                            db,
-                            batch,
-                            import_file,
-                            survey_batch,
-                            file_type,
-                            items,
-                            current_user,
-                            now,
-                            seen_keys,
-                        )
-                    success_count += bulk_success
-                    failed_count += bulk_failed
-                    affected_contractors.update(bulk_affected)
-                    progress_state["processedRows"] += len(items)
-                    progress_state["successRows"] += bulk_success
-                    progress_state["failedRows"] += bulk_failed
-                    db.commit()
-                    update_progress(layer_name, force=True)
-                    return
-                except Exception:
-                    logger.exception(
-                        "Bulk new GDB import failed, falling back to row import: batch_id=%s file_type=%s layer=%s rows=%s",
-                        batch.id,
-                        file_type,
-                        layer_name,
-                        len(items),
-                    )
-
-            context = self._build_import_context(db, batch, survey_batch, file_type, items, existing_state)
+            context = {"survey_batch": survey_batch, "gdb_result_only": True}
             for item in items:
                 row_record = DataImportRow(
                     import_batch_id=batch.id,
@@ -684,7 +639,7 @@ class DataImportService:
                     entity_key=item["entity_key"],
                     operation_type="insert",
                     status="pending",
-                    target_table=f"survey_{file_type}_base" if file_type not in {"cbf", "cbf_jtcy"} else file_type,
+                    target_table=f"survey_{file_type}_result",
                     raw_data=item["raw"],
                     normalized_data=item["normalized"],
                 )
@@ -692,9 +647,9 @@ class DataImportService:
                 try:
                     with db.begin_nested():
                         if not item["entity_key"]:
-                            raise ValueError("无法识别业务主键")
+                            raise ValueError("鏃犳硶璇嗗埆涓氬姟涓婚敭")
                         if item["entity_key"] in seen_keys:
-                            raise ValueError(f"同一图层内业务主键重复：{item['entity_key']}")
+                            raise ValueError(f"鍚屼竴鍥惧眰鍐呬笟鍔′富閿噸澶嶏細{item['entity_key']}")
                         operation, target_id = self._import_row(
                             db,
                             batch,
@@ -771,7 +726,7 @@ class DataImportService:
             update_progress(layer_name, force=True)
 
         if file_type == "cbf_jtcy":
-            self._recount_member_counts(db, affected_contractors)
+            self._recount_result_member_counts(db, affected_contractors, survey_batch.id)
         import_file.row_count = row_count
         import_file.error_count = failed_count
         import_file.parse_status = "success" if failed_count == 0 else ("partial_success" if success_count else "failed")
@@ -852,9 +807,9 @@ class DataImportService:
             )
             try:
                 if not entity_key:
-                    raise ValueError("无法识别业务主键")
+                    raise ValueError("鏃犳硶璇嗗埆涓氬姟涓婚敭")
                 if entity_key in seen_keys:
-                    raise ValueError(f"同一文件内业务主键重复：{entity_key}")
+                    raise ValueError(f"鍚屼竴鏂囦欢鍐呬笟鍔′富閿噸澶嶏細{entity_key}")
                 seen_keys.add(entity_key)
                 operation, target_id = self._import_row(db, batch, import_file, row_record, file_type, normalized, current_user, now, context=context)
                 row_record.operation_type = operation
@@ -900,30 +855,30 @@ class DataImportService:
         if file_type == "cbf":
             return {
                 "cbf_base": self._has_any(db, SurveyCbfBase, SurveyCbfBase.batch_id == survey_batch.id),
-                "cbf_result": self._has_any(db, SurveyCbfResult, SurveyCbfResult.batch_id == survey_batch.id),
+                "cbf_result": self._has_any(db, SurveyCbfResult, SurveyCbfResult.base_id.in_(select(SurveyCbfBase.id).where(SurveyCbfBase.batch_id == survey_batch.id))),
                 "contractor_task": self._has_any(db, SurveyContractorTask, SurveyContractorTask.batch_id == survey_batch.id),
             }
         if file_type == "cbf_jtcy":
             return {
                 "contractor_base": self._has_any(db, SurveyCbfBase, SurveyCbfBase.batch_id == survey_batch.id),
                 "member_base": self._has_any(db, SurveyCbfJtcyBase, SurveyCbfJtcyBase.batch_id == survey_batch.id),
-                "member_result": self._has_any(db, SurveyCbfJtcyResult, SurveyCbfJtcyResult.batch_id == survey_batch.id),
+                "member_result": self._has_any(db, SurveyCbfJtcyResult, SurveyCbfJtcyResult.base_id.in_(select(SurveyCbfJtcyBase.id).where(SurveyCbfJtcyBase.batch_id == survey_batch.id))),
             }
         if file_type == "fbf":
             return {
                 "fbf_base": self._has_any(db, SurveyFbfBase, SurveyFbfBase.batch_id == survey_batch.id),
-                "fbf_result": self._has_any(db, SurveyFbfResult, SurveyFbfResult.batch_id == survey_batch.id),
+                "fbf_result": self._has_any(db, SurveyFbfResult, SurveyFbfResult.base_id.in_(select(SurveyFbfBase.id).where(SurveyFbfBase.batch_id == survey_batch.id))),
                 "legacy_fbf": self._has_any(db, Fbf),
             }
         if file_type == "cbdkxx":
             return {
                 "cbdkxx_base": self._has_any(db, SurveyCbdkxxBase, SurveyCbdkxxBase.batch_id == survey_batch.id),
-                "cbdkxx_result": self._has_any(db, SurveyCbdkxxResult, SurveyCbdkxxResult.batch_id == survey_batch.id),
+                "cbdkxx_result": self._has_any(db, SurveyCbdkxxResult, SurveyCbdkxxResult.base_id.in_(select(SurveyCbdkxxBase.id).where(SurveyCbdkxxBase.batch_id == survey_batch.id))),
             }
         if file_type == "dk":
             return {
                 "dk_base": self._has_any(db, SurveyDkBase, SurveyDkBase.batch_id == survey_batch.id),
-                "dk_result": self._has_any(db, SurveyDkResult, SurveyDkResult.batch_id == survey_batch.id),
+                "dk_result": self._has_any(db, SurveyDkResult, SurveyDkResult.base_id.in_(select(SurveyDkBase.id).where(SurveyDkBase.batch_id == survey_batch.id))),
             }
         return {}
 
@@ -944,9 +899,9 @@ class DataImportService:
     def _validate_bulk_item_key(self, item: dict, seen_keys: set[str], local_seen: set[str]) -> str:
         entity_key = item["entity_key"]
         if not entity_key:
-            raise ValueError("无法识别业务主键")
+            raise ValueError("鏃犳硶璇嗗埆涓氬姟涓婚敭")
         if entity_key in seen_keys or entity_key in local_seen:
-            raise ValueError(f"同一图层内业务主键重复：{entity_key}")
+            raise ValueError(f"鍚屼竴鍥惧眰鍐呬笟鍔′富閿噸澶嶏細{entity_key}")
         return entity_key
 
     def _add_failed_import_row(
@@ -996,7 +951,7 @@ class DataImportService:
             return self._bulk_insert_new_cbdkxx(db, batch, import_file, survey_batch, items, current_user, now, seen_keys)
         if file_type == "dk":
             return self._bulk_insert_new_dk(db, batch, import_file, survey_batch, items, current_user, now, seen_keys)
-        raise ValueError(f"不支持的数据类型：{file_type}")
+            raise ValueError(f"unsupported data type: {file_type}")
 
     def _bulk_insert_new_cbf(
         self,
@@ -1019,7 +974,7 @@ class DataImportService:
                 entity_key = self._validate_bulk_item_key(item, seen_keys, local_seen)
                 required = ["cbfbm", "region_code", "cbflx", "cbfmc", "cbfzjlx", "cbfzjhm", "cbfdz", "yzbm", "cbfdcy"]
                 self._ensure_required(data, required)
-                data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="承包方不在当前数据权限范围内")
+                data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="鎵垮寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
                 region_code, _region_name = self._resolve_import_region(db, data, current_user)
                 tenant_code = data_access_service.derive_tenant_code(region_code)
                 group_region_code, group_region_name = self._resolve_group_region(db, data, current_user)
@@ -1078,7 +1033,6 @@ class DataImportService:
             results = []
             for base in bases:
                 result = SurveyCbfResult(
-                    batch_id=survey_batch.id,
                     contractor_uid=base.contractor_uid,
                     base_id=base.id,
                     initialized_from_base_id=base.id,
@@ -1117,10 +1071,10 @@ class DataImportService:
                 entity_key = self._validate_bulk_item_key(item, seen_keys, local_seen)
                 required = ["cbfbm", "cyxm", "cyzjlx", "cyzjhm", "cyxb", "yhzgx"]
                 self._ensure_required(data, required)
-                data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="家庭成员不在当前数据权限范围内")
+                data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="out of scope")
                 contractor_base = contractor_by_code.get(data["cbfbm"])
                 if contractor_base is None:
-                    raise ValueError(f"家庭成员对应承包方不存在：{data['cbfbm']}")
+                    raise ValueError(f"member contractor not found: {data['cbfbm']}")
                 member_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:member:{data['cbfbm']}:{data['cyzjhm']}"))
                 bases.append(
                     SurveyCbfJtcyBase(
@@ -1158,7 +1112,6 @@ class DataImportService:
             results = []
             for base in bases:
                 result = SurveyCbfJtcyResult(
-                    batch_id=survey_batch.id,
                     contractor_uid=base.contractor_uid,
                     member_uid=base.member_uid,
                     base_id=base.id,
@@ -1193,7 +1146,7 @@ class DataImportService:
                 entity_key = self._validate_bulk_item_key(item, seen_keys, local_seen)
                 required = ["fbfbm", "fbfmc", "fbffzrxm", "fzrzjlx", "fzrzjhm", "fbfdz", "yzbm", "fbfdcy", "fbfdcrq"]
                 self._ensure_required(data, required)
-                data_access_service.ensure_code_in_scope(current_user, data["fbfbm"], detail="发包方不在当前数据权限范围内")
+                data_access_service.ensure_code_in_scope(current_user, data["fbfbm"], detail="鍙戝寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
                 region_code = self._resolve_code_region(data.get("region_code") or batch.region_code or data["fbfbm"], current_user)
                 tenant_code = data_access_service.derive_tenant_code(region_code)
                 issuer_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:fbf:{data['fbfbm']}"))
@@ -1251,7 +1204,6 @@ class DataImportService:
             results = []
             for base in bases:
                 result = SurveyFbfResult(
-                    batch_id=survey_batch.id,
                     issuer_uid=base.issuer_uid,
                     base_id=base.id,
                     initialized_from_base_id=base.id,
@@ -1285,7 +1237,7 @@ class DataImportService:
                 entity_key = self._validate_bulk_item_key(item, seen_keys, local_seen)
                 required = ["dkbm", "fbfbm", "cbfbm", "cbjyqqdfs", "htmj", "cbhtbm", "cbjyqzbm"]
                 self._ensure_required(data, required)
-                data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="承包地块信息不在当前数据权限范围内")
+                data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="out of scope")
                 region_code = self._resolve_code_region(data.get("region_code") or batch.region_code or data["cbfbm"], current_user)
                 tenant_code = data_access_service.derive_tenant_code(region_code)
                 parcel_info_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:cbdkxx:{data['dkbm']}:{data['cbfbm']}"))
@@ -1326,7 +1278,6 @@ class DataImportService:
             results = []
             for base in bases:
                 result = SurveyCbdkxxResult(
-                    batch_id=survey_batch.id,
                     parcel_info_uid=base.parcel_info_uid,
                     base_id=base.id,
                     initialized_from_base_id=base.id,
@@ -1360,7 +1311,7 @@ class DataImportService:
                 entity_key = self._validate_bulk_item_key(item, seen_keys, local_seen)
                 required = ["ysdm", "dkbm", "dkmc", "dklb", "dldj", "tdyt", "sfjbnt", "scmj"]
                 self._ensure_required(data, required)
-                data_access_service.ensure_code_in_scope(current_user, data["dkbm"], detail="地块不在当前数据权限范围内")
+                data_access_service.ensure_code_in_scope(current_user, data["dkbm"], detail="out of scope")
                 region_code = self._resolve_code_region(data.get("region_code") or batch.region_code or data["dkbm"], current_user)
                 tenant_code = data_access_service.derive_tenant_code(region_code)
                 parcel_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:dk:{data['dkbm']}"))
@@ -1408,7 +1359,6 @@ class DataImportService:
             results = []
             for base in bases:
                 result = SurveyDkResult(
-                    batch_id=survey_batch.id,
                     parcel_uid=base.parcel_uid,
                     base_id=base.id,
                     initialized_from_base_id=base.id,
@@ -1448,7 +1398,7 @@ class DataImportService:
             base_ids = [item.id for item in bases]
             results = (
                 db.scalars(
-                    select(SurveyCbfResult).where(SurveyCbfResult.batch_id == survey_batch.id, SurveyCbfResult.base_id.in_(base_ids))
+                    select(SurveyCbfResult).where(SurveyCbfResult.base_id.in_(base_ids))
                 ).all()
                 if base_ids and existing_state.get("cbf_result", True)
                 else []
@@ -1493,7 +1443,7 @@ class DataImportService:
             member_base_ids = [item.id for item in member_bases]
             member_results = (
                 db.scalars(
-                    select(SurveyCbfJtcyResult).where(SurveyCbfJtcyResult.batch_id == survey_batch.id, SurveyCbfJtcyResult.base_id.in_(member_base_ids))
+                    select(SurveyCbfJtcyResult).where(SurveyCbfJtcyResult.base_id.in_(member_base_ids))
                 ).all()
                 if member_base_ids and existing_state.get("member_result", True)
                 else []
@@ -1534,7 +1484,7 @@ class DataImportService:
             base_ids = [item.id for item in bases]
             results = (
                 db.scalars(
-                    select(SurveyFbfResult).where(SurveyFbfResult.batch_id == survey_batch.id, SurveyFbfResult.base_id.in_(base_ids))
+                    select(SurveyFbfResult).where(SurveyFbfResult.base_id.in_(base_ids))
                 ).all()
                 if base_ids and existing_state.get("fbf_result", True)
                 else []
@@ -1572,7 +1522,7 @@ class DataImportService:
             base_ids = [item.id for item in bases]
             results = (
                 db.scalars(
-                    select(SurveyCbdkxxResult).where(SurveyCbdkxxResult.batch_id == survey_batch.id, SurveyCbdkxxResult.base_id.in_(base_ids))
+                    select(SurveyCbdkxxResult).where(SurveyCbdkxxResult.base_id.in_(base_ids))
                 ).all()
                 if base_ids and existing_state.get("cbdkxx_result", True)
                 else []
@@ -1597,7 +1547,7 @@ class DataImportService:
             base_ids = [item.id for item in bases]
             results = (
                 db.scalars(
-                    select(SurveyDkResult).where(SurveyDkResult.batch_id == survey_batch.id, SurveyDkResult.base_id.in_(base_ids))
+                    select(SurveyDkResult).where(SurveyDkResult.base_id.in_(base_ids))
                 ).all()
                 if base_ids and existing_state.get("dk_result", True)
                 else []
@@ -1649,7 +1599,7 @@ class DataImportService:
 
     def build_template_csv(self, file_type: str) -> tuple[str, bytes]:
         if file_type not in self.template_headers:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="仅支持 cbf 或 cbf_jtcy 模板")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="浠呮敮鎸?cbf 鎴?cbf_jtcy 妯℃澘")
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(self.template_headers[file_type])
@@ -1658,36 +1608,36 @@ class DataImportService:
                 [
                     "320623100200000001",
                     "320623100200",
-                    "某镇某村",
+                    "鏌愰晣鏌愭潙",
                     "1",
-                    "张三户",
+                    "field",
                     "1",
                     "320623199001010011",
-                    "某村一组",
+                    "field",
                     "226400",
                     "13900000000",
                     "3",
                     "2026-05-01",
-                    "调查员A",
+                    "璋冩煡鍛楢",
                     "",
                     "",
                     "",
                     "",
                     "",
                     "32062310020001",
-                    "某村一组",
+                    "field",
                 ]
             )
         else:
-            writer.writerow(["320623100200000001", "张三", "1", "320623199001010011", "1", "01", "", "1", "户主"])
+            writer.writerow(["320623100200000001", "寮犱笁", "1", "320623199001010011", "1", "01", "", "1", "鎴蜂富"])
         return f"{file_type}_template.csv", output.getvalue().encode("utf-8-sig")
 
     def build_template_notes_csv(self, file_type: str) -> tuple[str, bytes]:
         if file_type not in self.template_field_notes:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="仅支持 cbf 或 cbf_jtcy 字段说明")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="浠呮敮鎸?cbf 鎴?cbf_jtcy 瀛楁璇存槑")
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["字段名称", "填写说明"])
+        writer.writerow(["瀛楁鍚嶇О", "濉啓璇存槑"])
         writer.writerows(self.template_field_notes[file_type])
         return f"{file_type}_field_notes.csv", output.getvalue().encode("utf-8-sig")
 
@@ -1699,7 +1649,7 @@ class DataImportService:
         ).all()
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["行号", "数据类型", "业务键", "错误信息", "原始数据"])
+        # repaired invalid string literal
         for row in rows:
             writer.writerow([row.row_no, row.entity_type, row.entity_key, row.error_message, json.dumps(row.raw_data, ensure_ascii=False)])
         return f"import_{batch_id}_failed_rows.csv", output.getvalue().encode("utf-8-sig")
@@ -1730,14 +1680,14 @@ class DataImportService:
     def rollback_batch(self, db: Session, batch_id: int, current_user: User) -> dict:
         batch = db.get(DataImportBatch, batch_id)
         if batch is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导入批次不存在")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="request failed")
         operations = db.scalars(
             select(DataImportOperation)
             .where(DataImportOperation.import_batch_id == batch_id)
             .order_by(DataImportOperation.id.desc())
         ).all()
         if not operations:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该批次没有可回滚的操作流水")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="request failed")
 
         model_map = self._rollback_model_map()
         restored = 0
@@ -1772,7 +1722,7 @@ class DataImportService:
         }
         db.commit()
         db.refresh(batch)
-        data_import_progress.update(batch.id, status="rolled_back", message="批次已回滚")
+        # repaired invalid string literal
         return self._serialize_batch(batch)
 
     def _import_row(
@@ -1789,10 +1739,12 @@ class DataImportService:
         context: dict | None = None,
     ) -> tuple[str, str]:
         survey_batch = context["survey_batch"] if context and context.get("survey_batch") else self._ensure_import_survey_batch(db, batch, current_user, now)
+        if context and context.get("gdb_result_only"):
+            return self._import_gdb_result_row(db, batch, survey_batch, row_record, file_type, data, current_user, now, geometry, context)
         if file_type == "cbf":
             required = ["cbfbm", "region_code", "cbflx", "cbfmc", "cbfzjlx", "cbfzjhm", "cbfdz", "yzbm", "cbfdcy"]
             self._ensure_required(data, required)
-            data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="承包方不在当前数据权限范围内")
+            data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="鎵垮寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
             region_code, _region_name = self._resolve_import_region(db, data, current_user)
             tenant_code = data_access_service.derive_tenant_code(region_code)
             group_region_code, group_region_name = self._resolve_group_region(db, data, current_user)
@@ -1856,14 +1808,12 @@ class DataImportService:
             else:
                 result = db.scalar(
                     select(SurveyCbfResult).where(
-                        SurveyCbfResult.batch_id == survey_batch.id,
                         SurveyCbfResult.base_id == base.id,
                     )
                 )
             result_before = self._snapshot_model(result) if result else None
             if result is None:
                 result = SurveyCbfResult(
-                    batch_id=survey_batch.id,
                     contractor_uid=base.contractor_uid,
                     base_id=base.id,
                     initialized_from_base_id=base.id,
@@ -1911,12 +1861,12 @@ class DataImportService:
         if file_type == "dk":
             return self._import_dk_row(db, batch, survey_batch, row_record, data, current_user, now, geometry, context)
         if file_type != "cbf_jtcy":
-            raise ValueError(f"不支持的数据类型：{file_type}")
+            raise ValueError(f"unsupported data type: {file_type}")
 
         required = ["cbfbm", "cyxm", "cyzjlx", "cyzjhm", "cyxb", "yhzgx"]
         self._ensure_required(data, required)
         chunk_no = max(1, (row_record.row_no - 1) // self.chunk_size + 1)
-        data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="家庭成员不在当前数据权限范围内")
+        data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="out of scope")
         if context and "contractor_base_by_cbfbm" in context and data["cbfbm"] in context["contractor_base_by_cbfbm"]:
             contractor_base = context["contractor_base_by_cbfbm"].get(data["cbfbm"])
         else:
@@ -1936,7 +1886,7 @@ class DataImportService:
                     .order_by(SurveyCbfResult.id.desc())
                 ).first()
             if source_result is None:
-                raise ValueError(f"家庭成员对应承包方不存在：{data['cbfbm']}")
+                raise ValueError(f"contractor not found: {data['cbfbm']}")
             contractor_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:cbf:{source_result.cbfbm}"))
             contractor_base = SurveyCbfBase(
                 tenant_code=source_result.tenant_code,
@@ -1977,7 +1927,6 @@ class DataImportService:
             cloned_result = SurveyCbfResult(
                 tenant_code=contractor_base.tenant_code,
                 region_code=contractor_base.region_code,
-                batch_id=survey_batch.id,
                 contractor_uid=contractor_base.contractor_uid,
                 base_id=contractor_base.id,
                 initialized_from_base_id=contractor_base.id,
@@ -2055,14 +2004,12 @@ class DataImportService:
         else:
             result = db.scalar(
                 select(SurveyCbfJtcyResult).where(
-                    SurveyCbfJtcyResult.batch_id == survey_batch.id,
                     SurveyCbfJtcyResult.base_id == base.id,
                 )
             )
         result_before = self._snapshot_model(result) if result else None
         if result is None:
             result = SurveyCbfJtcyResult(
-                batch_id=survey_batch.id,
                 contractor_uid=contractor_base.contractor_uid,
                 member_uid=member_uid,
                 base_id=base.id,
@@ -2090,7 +2037,7 @@ class DataImportService:
     ) -> tuple[str, str]:
         required = ["fbfbm", "fbfmc", "fbffzrxm", "fzrzjlx", "fzrzjhm", "fbfdz", "yzbm", "fbfdcy", "fbfdcrq"]
         self._ensure_required(data, required)
-        data_access_service.ensure_code_in_scope(current_user, data["fbfbm"], detail="发包方不在当前数据权限范围内")
+        data_access_service.ensure_code_in_scope(current_user, data["fbfbm"], detail="鍙戝寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
         region_code = self._resolve_code_region(data.get("region_code") or batch.region_code or data["fbfbm"], current_user)
         tenant_code = data_access_service.derive_tenant_code(region_code)
         issuer_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:fbf:{data['fbfbm']}"))
@@ -2144,11 +2091,10 @@ class DataImportService:
         if context and "fbf_result_by_base_id" in context:
             result = context["fbf_result_by_base_id"].get(base.id)
         else:
-            result = db.scalar(select(SurveyFbfResult).where(SurveyFbfResult.batch_id == survey_batch.id, SurveyFbfResult.base_id == base.id))
+            result = db.scalar(select(SurveyFbfResult).where(SurveyFbfResult.base_id == base.id))
         result_before = self._snapshot_model(result) if result else None
         if result is None:
             result = SurveyFbfResult(
-                batch_id=survey_batch.id,
                 issuer_uid=issuer_uid,
                 base_id=base.id,
                 initialized_from_base_id=base.id,
@@ -2198,7 +2144,7 @@ class DataImportService:
     ) -> tuple[str, str]:
         required = ["dkbm", "fbfbm", "cbfbm", "cbjyqqdfs", "htmj", "cbhtbm", "cbjyqzbm"]
         self._ensure_required(data, required)
-        data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="承包地块信息不在当前数据权限范围内")
+        data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="out of scope")
         region_code = self._resolve_code_region(data.get("region_code") or batch.region_code or data["cbfbm"], current_user)
         tenant_code = data_access_service.derive_tenant_code(region_code)
         parcel_info_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:cbdkxx:{data['dkbm']}:{data['cbfbm']}"))
@@ -2255,11 +2201,10 @@ class DataImportService:
         if context and "cbdkxx_result_by_base_id" in context:
             result = context["cbdkxx_result_by_base_id"].get(base.id)
         else:
-            result = db.scalar(select(SurveyCbdkxxResult).where(SurveyCbdkxxResult.batch_id == survey_batch.id, SurveyCbdkxxResult.base_id == base.id))
+            result = db.scalar(select(SurveyCbdkxxResult).where(SurveyCbdkxxResult.base_id == base.id))
         result_before = self._snapshot_model(result) if result else None
         if result is None:
             result = SurveyCbdkxxResult(
-                batch_id=survey_batch.id,
                 parcel_info_uid=parcel_info_uid,
                 base_id=base.id,
                 initialized_from_base_id=base.id,
@@ -2287,7 +2232,7 @@ class DataImportService:
     ) -> tuple[str, str]:
         required = ["ysdm", "dkbm", "dkmc", "dklb", "dldj", "tdyt", "sfjbnt", "scmj"]
         self._ensure_required(data, required)
-        data_access_service.ensure_code_in_scope(current_user, data["dkbm"], detail="地块不在当前数据权限范围内")
+        data_access_service.ensure_code_in_scope(current_user, data["dkbm"], detail="out of scope")
         region_code = self._resolve_code_region(data.get("region_code") or batch.region_code or data["dkbm"], current_user)
         tenant_code = data_access_service.derive_tenant_code(region_code)
         parcel_uid = str(uuid5(NAMESPACE_URL, f"survey:{survey_batch.id}:dk:{data['dkbm']}"))
@@ -2348,11 +2293,10 @@ class DataImportService:
         if context and "dk_result_by_base_id" in context:
             result = context["dk_result_by_base_id"].get(base.id)
         else:
-            result = db.scalar(select(SurveyDkResult).where(SurveyDkResult.batch_id == survey_batch.id, SurveyDkResult.base_id == base.id))
+            result = db.scalar(select(SurveyDkResult).where(SurveyDkResult.base_id == base.id))
         result_before = self._snapshot_model(result) if result else None
         if result is None:
             result = SurveyDkResult(
-                batch_id=survey_batch.id,
                 parcel_uid=parcel_uid,
                 base_id=base.id,
                 initialized_from_base_id=base.id,
@@ -2366,6 +2310,327 @@ class DataImportService:
         self._copy_dk_result_geometries(db, [base.id])
         self._record_operation(db, batch, row_record, result, "update" if result_before else "insert", result_before, chunk_no)
         return operation, base.dkbm
+
+    def _import_gdb_result_row(
+        self,
+        db: Session,
+        batch: DataImportBatch,
+        survey_batch: SurveyBatch,
+        row_record: DataImportRow,
+        file_type: str,
+        data: dict,
+        current_user: User,
+        now: datetime,
+        geometry: dict | None,
+        context: dict | None = None,
+    ) -> tuple[str, str]:
+        chunk_no = max(1, (row_record.row_no - 1) // self.chunk_size + 1)
+        if file_type == "cbf":
+            required = ["cbfbm", "region_code", "cbflx", "cbfmc", "cbfzjlx", "cbfzjhm", "cbfdz", "yzbm", "cbfdcy"]
+            self._ensure_required(data, required)
+            data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="鎵垮寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
+            region_code, _region_name = self._resolve_import_region(db, data, current_user)
+            tenant_code = data_access_service.get_tenant_code(current_user) or data_access_service.derive_tenant_code(region_code)
+            group_region_code, group_region_name = self._resolve_group_region(db, data, current_user)
+            contractor_uid = str(uuid5(NAMESPACE_URL, f"import:{survey_batch.id}:cbf:{data['cbfbm']}"))
+            result = db.scalar(
+                select(SurveyCbfResult).where(
+                    SurveyCbfResult.tenant_code == tenant_code,
+                    SurveyCbfResult.cbfbm == data["cbfbm"],
+                ).order_by(SurveyCbfResult.id.desc())
+            )
+            operation = "update" if result else "insert"
+            before = self._snapshot_model(result) if result else None
+            if result is None:
+                result = SurveyCbfResult(
+                    tenant_code=tenant_code,
+                    region_code=group_region_code or region_code,
+                    contractor_uid=contractor_uid,
+                    base_id=0,
+                    initialized_from_base_id=0,
+                    initialized_at=now,
+                )
+                db.add(result)
+            result.tenant_code = tenant_code
+            result.region_code = group_region_code or region_code
+            result.contractor_uid = contractor_uid
+            result.cbfbm = data["cbfbm"]
+            result.cbflx = data["cbflx"]
+            result.cbfmc = data["cbfmc"]
+            result.cbfzjlx = data["cbfzjlx"]
+            result.cbfzjhm = data["cbfzjhm"]
+            result.cbfdz = data["cbfdz"]
+            result.yzbm = data["yzbm"]
+            result.lxdh = data.get("lxdh")
+            result.cbfcysl = self._parse_int(data.get("cbfcysl"), default=0)
+            result.cbfdcrq = self._parse_datetime(data.get("cbfdcrq")) or datetime.now()
+            result.cbfdcy = data.get("cbfdcy") or current_user.real_name
+            result.cbfdcjs = data.get("cbfdcjs")
+            result.gsjs = data.get("gsjs")
+            result.gsjsr = data.get("gsjsr")
+            result.gsshrq = self._parse_datetime(data.get("gsshrq"))
+            result.gsshr = data.get("gsshr")
+            result.group_region_code = group_region_code
+            result.group_region_name = group_region_name
+            result.source_import_batch_id = result.source_import_batch_id or batch.id
+            result.source_import_row_id = result.source_import_row_id or row_record.id
+            result.last_import_batch_id = batch.id
+            result.last_import_row_id = row_record.id
+            result.initialized_from_base_id = result.initialized_from_base_id or 0
+            db.flush()
+            self._record_operation(db, batch, row_record, result, operation, before, chunk_no)
+            task = db.scalar(
+                select(SurveyContractorTask).where(
+                    SurveyContractorTask.tenant_code == tenant_code,
+                    SurveyContractorTask.batch_id == survey_batch.id,
+                    SurveyContractorTask.cbfbm == data["cbfbm"],
+                )
+            )
+            task_before = self._snapshot_model(task) if task else None
+            if task is None:
+                task = SurveyContractorTask(
+                    tenant_code=tenant_code,
+                    region_code=group_region_code or region_code,
+                    batch_id=survey_batch.id,
+                    contractor_uid=contractor_uid,
+                    cbfbm=data["cbfbm"],
+                    cbfmc=data["cbfmc"],
+                    task_status="not_started",
+                )
+                db.add(task)
+            else:
+                task.region_code = group_region_code or region_code
+                task.contractor_uid = contractor_uid
+                task.cbfmc = data["cbfmc"]
+            db.flush()
+            self._record_operation(db, batch, row_record, task, "update" if task_before else "insert", task_before, chunk_no)
+            return operation, result.cbfbm
+
+        if file_type == "cbf_jtcy":
+            required = ["cbfbm", "cyxm", "cyzjlx", "cyzjhm", "cyxb", "yhzgx"]
+            self._ensure_required(data, required)
+            data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="out of scope")
+            contractor = db.scalar(
+                select(SurveyCbfResult).where(SurveyCbfResult.cbfbm == data["cbfbm"]).order_by(SurveyCbfResult.id.desc())
+            )
+            if contractor is None:
+                raise ValueError(f"contractor not found: {data['cbfbm']}")
+            member_uid = str(uuid5(NAMESPACE_URL, f"import:{survey_batch.id}:member:{data['cbfbm']}:{data['cyzjhm']}"))
+            result = db.scalar(
+                select(SurveyCbfJtcyResult).where(
+                    SurveyCbfJtcyResult.tenant_code == contractor.tenant_code,
+                    SurveyCbfJtcyResult.cbfbm == data["cbfbm"],
+                    SurveyCbfJtcyResult.cyzjhm == data["cyzjhm"],
+                )
+            )
+            operation = "update" if result else "insert"
+            before = self._snapshot_model(result) if result else None
+            if result is None:
+                result = SurveyCbfJtcyResult(
+                    tenant_code=contractor.tenant_code,
+                    region_code=contractor.region_code,
+                    contractor_uid=contractor.contractor_uid,
+                    member_uid=member_uid,
+                    base_id=None,
+                    initialized_from_base_id=None,
+                    initialized_at=now,
+                )
+                db.add(result)
+            result.tenant_code = contractor.tenant_code
+            result.region_code = contractor.region_code
+            result.contractor_uid = contractor.contractor_uid
+            result.member_uid = member_uid
+            result.cbfbm = data["cbfbm"]
+            result.cyxm = data["cyxm"]
+            result.cyzjlx = data["cyzjlx"]
+            result.cyzjhm = data["cyzjhm"]
+            result.cyxb = data["cyxb"]
+            result.yhzgx = data["yhzgx"]
+            result.cybz = data.get("cybz")
+            result.sfgyr = data.get("sfgyr")
+            result.cybzsm = data.get("cybzsm")
+            result.is_household_head = data["yhzgx"] == "01"
+            result.source_import_batch_id = result.source_import_batch_id or batch.id
+            result.source_import_row_id = result.source_import_row_id or row_record.id
+            result.last_import_batch_id = batch.id
+            result.last_import_row_id = row_record.id
+            db.flush()
+            self._record_operation(db, batch, row_record, result, operation, before, chunk_no)
+            return operation, f"{result.cbfbm}:{result.cyzjhm}"
+
+        if file_type == "fbf":
+            required = ["fbfbm", "fbfmc", "fbffzrxm", "fzrzjlx", "fzrzjhm", "fbfdz", "yzbm", "fbfdcy", "fbfdcrq"]
+            self._ensure_required(data, required)
+            data_access_service.ensure_code_in_scope(current_user, data["fbfbm"], detail="鍙戝寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
+            region_code = self._resolve_code_region(data.get("region_code") or batch.region_code or data["fbfbm"], current_user)
+            tenant_code = data_access_service.get_tenant_code(current_user) or data_access_service.derive_tenant_code(region_code)
+            issuer_uid = str(uuid5(NAMESPACE_URL, f"import:{survey_batch.id}:fbf:{data['fbfbm']}"))
+            result = db.scalar(
+                select(SurveyFbfResult).where(
+                    SurveyFbfResult.tenant_code == tenant_code,
+                    SurveyFbfResult.fbfbm == data["fbfbm"],
+                ).order_by(SurveyFbfResult.id.desc())
+            )
+            operation = "update" if result else "insert"
+            before = self._snapshot_model(result) if result else None
+            if result is None:
+                result = SurveyFbfResult(
+                    tenant_code=tenant_code,
+                    region_code=region_code,
+                    issuer_uid=issuer_uid,
+                    base_id=0,
+                    initialized_from_base_id=0,
+                    initialized_at=now,
+                )
+                db.add(result)
+            result.tenant_code = tenant_code
+            result.region_code = region_code
+            result.issuer_uid = issuer_uid
+            result.fbfbm = data["fbfbm"]
+            result.fbfmc = data["fbfmc"]
+            result.fbffzrxm = data["fbffzrxm"]
+            result.fzrzjlx = data["fzrzjlx"]
+            result.fzrzjhm = data["fzrzjhm"]
+            result.lxdh = data.get("lxdh")
+            result.fbfdz = data["fbfdz"]
+            result.yzbm = data["yzbm"]
+            result.fbfdcy = data["fbfdcy"]
+            result.fbfdcrq = self._parse_datetime(data.get("fbfdcrq")) or datetime.now()
+            result.fbfdcjs = data.get("fbfdcjs")
+            result.source_import_batch_id = result.source_import_batch_id or batch.id
+            result.source_import_row_id = result.source_import_row_id or row_record.id
+            result.last_import_batch_id = batch.id
+            result.last_import_row_id = row_record.id
+            result.initialized_from_base_id = result.initialized_from_base_id or 0
+            db.flush()
+            self._record_operation(db, batch, row_record, result, operation, before, chunk_no)
+            legacy = db.get(Fbf, data["fbfbm"])
+            legacy_before = self._snapshot_model(legacy) if legacy else None
+            if legacy is None:
+                legacy = Fbf(fbfbm=data["fbfbm"])
+                db.add(legacy)
+            legacy.tenant_code = tenant_code
+            legacy.region_code = region_code
+            legacy.fbfmc = data["fbfmc"]
+            legacy.fbffzrxm = data["fbffzrxm"]
+            legacy.fzrzjlx = data["fzrzjlx"]
+            legacy.fzrzjhm = data["fzrzjhm"]
+            legacy.lxdh = data.get("lxdh")
+            legacy.fbfdz = data["fbfdz"]
+            legacy.yzbm = data["yzbm"]
+            legacy.fbfdcy = data["fbfdcy"]
+            legacy.fbfdcrq = result.fbfdcrq
+            legacy.fbfdcjs = data.get("fbfdcjs")
+            db.flush()
+            self._record_operation(db, batch, row_record, legacy, "update" if legacy_before else "insert", legacy_before, chunk_no)
+            return operation, result.fbfbm
+
+        if file_type == "cbdkxx":
+            required = ["dkbm", "fbfbm", "cbfbm", "cbjyqqdfs", "htmj", "cbhtbm", "cbjyqzbm"]
+            self._ensure_required(data, required)
+            data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="out of scope")
+            region_code = self._resolve_code_region(data.get("region_code") or batch.region_code or data["cbfbm"], current_user)
+            tenant_code = data_access_service.get_tenant_code(current_user) or data_access_service.derive_tenant_code(region_code)
+            parcel_info_uid = str(uuid5(NAMESPACE_URL, f"import:{survey_batch.id}:cbdkxx:{data['dkbm']}:{data['cbfbm']}"))
+            result = db.scalar(
+                select(SurveyCbdkxxResult).where(
+                    SurveyCbdkxxResult.tenant_code == tenant_code,
+                    SurveyCbdkxxResult.dkbm == data["dkbm"],
+                    SurveyCbdkxxResult.cbfbm == data["cbfbm"],
+                ).order_by(SurveyCbdkxxResult.id.desc())
+            )
+            operation = "update" if result else "insert"
+            before = self._snapshot_model(result) if result else None
+            if result is None:
+                result = SurveyCbdkxxResult(
+                    tenant_code=tenant_code,
+                    region_code=region_code,
+                    parcel_info_uid=parcel_info_uid,
+                    base_id=0,
+                    initialized_from_base_id=0,
+                    initialized_at=now,
+                )
+                db.add(result)
+            result.tenant_code = tenant_code
+            result.region_code = region_code
+            result.parcel_info_uid = parcel_info_uid
+            result.dkbm = data["dkbm"]
+            result.fbfbm = data["fbfbm"]
+            result.cbfbm = data["cbfbm"]
+            result.cbjyqqdfs = data["cbjyqqdfs"]
+            result.htmj = self._parse_decimal(data.get("htmj"), required=True)
+            result.cbhtbm = data["cbhtbm"]
+            result.lzhtbm = data.get("lzhtbm")
+            result.cbjyqzbm = data["cbjyqzbm"]
+            result.yhtmj = self._parse_decimal(data.get("yhtmj"))
+            result.htmjm = self._parse_decimal(data.get("htmjm"))
+            result.yhtmjm = self._parse_decimal(data.get("yhtmjm"))
+            result.sfqqqg = data.get("sfqqqg")
+            result.source_import_batch_id = result.source_import_batch_id or batch.id
+            result.source_import_row_id = result.source_import_row_id or row_record.id
+            result.last_import_batch_id = batch.id
+            result.last_import_row_id = row_record.id
+            result.initialized_from_base_id = result.initialized_from_base_id or 0
+            db.flush()
+            self._record_operation(db, batch, row_record, result, operation, before, chunk_no)
+            return operation, f"{result.dkbm}:{result.cbfbm}"
+
+        if file_type == "dk":
+            required = ["ysdm", "dkbm", "dkmc", "dklb", "dldj", "tdyt", "sfjbnt", "scmj"]
+            self._ensure_required(data, required)
+            data_access_service.ensure_code_in_scope(current_user, data["dkbm"], detail="out of scope")
+            region_code = self._resolve_code_region(data.get("region_code") or batch.region_code or data["dkbm"], current_user)
+            tenant_code = data_access_service.get_tenant_code(current_user) or data_access_service.derive_tenant_code(region_code)
+            parcel_uid = str(uuid5(NAMESPACE_URL, f"import:{survey_batch.id}:dk:{data['dkbm']}"))
+            result = db.scalar(
+                select(SurveyDkResult).where(
+                    SurveyDkResult.tenant_code == tenant_code,
+                    SurveyDkResult.dkbm == data["dkbm"],
+                ).order_by(SurveyDkResult.id.desc())
+            )
+            operation = "update" if result else "insert"
+            before = self._snapshot_model(result) if result else None
+            if result is None:
+                result = SurveyDkResult(
+                    tenant_code=tenant_code,
+                    region_code=region_code,
+                    parcel_uid=parcel_uid,
+                    base_id=0,
+                    initialized_from_base_id=0,
+                    initialized_at=now,
+                )
+                db.add(result)
+            result.tenant_code = tenant_code
+            result.region_code = region_code
+            result.parcel_uid = parcel_uid
+            result.bsm = self._parse_int(data.get("bsm"), default=0) if data.get("bsm") else None
+            result.ysdm = data["ysdm"]
+            result.dkbm = data["dkbm"]
+            result.dkmc = data["dkmc"]
+            result.syqxz = data.get("syqxz")
+            result.dklb = data["dklb"]
+            result.tdlylx = data.get("tdlylx")
+            result.dldj = data["dldj"]
+            result.tdyt = data["tdyt"]
+            result.sfjbnt = data["sfjbnt"]
+            result.scmj = self._parse_decimal(data.get("scmj"), required=True)
+            result.dkdz = data.get("dkdz")
+            result.dkxz = data.get("dkxz")
+            result.dknz = data.get("dknz")
+            result.dkbz = data.get("dkbz")
+            result.dkbzxx = data.get("dkbzxx")
+            result.zjrxm = data.get("zjrxm")
+            result.source_import_batch_id = result.source_import_batch_id or batch.id
+            result.source_import_row_id = result.source_import_row_id or row_record.id
+            result.last_import_batch_id = batch.id
+            result.last_import_row_id = row_record.id
+            result.initialized_from_base_id = result.initialized_from_base_id or 0
+            db.flush()
+            self._write_dk_geometries(db, "survey_dk_result", {result.id: geometry})
+            self._record_operation(db, batch, row_record, result, operation, before, chunk_no)
+            return operation, result.dkbm
+
+        raise ValueError(f"unsupported data type: {file_type}")
 
     def _write_dk_geometries(self, db: Session, table_name: str, geometries_by_id: dict[int, dict | None]) -> None:
         if not geometries_by_id:
@@ -2447,7 +2712,6 @@ class DataImportService:
                             result.base_id: result
                             for result in db.scalars(
                                 select(SurveyCbfResult).where(
-                                    SurveyCbfResult.batch_id == batch_id,
                                     SurveyCbfResult.base_id.in_(id_chunk),
                                 )
                             ).all()
@@ -2462,6 +2726,28 @@ class DataImportService:
                     if not result.is_changed and result.survey_status == "not_surveyed":
                         result.cbfcysl = count
 
+    def _recount_result_member_counts(self, db: Session, contractor_codes: set[str], survey_batch_id: int) -> None:
+        if not contractor_codes:
+            return
+        for code_chunk in self._chunks(list(contractor_codes), self.chunk_size):
+            counts = dict(
+                db.execute(
+                    select(SurveyCbfJtcyResult.cbfbm, func.count(SurveyCbfJtcyResult.id))
+                    .where(
+                        SurveyCbfJtcyResult.cbfbm.in_(code_chunk),
+                    )
+                    .group_by(SurveyCbfJtcyResult.cbfbm)
+                ).all()
+            )
+            contractors = db.scalars(
+                select(SurveyCbfResult).where(
+                    SurveyCbfResult.cbfbm.in_(code_chunk),
+                ).order_by(SurveyCbfResult.cbfbm.asc(), SurveyCbfResult.id.desc())
+            ).all()
+            for contractor in contractors:
+                if not contractor.is_changed and contractor.survey_status == "not_surveyed":
+                    contractor.cbfcysl = counts.get(contractor.cbfbm, 0)
+
     def _unused_legacy_recount_member_counts(self, db: Session, contractor_codes: set[str]) -> None:
         for code in contractor_codes:
             pass
@@ -2474,14 +2760,14 @@ class DataImportService:
 
         survey_batch = SurveyBatch(
             batch_no=self._next_no(db, "SUR", SurveyBatch.id),
-            batch_name=f"{batch.import_name} 调查成果",
+            batch_name=f"{batch.import_name} 璋冩煡鎴愭灉",
             region_code=batch.region_code,
             region_name=batch.region_name,
             survey_type="import_survey",
             status="active",
             started_at=now,
             created_by=current_user.id,
-            remark=f"由导入批次 {batch.import_no} 自动生成",
+            remark=f"鐢卞鍏ユ壒娆?{batch.import_no} 鑷姩鐢熸垚",
         )
         db.add(survey_batch)
         db.flush()
@@ -2624,7 +2910,7 @@ class DataImportService:
             "cbfdz": ["承包方地址"],
             "yzbm": ["邮政编码"],
             "lxdh": ["联系电话"],
-            "cbfcysl": ["家庭成员数", "承包方成员数量"],
+            "cbfcysl": ["承包方成员数量", "家庭成员数"],
             "cbfdcrq": ["承包方调查日期"],
             "cbfdcy": ["承包方调查员"],
             "cbfdcjs": ["承包方调查记事"],
@@ -2674,7 +2960,7 @@ class DataImportService:
     def _ensure_required(self, data: dict, fields: list[str]) -> None:
         missing = [field for field in fields if not data.get(field)]
         if missing:
-            raise ValueError(f"缺少必填字段：{', '.join(missing)}")
+            raise ValueError(f"missing required fields: {', '.join(missing)}")
 
     def _field_map_for(self, file_type: str) -> dict[str, list[str]]:
         if file_type == "cbf":
@@ -2687,7 +2973,7 @@ class DataImportService:
             return self.cbdkxx_field_map
         if file_type == "dk":
             return self.dk_field_map
-        raise ValueError(f"不支持的数据类型：{file_type}")
+        raise ValueError(f"unsupported data type: {file_type}")
 
     def _normalize_layer_name(self, value: str) -> str:
         return "".join(ch for ch in value.lower() if ch.isalnum() or ch == "_")
@@ -2732,8 +3018,8 @@ class DataImportService:
     def _resolve_code_region(self, value: str | None, current_user: User) -> str:
         normalized = data_access_service.normalize_region_code(value)
         if not normalized:
-            raise ValueError("缺少导入区域")
-        data_access_service.ensure_region_in_scope(current_user, normalized, detail="导入区域不在当前数据权限范围内")
+            raise ValueError("缂哄皯瀵煎叆鍖哄煙")
+        data_access_service.ensure_region_in_scope(current_user, normalized, detail="region out of scope")
         return normalized
 
     def _decode_csv(self, content: bytes) -> str:
@@ -2742,11 +3028,11 @@ class DataImportService:
                 return content.decode(encoding)
             except UnicodeDecodeError:
                 continue
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无法识别 CSV 文件编码")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鏃犳硶璇嗗埆 CSV 鏂囦欢缂栫爜")
 
     def _infer_archive_csv_type(self, filename: str) -> str | None:
         name = filename.replace("\\", "/").lower()
-        if any(token in name for token in ("cbf_jtcy", "jtcy", "member", "家庭成员", "成员")):
+        if any(token in name for token in ("cbf_jtcy", "jtcy", "member", "成员")):
             return "cbf_jtcy"
         if any(token in name for token in ("cbf", "contractor", "承包方")):
             return "cbf"
@@ -2760,12 +3046,12 @@ class DataImportService:
     def _parse_decimal(self, value: str | None, required: bool = False) -> Decimal | None:
         if value in (None, ""):
             if required:
-                raise ValueError("缺少必填数值字段")
+                raise ValueError("missing required numeric field")
             return None
         try:
             return Decimal(str(value).strip())
         except (InvalidOperation, ValueError) as exc:
-            raise ValueError(f"数值格式不正确：{value}") from exc
+            raise ValueError(f"invalid decimal value: {value}") from exc
 
     def _snapshot_model(self, instance) -> dict:
         mapper = sa_inspect(instance).mapper
@@ -2879,7 +3165,7 @@ class DataImportService:
         code = (data.get("group_region_code") or "").strip()
         if not code:
             return None, None
-        data_access_service.ensure_region_in_scope(current_user, code, detail="所属组不在当前数据权限范围内")
+        data_access_service.ensure_region_in_scope(current_user, code, detail="region out of scope")
         region = db.scalar(select(Region).where(Region.code == code).execution_options(skip_tenant_scope=True))
         name = region.full_name if region else (data.get("group_region_name") or "")
         return code, name.strip() or None
@@ -2887,11 +3173,11 @@ class DataImportService:
     def _resolve_import_region(self, db: Session, data: dict, current_user: User) -> tuple[str, str | None]:
         code = (data.get("region_code") or "").strip()
         if not code:
-            raise ValueError("缺少必填字段：region_code")
+            raise ValueError("缂哄皯蹇呭～瀛楁锛歳egion_code")
         normalized = data_access_service.normalize_region_code(code)
         if not normalized or len(normalized) < 6:
-            raise ValueError("区域代码格式不正确")
-        data_access_service.ensure_region_in_scope(current_user, normalized, detail="区域代码不在当前数据权限范围内")
+            raise ValueError("invalid region code")
+        data_access_service.ensure_region_in_scope(current_user, normalized, detail="region out of scope")
         region = db.scalar(select(Region).where(Region.code == normalized).execution_options(skip_tenant_scope=True))
         name = region.full_name if region else (data.get("region_name") or "")
         return normalized, name.strip() or None

@@ -185,7 +185,7 @@
 
   .plot-map {
     position: absolute;
-    inset: 13mm 18mm 12mm 18mm;
+    inset: 8mm 8mm 8mm 8mm;
     z-index: 1;
   }
 
@@ -218,7 +218,7 @@
   .plot-svg .parcel-line {
     fill: none;
     stroke: #0000ff;
-    stroke-width: 1.2;
+    stroke-width: 1.6;
     vector-effect: non-scaling-stroke;
   }
 
@@ -306,6 +306,16 @@
 {% set remaining_plots = plot_items[6:] %}
 {% set total_pages = 1 + ((remaining_plots | length + 7) // 8) %}
 {% set map_overview = overview_geometry | default(total_geometry | default(None, true), true) %}
+{% if overview_plots is defined %}
+  {% set overview_items = overview_plots %}
+{% else %}
+  {% set overview_items = plot_items %}
+{% endif %}
+{% if highlight_plots is defined %}
+  {% set highlight_items = highlight_plots %}
+{% else %}
+  {% set highlight_items = plot_items %}
+{% endif %}
 {% set highlighted = highlighted_geometry | default(None, true) %}
 {% set audit_text = auditor | default("审核者：" ~ (village_name | default("和谐村前王集一组", true)) ~ "　" ~ (audit_date | default("2026年02月09日", true)), true) %}
 {% set mapper_text = mapper | default("制图者：" ~ (village_name | default("和谐村前王集一组", true)) ~ "　" ~ (map_date | default("2026年02月09日", true)), true) %}
@@ -349,7 +359,8 @@
             data-map-kind="overview"
             data-geometry='{{ map_overview | tojson }}'
             data-highlight='{{ highlighted | tojson }}'
-            data-plots='{{ plot_items | tojson }}'
+            data-plots='{{ overview_items | tojson }}'
+            data-highlight-plots='{{ highlight_items | tojson }}'
             data-svg="{{ overview_svg | default('', true) | e }}"
           ></div>
           <svg class="north-arrow" viewBox="0 0 40 66" aria-hidden="true">
@@ -488,14 +499,14 @@
     }).join(' ') + ' Z';
   }
 
-  function appendGeometry(svg, geometry, className, sharedBounds) {
+  function appendGeometry(svg, geometry, className, sharedBounds, padding) {
     const rings = collectRings(geometry, []);
     const bounds = sharedBounds || boundsFor(rings);
     if (!bounds) return bounds;
     rings.forEach((ring) => {
       const path = document.createElementNS(SVG_NS, 'path');
       path.setAttribute('class', className);
-      path.setAttribute('d', pathForRing(ring, bounds, 1000, 1000, 50));
+      path.setAttribute('d', pathForRing(ring, bounds, 1000, 1000, padding));
       svg.appendChild(path);
     });
     return bounds;
@@ -521,16 +532,21 @@
     if (kind === 'overview') {
       const geometry = parseData(node.dataset.geometry, null);
       const plots = parseData(node.dataset.plots, []);
+      const highlightPlots = parseData(node.dataset.highlightPlots, []);
       const highlight = parseData(node.dataset.highlight, null);
       const geometries = geometry ? [geometry] : plots.map((plot) => plot.geometry || plot.geojson).filter(Boolean);
+      const highlightGeometries = highlight
+        ? [highlight]
+        : highlightPlots.map((plot) => plot.geometry || plot.geojson).filter(Boolean);
       const allRings = [];
       geometries.forEach((item) => collectRings(item, allRings));
+      highlightGeometries.forEach((item) => collectRings(item, allRings));
       const sharedBounds = boundsFor(allRings);
-      geometries.forEach((item) => appendGeometry(svg, item, 'parcel-line', sharedBounds));
-      if (highlight) appendGeometry(svg, highlight, 'highlight-line', sharedBounds);
+      geometries.forEach((item) => appendGeometry(svg, item, 'parcel-line', sharedBounds, 28));
+      highlightGeometries.forEach((item) => appendGeometry(svg, item, 'highlight-line', sharedBounds, 28));
     } else {
       const geometry = parseData(node.dataset.geometry, null);
-      appendGeometry(svg, geometry, 'parcel-line');
+      appendGeometry(svg, geometry, 'parcel-line', null, 10);
     }
 
     node.appendChild(svg);

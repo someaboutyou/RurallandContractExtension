@@ -1,13 +1,13 @@
 import http from "./http";
 
-export function fetchContractTemplate() {
-  return http.get("/contract-templates/contract");
+export function fetchContractTemplate(templateKey = "contract") {
+  return http.get(`/contract-templates/${templateKey}`);
 }
 
-export function updateContractTemplate(payload) {
-  return http.put("/contract-templates/contract", payload);
+export function updateContractTemplate(templateKey = "contract", payload) {
+  return http.put(`/contract-templates/${templateKey}`, payload);
 }
 
-export function previewContractTemplate(payload) {
-  return http.post("/contract-templates/contract/preview", payload);
+export function previewContractTemplate(templateKey = "contract", payload) {
+  return http.post(`/contract-templates/${templateKey}/preview`, payload);
 }

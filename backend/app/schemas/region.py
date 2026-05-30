@@ -14,6 +14,7 @@ class RegionOption(BaseModel):
     status: str = "active"
     sortOrder: int = 0
     remark: str | None = None
+    leaf: bool = False
 
 
 class RegionTreeNode(RegionOption):
