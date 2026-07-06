@@ -58,7 +58,6 @@
 <script setup>
 import { computed, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
-import { changeHouseholdHead } from "../../api/survey";
 
 const emit = defineEmits(["done"]);
 
@@ -91,15 +90,15 @@ function resetForm() {
 async function handleSubmit() {
   submitting.value = true;
   try {
-    await changeHouseholdHead(batchId.value, contractorUid.value, {
+    const payload = {
       newHeadMemberUid: form.newHeadMemberUid,
       reason: form.reason || undefined,
-    });
-    ElMessage.success("户主更换成功");
+    };
+    ElMessage.success("更换户主已加入待保存");
     visible.value = false;
-    emit("done");
+    emit("done", { type: "change_head", payload });
   } catch (e) {
-    ElMessage.error(e?.response?.data?.detail || "更换失败");
+    ElMessage.error(e?.message || "更换失败");
   } finally {
     submitting.value = false;
   }

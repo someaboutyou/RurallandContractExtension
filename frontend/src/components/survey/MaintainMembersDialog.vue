@@ -62,6 +62,15 @@
               <el-button link type="danger" size="small" @click="form.membersToAdd.splice($index, 1)">删除</el-button>
             </template>
           </el-table-column>
+          <el-table-column prop="changeReason" label="新增原因" width="110">
+            <template #default="{ row }">
+              <el-select v-model="row.changeReason" size="small">
+                <el-option label="新生" value="新生" />
+                <el-option label="婚进" value="婚进" />
+                <el-option label="其他" value="其他" />
+              </el-select>
+            </template>
+          </el-table-column>
         </el-table>
         <el-button style="margin-top: 8px" type="primary" plain size="small" @click="addRow">+ 添加行</el-button>
       </el-tab-pane>
@@ -121,6 +130,16 @@
           <el-table-column label="与户主关系" width="100">
             <template #default="{ row }">{{ relationLabel(row.relationToHead) }}</template>
           </el-table-column>
+          <el-table-column label="删除原因" width="120">
+            <template #default="{ row }">
+              <el-select v-model="row.changeReason" size="small" @change="syncDeleteSelection">
+                <el-option label="去世" value="去世" />
+                <el-option label="婚出" value="婚出" />
+                <el-option label="迁出" value="迁出" />
+                <el-option label="其他" value="其他" />
+              </el-select>
+            </template>
+          </el-table-column>
         </el-table>
       </el-tab-pane>
     </el-tabs>
@@ -166,7 +185,6 @@
 <script setup>
 import { reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
-import { maintainSurveyMembers } from "../../api/survey";
 
 const emit = defineEmits(["done"]);
 
@@ -212,7 +230,7 @@ function addRow() {
   form.membersToAdd.push({
     name: "", gender: "1", idType: "1", idNo: "",
     relationToHead: "09", noteCode: "", isCoOwner: "0",
-    isHouseholdHead: false,
+    isHouseholdHead: false, changeReason: "新生",
   });
 }
 
@@ -235,29 +253,37 @@ function addToUpdate(member) {
 }
 
 function handleDeleteSelection(selection) {
-  // Store selected member UIDs for deletion
-  form._deleteUids = selection.map((m) => m.memberUid);
+  form._deleteRows = selection;
+}
+
+function syncDeleteSelection() {
+  if (deleteTable.value) {
+    form._deleteRows = deleteTable.value.getSelectionRows();
+  }
 }
 
 async function handleSubmit() {
-  const toDelete = form._deleteUids || [];
+  const toDelete = (form._deleteRows || []).map((m) => ({
+    memberUid: m.memberUid,
+    changeReason: m.changeReason || "去世",
+  }));
   if (!form.membersToAdd.length && !form.membersToUpdate.length && !toDelete.length) {
     ElMessage.warning("请至少添加、编辑或选择删除成员");
     return;
   }
   submitting.value = true;
   try {
-    await maintainSurveyMembers(batchId.value, contractorUid.value, {
+    const payload = {
       membersToAdd: form.membersToAdd,
       membersToUpdate: form.membersToUpdate,
       membersToDelete: toDelete,
       reason: form.reason || undefined,
-    });
-    ElMessage.success("成员维护完成");
+    };
+    ElMessage.success("成员维护已加入待保存");
     visible.value = false;
-    emit("done");
+    emit("done", { type: "maintain_members", payload });
   } catch (e) {
-    ElMessage.error(e?.response?.data?.detail || "保存失败");
+    ElMessage.error(e?.message || "保存失败");
   } finally {
     submitting.value = false;
   }

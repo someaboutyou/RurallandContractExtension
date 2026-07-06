@@ -1,4 +1,4 @@
-import { ref, shallowRef } from "vue";
+import { computed, ref, shallowRef } from "vue";
 import "ol/ol.css";
 import OlMap from "ol/Map";
 import View from "ol/View";
@@ -11,6 +11,7 @@ import WMTSTileGrid from "ol/tilegrid/WMTS";
 import { get as getProjection } from "ol/proj";
 import { Fill, Stroke, Style } from "ol/style";
 
+import { fetchMapLayers } from "../api/mapLayer";
 import { basemapConfigs } from "../config/mapLayers";
 
 const WMTS_CAPABILITIES_URL =
@@ -110,7 +111,7 @@ async function createSurveyDkResultLayer() {
 }
 
 function createBasemapLayer(config) {
-  const sc = config.serviceConfigs?.[0];
+  const sc = config.serviceConfigs?.find((item) => item.enabled !== false) || config.serviceConfigs?.[0];
   if (!sc) return null;
   if (sc.serviceType === "OSM") {
     return new TileLayer({ source: new OSM() });
@@ -120,26 +121,91 @@ function createBasemapLayer(config) {
   });
 }
 
+function normalizeLayer(item) {
+  const rawServiceConfigs =
+    item.serviceConfigs?.length
+      ? item.serviceConfigs
+      : item.layerType && item.serviceUrl
+        ? [
+            {
+              serviceType: item.layerType,
+              serviceUrl: item.serviceUrl,
+              projection: item.projection,
+              minZoom: 0,
+              maxZoom: 24,
+              enabled: true,
+            },
+          ]
+        : [];
+  if (!rawServiceConfigs.length) {
+    return null;
+  }
+  const serviceConfigs = rawServiceConfigs.map((service) => ({
+    serviceType: String(service.serviceType ?? service.layerType ?? item.layerType ?? "XYZ").toUpperCase(),
+    serviceUrl: service.serviceUrl ?? service.service_url ?? item.serviceUrl ?? item.service_url ?? "",
+    projection: service.projection ?? item.projection ?? "EPSG:3857",
+    minZoom: Number(service.minZoom ?? service.min_zoom ?? 0),
+    maxZoom: Number(service.maxZoom ?? service.max_zoom ?? 24),
+    enabled: service.enabled ?? true,
+  }));
+  const primaryConfig = serviceConfigs.find((service) => service.enabled !== false) || serviceConfigs[0];
+  return {
+    id: item.id ?? item.key,
+    key: item.key,
+    name: item.name,
+    category: item.category,
+    layerType: primaryConfig.serviceType,
+    serviceUrl: primaryConfig.serviceUrl,
+    projection: primaryConfig.projection,
+    defaultVisible: item.defaultVisible ?? item.default_visible ?? false,
+    isDefault: item.isDefault ?? item.is_default ?? false,
+    sortOrder: item.sortOrder ?? item.sort_order ?? 0,
+    enabled: item.enabled ?? true,
+    serviceConfigs,
+  };
+}
+
 export function useDialogMap(targetRef) {
   const mapRef = shallowRef(null);
   const mapReady = ref(false);
   const activeBasemap = ref("image");
+  const basemapRows = ref(basemapConfigs.map(normalizeLayer).filter(Boolean));
   const parcelSource = new VectorSource();
   const selectedParcelDkbm = ref(null);
 
-  const basemapOptions = basemapConfigs.map((b) => ({
-    label: b.name,
-    value: b.key,
-  }));
+  const basemapOptions = computed(() =>
+    basemapRows.value.map((b) => ({
+      label: b.name,
+      value: b.key,
+    })),
+  );
 
   const basemapLayers = new Map();
   let dkLayers = [];
   let parcelLayer = null;
 
+  async function loadBasemapConfigs() {
+    try {
+      const { data } = await fetchMapLayers({ category: "basemap", enabledOnly: true });
+      const rows = (data.data || []).map(normalizeLayer).filter(Boolean).sort((a, b) => a.sortOrder - b.sortOrder);
+      if (rows.length) {
+        basemapRows.value = rows;
+      }
+    } catch (e) {
+      console.warn("Failed to load configured basemaps, using fallback basemaps:", e);
+    }
+    const defaultBasemap = basemapRows.value.find((item) => item.isDefault) || basemapRows.value[0];
+    if (defaultBasemap) {
+      activeBasemap.value = defaultBasemap.key;
+    }
+  }
+
   async function initMap() {
     if (mapRef.value) return;
 
-    const activeConfig = basemapConfigs.find((c) => c.key === activeBasemap.value) || basemapConfigs[0];
+    await loadBasemapConfigs();
+
+    const activeConfig = basemapRows.value.find((c) => c.key === activeBasemap.value) || basemapRows.value[0];
     if (activeConfig) {
       const layer = createBasemapLayer(activeConfig);
       if (layer) {
@@ -158,6 +224,17 @@ export function useDialogMap(targetRef) {
       source: parcelSource,
       style: (feature) => {
         const isSelected = feature.get("dkbm") === selectedParcelDkbm.value;
+        const isHistorical = ["removed", "split_source"].includes(feature.get("resultStatus"));
+        if (isHistorical) {
+          return new Style({
+            fill: new Fill({ color: "rgba(100, 116, 139, 0.06)" }),
+            stroke: new Stroke({
+              color: isSelected ? "#dc2626" : "#64748b",
+              width: isSelected ? 3 : 2,
+              lineDash: [8, 6],
+            }),
+          });
+        }
         if (isSelected) {
           return new Style({
             fill: new Fill({ color: "rgba(255, 255, 0, 0.4)" }),
@@ -196,7 +273,7 @@ export function useDialogMap(targetRef) {
     });
     let newLayer = basemapLayers.get(key);
     if (!newLayer) {
-      const config = basemapConfigs.find((c) => c.key === key);
+      const config = basemapRows.value.find((c) => c.key === key);
       if (config) {
         newLayer = createBasemapLayer(config);
         if (newLayer) basemapLayers.set(key, newLayer);
@@ -224,6 +301,9 @@ export function useDialogMap(targetRef) {
         feature.set("dkmc", item.dkmc);
         feature.set("scmj", item.scmj);
         feature.set("htmj", item.htmj);
+        feature.set("resultStatus", item.resultStatus);
+        feature.set("changeType", item.changeType);
+        feature.set("changeReason", item.changeReason);
         parcelSource.addFeature(feature);
       } catch (e) {
         console.warn("Failed to parse geometry for parcel", item.dkbm, e);
@@ -276,6 +356,7 @@ export function useDialogMap(targetRef) {
   }
 
   return {
+    mapRef,
     mapReady,
     activeBasemap,
     basemapOptions,

@@ -30,4 +30,8 @@ class LandParcelItem(BaseModel):
     cbfbm: str | None = None
     cbfmc: str | None = None
     cbflx: str | None = None
+    resultStatus: str | None = None
+    isChanged: bool = False
+    changeType: str | None = None
+    changeReason: str | None = None
     geometry: dict | None = None

@@ -1,4 +1,4 @@
-from sqlalchemy import text
+﻿from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 
@@ -6,12 +6,26 @@ class LandParcelRepository:
     """Query survey land parcel tables for parcel data."""
 
     def get_dkbm_list_by_cbfbm(self, db: Session, cbfbm: str) -> list[str]:
-        stmt = text("SELECT dkbm FROM public.survey_cbdkxx_result WHERE cbfbm = :cbfbm")
+        stmt = text(
+            """
+            SELECT dkbm
+            FROM public.survey_cbdkxx_result
+            WHERE cbfbm = :cbfbm
+              AND result_status NOT IN ('removed', 'split_source')
+            """
+        )
         rows = db.execute(stmt, {"cbfbm": cbfbm}).all()
         return [row[0] for row in rows]
 
     def get_cbdkxx_by_cbfbm(self, db: Session, cbfbm: str) -> list[dict]:
-        stmt = text("SELECT dkbm, htmj FROM public.survey_cbdkxx_result WHERE cbfbm = :cbfbm")
+        stmt = text(
+            """
+            SELECT dkbm, htmj
+            FROM public.survey_cbdkxx_result
+            WHERE cbfbm = :cbfbm
+              AND result_status NOT IN ('removed', 'split_source')
+            """
+        )
         rows = db.execute(stmt, {"cbfbm": cbfbm}).all()
         return [{"dkbm": row[0], "htmj": row[1]} for row in rows]
 
@@ -21,6 +35,7 @@ class LandParcelRepository:
             SELECT dkbm, cbfbm, htmj
             FROM public.survey_cbdkxx_result
             WHERE fbfbm = :fbfbm
+              AND result_status NOT IN ('removed', 'split_source')
             """
         )
         rows = db.execute(stmt, {"fbfbm": fbfbm}).all()
@@ -34,7 +49,7 @@ class LandParcelRepository:
         params = {f"dkbm_{i}": value for i, value in enumerate(dkbm_list)}
         stmt = text(
             f"""
-            SELECT
+            SELECT DISTINCT ON (dkbm)
                 dkbm,
                 dkmc,
                 syqxz,
@@ -44,6 +59,8 @@ class LandParcelRepository:
                 ST_AsGeoJSON(ST_Transform(geom, 4326)) AS geometry
             FROM public.survey_dk_result
             WHERE dkbm IN ({placeholders})
+              AND result_status <> 'removed'
+            ORDER BY dkbm, id DESC
             """
         )
         rows = db.execute(stmt, params).all()
@@ -63,7 +80,6 @@ class LandParcelRepository:
     def get_nearby_dk_by_codes(
         self,
         db: Session,
-        batch_id: int,
         dkbm_list: list[str],
         buffer_meters: int = 500,
         limit: int = 800,
@@ -74,17 +90,21 @@ class LandParcelRepository:
         placeholders = ",".join(f":dkbm_{i}" for i in range(len(dkbm_list)))
         params = {
             **{f"dkbm_{i}": value for i, value in enumerate(dkbm_list)},
-            "batch_id": batch_id,
             "buffer_meters": buffer_meters,
             "limit": limit,
         }
         stmt = text(
             f"""
-            WITH selected AS (
-                SELECT ST_Collect(geom) AS geom
+            WITH current_dk AS (
+                SELECT DISTINCT ON (dkbm) *
                 FROM public.survey_dk_result
-                WHERE batch_id = :batch_id
-                  AND dkbm IN ({placeholders})
+                WHERE result_status NOT IN ('removed', 'split_source')
+                ORDER BY dkbm, id DESC
+            ),
+            selected AS (
+                SELECT ST_Collect(geom) AS geom
+                FROM current_dk
+                WHERE dkbm IN ({placeholders})
                   AND geom IS NOT NULL
             ),
             extent AS (
@@ -94,9 +114,8 @@ class LandParcelRepository:
             ),
             spatial_candidates AS (
                 SELECT dk.dkbm, dk.dkmc, dk.geom
-                FROM public.survey_dk_result AS dk, selected, extent
-                WHERE dk.batch_id = :batch_id
-                  AND dk.geom IS NOT NULL
+                FROM current_dk AS dk, selected, extent
+                WHERE dk.geom IS NOT NULL
                   AND (
                     ST_Intersects(dk.geom, extent.geom)
                     OR ST_DWithin(dk.geom, selected.geom, :buffer_meters)
@@ -104,9 +123,8 @@ class LandParcelRepository:
             ),
             nearest_candidates AS (
                 SELECT dk.dkbm, dk.dkmc, dk.geom
-                FROM public.survey_dk_result AS dk, selected
-                WHERE dk.batch_id = :batch_id
-                  AND dk.geom IS NOT NULL
+                FROM current_dk AS dk, selected
+                WHERE dk.geom IS NOT NULL
                 ORDER BY dk.geom <-> selected.geom
                 LIMIT 200
             ),

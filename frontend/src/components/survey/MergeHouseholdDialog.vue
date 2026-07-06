@@ -88,7 +88,6 @@
 <script setup>
 import { computed, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { mergeSurveyHousehold } from "../../api/survey";
 
 const emit = defineEmits(["done"]);
 
@@ -158,15 +157,15 @@ async function handleSubmit() {
   }
   submitting.value = true;
   try {
-    await mergeSurveyHousehold(batchId.value, contractorUid.value, {
+    const payload = {
       targetContractorUid: form.targetContractorUid,
       reason: form.reason || undefined,
-    });
-    ElMessage.success("合户完成");
+    };
+    ElMessage.success("合户已加入待保存");
     visible.value = false;
-    emit("done");
+    emit("done", { type: "merge_household", payload });
   } catch (e) {
-    ElMessage.error(e?.response?.data?.detail || "合户失败");
+    ElMessage.error(e?.message || "合户失败");
   } finally {
     submitting.value = false;
   }

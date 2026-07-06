@@ -93,7 +93,11 @@ class IssuerService:
 
         contractor_codes = db.scalars(
             select(SurveyCbdkxxResult.cbfbm)
-            .where(SurveyCbdkxxResult.fbfbm == issuer_code, SurveyCbdkxxResult.cbfbm.is_not(None))
+            .where(
+                SurveyCbdkxxResult.fbfbm == issuer_code,
+                SurveyCbdkxxResult.cbfbm.is_not(None),
+                SurveyCbdkxxResult.result_status != "removed",
+            )
             .distinct()
         ).all()
         if not contractor_codes:

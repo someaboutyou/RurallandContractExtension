@@ -1,4 +1,4 @@
-"""
+﻿"""
 Contract template rendering service.
 
 Renders the 鍐滄潙鍦熷湴鎵垮寘鍚堝悓 HTML template with live contract data,
@@ -206,6 +206,7 @@ class ContractTemplateService:
             select(SurveyCbdkxxResult).where(
                 SurveyCbdkxxResult.cbfbm == cbfbm,
                 SurveyCbdkxxResult.cbhtbm == cbhtbm,
+                SurveyCbdkxxResult.result_status != "removed",
             )
         ).all()
         first_relation = relations[0] if relations else None
@@ -335,6 +336,7 @@ class ContractTemplateService:
         relations = db.scalars(
             sa_select(SurveyCbdkxxResult).where(
                 SurveyCbdkxxResult.cbfbm == cbfbm,
+                SurveyCbdkxxResult.result_status != "removed",
             )
         ).all()
         first_relation = relations[0] if relations else None
@@ -435,10 +437,11 @@ class ContractTemplateService:
         q = (
             select(j, d)
             .join(d, and_(j.dkbm == d.dkbm))
-            .where(j.cbhtbm == cbhtbm)
+            .where(
+                j.cbhtbm == cbhtbm,
+                j.result_status != "removed",
+            )
         )
-        if batch_id is not None:
-            q = q.where(j.batch_id == batch_id).where(d.batch_id == batch_id)
         rows = db.execute(q).all()
 
         result: list[dict] = []

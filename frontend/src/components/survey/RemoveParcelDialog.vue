@@ -73,7 +73,6 @@
 <script setup>
 import { computed, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
-import { removeSurveyParcel } from "../../api/survey";
 
 const emit = defineEmits(["done"]);
 
@@ -122,15 +121,15 @@ async function handleSubmit() {
   }
   submitting.value = true;
   try {
-    await removeSurveyParcel(batchId.value, contractorUid.value, {
+    const payload = {
       dkbm: form.dkbm,
       reason: form.reason || undefined,
-    });
-    ElMessage.success("地块已移除");
+    };
+    ElMessage.success("移除地块已加入待保存");
     visible.value = false;
-    emit("done");
+    emit("done", { type: "remove_parcel", payload });
   } catch (e) {
-    ElMessage.error(e?.response?.data?.detail || "移除地块失败");
+    ElMessage.error(e?.message || "移除地块失败");
   } finally {
     submitting.value = false;
   }

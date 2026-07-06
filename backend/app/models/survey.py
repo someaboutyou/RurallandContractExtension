@@ -21,28 +21,6 @@ class SurveyBatch(TenantScopedMixin, TimestampMixin, Base):
     created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-
-class SurveyContractorTask(TenantScopedMixin, TimestampMixin, Base):
-    __tablename__ = "survey_contractor_tasks"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    batch_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    contractor_uid: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    cbfbm: Mapped[str] = mapped_column(String(18), nullable=False, index=True)
-    cbfmc: Mapped[str] = mapped_column(String(50), nullable=False)
-    task_status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_started")
-    has_change: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    change_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    assigned_to: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    assigned_to_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    investigated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    skip_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-
 class SurveyCbfBase(TenantScopedMixin, TimestampMixin, Base):
     __tablename__ = "survey_cbf_base"
 
@@ -76,6 +54,17 @@ class SurveyCbfBase(TenantScopedMixin, TimestampMixin, Base):
     initialized_from_key: Mapped[str] = mapped_column(String(120), nullable=False)
     initialized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    result_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    task_status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_started")
+    has_change: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    change_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    assigned_to: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    assigned_to_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    skip_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    investigated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class SurveyCbfResult(TenantScopedMixin, TimestampMixin, Base):
@@ -83,7 +72,6 @@ class SurveyCbfResult(TenantScopedMixin, TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     contractor_uid: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    base_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     cbfbm: Mapped[str] = mapped_column(String(18), nullable=False, index=True)
     cbflx: Mapped[str] = mapped_column(String(1), nullable=False)
     cbfmc: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -124,7 +112,6 @@ class SurveyCbfResult(TenantScopedMixin, TimestampMixin, Base):
     source_import_row_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_import_batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_import_row_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    initialized_from_base_id: Mapped[int] = mapped_column(Integer, nullable=False)
     initialized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -155,6 +142,15 @@ class SurveyCbfJtcyBase(TenantScopedMixin, TimestampMixin, Base):
     initialized_from_key: Mapped[str] = mapped_column(String(120), nullable=False)
     initialized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    result_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    task_status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_started")
+    has_change: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    change_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    assigned_to: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    assigned_to_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    skip_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class SurveyCbfJtcyResult(TenantScopedMixin, TimestampMixin, Base):
@@ -163,7 +159,6 @@ class SurveyCbfJtcyResult(TenantScopedMixin, TimestampMixin, Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     contractor_uid: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     member_uid: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    base_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     cbfbm: Mapped[str] = mapped_column(String(18), nullable=False, index=True)
     cyxm: Mapped[str] = mapped_column(String(50), nullable=False)
     cyzjlx: Mapped[str] = mapped_column(String(1), nullable=False)
@@ -197,7 +192,6 @@ class SurveyCbfJtcyResult(TenantScopedMixin, TimestampMixin, Base):
     source_import_row_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_import_batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_import_row_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    initialized_from_base_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     initialized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     investigator_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     investigator_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -231,6 +225,15 @@ class SurveyFbfBase(TenantScopedMixin, TimestampMixin, Base):
     initialized_from_key: Mapped[str] = mapped_column(String(120), nullable=False)
     initialized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    result_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    task_status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_started")
+    has_change: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    change_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    assigned_to: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    assigned_to_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    skip_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class SurveyFbfResult(TenantScopedMixin, TimestampMixin, Base):
@@ -238,7 +241,6 @@ class SurveyFbfResult(TenantScopedMixin, TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     issuer_uid: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    base_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     fbfbm: Mapped[str] = mapped_column(String(14), nullable=False, index=True)
     fbfmc: Mapped[str] = mapped_column(String(50), nullable=False)
     fbffzrxm: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -259,7 +261,6 @@ class SurveyFbfResult(TenantScopedMixin, TimestampMixin, Base):
     source_import_row_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_import_batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_import_row_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    initialized_from_base_id: Mapped[int] = mapped_column(Integer, nullable=False)
     initialized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -291,6 +292,15 @@ class SurveyCbdkxxBase(TenantScopedMixin, TimestampMixin, Base):
     initialized_from_key: Mapped[str] = mapped_column(String(120), nullable=False)
     initialized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    result_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    task_status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_started")
+    has_change: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    change_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    assigned_to: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    assigned_to_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    skip_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class SurveyCbdkxxResult(TenantScopedMixin, TimestampMixin, Base):
@@ -298,7 +308,6 @@ class SurveyCbdkxxResult(TenantScopedMixin, TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     parcel_info_uid: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    base_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     dkbm: Mapped[str] = mapped_column(String(19), nullable=False, index=True)
     fbfbm: Mapped[str] = mapped_column(String(14), nullable=False, index=True)
     cbfbm: Mapped[str] = mapped_column(String(18), nullable=False, index=True)
@@ -320,7 +329,6 @@ class SurveyCbdkxxResult(TenantScopedMixin, TimestampMixin, Base):
     source_import_row_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_import_batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_import_row_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    initialized_from_base_id: Mapped[int] = mapped_column(Integer, nullable=False)
     initialized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -357,6 +365,15 @@ class SurveyDkBase(TenantScopedMixin, TimestampMixin, Base):
     initialized_from_key: Mapped[str] = mapped_column(String(120), nullable=False)
     initialized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    result_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    task_status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_started")
+    has_change: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    change_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    assigned_to: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    assigned_to_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    skip_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class SurveyDkResult(TenantScopedMixin, TimestampMixin, Base):
@@ -364,7 +381,6 @@ class SurveyDkResult(TenantScopedMixin, TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     parcel_uid: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    base_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     bsm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ysdm: Mapped[str] = mapped_column(String(6), nullable=False)
     dkbm: Mapped[str] = mapped_column(String(19), nullable=False, index=True)
@@ -391,7 +407,6 @@ class SurveyDkResult(TenantScopedMixin, TimestampMixin, Base):
     source_import_row_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_import_batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_import_row_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    initialized_from_base_id: Mapped[int] = mapped_column(Integer, nullable=False)
     initialized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
 

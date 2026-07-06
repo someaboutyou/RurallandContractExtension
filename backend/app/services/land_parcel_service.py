@@ -3,13 +3,64 @@ import json
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.survey import SurveyCbdkxxResult, SurveyCbfResult, SurveyDkBase, SurveyFbfResult
+from app.models.survey import (
+    SurveyCbdkxxBase,
+    SurveyCbdkxxResult,
+    SurveyCbfResult,
+    SurveyChangeRecord,
+    SurveyDkBase,
+    SurveyDkResult,
+    SurveyFbfResult,
+)
 from app.models.user import User
 from app.repositories.land_parcel_repository import land_parcel_repository
 from app.services.data_access_service import data_access_service
 
 
 class LandParcelService:
+
+    def _build_removed_parcel_change_map(
+        self,
+        db: Session,
+        batch_id: int,
+        contractor_uid: str | None,
+    ) -> dict[str, dict]:
+        if not contractor_uid:
+            return {}
+        rows = db.scalars(
+            select(SurveyChangeRecord)
+            .where(
+                SurveyChangeRecord.batch_id == batch_id,
+                SurveyChangeRecord.contractor_uid == contractor_uid,
+                SurveyChangeRecord.change_status != "rolled_back",
+            )
+            .order_by(SurveyChangeRecord.id.desc())
+        ).all()
+        change_map: dict[str, dict] = {}
+        for item in rows:
+            before_summary = item.before_summary or {}
+            after_summary = item.after_summary or {}
+            if item.change_type == "swap_parcels":
+                dkbms = [str(code).strip() for code in (before_summary.get("swapped_out") or []) if str(code).strip()]
+            elif item.change_type == "remove_parcel":
+                dkbm = str(after_summary.get("dkbm") or "").strip()
+                dkbms = [dkbm] if dkbm else []
+            elif item.change_type == "split_parcel":
+                dkbm = str(before_summary.get("dkbm") or after_summary.get("original_dkbm") or "").strip()
+                dkbms = [dkbm] if dkbm else []
+            elif item.change_type == "split_household":
+                dkbms = [str(code).strip() for code in (after_summary.get("moved_parcels") or []) if str(code).strip()]
+            else:
+                dkbms = []
+            for dkbm in dkbms:
+                change_map.setdefault(
+                    dkbm,
+                    {
+                        "changeType": item.change_type,
+                        "changeReason": item.change_reason,
+                    },
+                )
+        return change_map
 
     def get_parcels_for_contractor(
         self, db: Session, cbfbm: str, current_user: User
@@ -98,14 +149,21 @@ class LandParcelService:
         cbdkxx_result_rows = db.scalars(
             select(SurveyCbdkxxResult).where(
                 SurveyCbdkxxResult.cbfbm == cbfbm,
+                SurveyCbdkxxResult.result_status != "removed",
             ).order_by(SurveyCbdkxxResult.dkbm)
         ).all()
+        cbdkxx_base_rows = db.scalars(
+            select(SurveyCbdkxxBase).where(
+                SurveyCbdkxxBase.batch_id == batch_id,
+                SurveyCbdkxxBase.cbfbm == cbfbm,
+            ).order_by(SurveyCbdkxxBase.dkbm)
+        ).all()
 
-        if not cbdkxx_result_rows:
+        if not cbdkxx_result_rows and not cbdkxx_base_rows:
             return []
 
-        dkbm_list = [row.dkbm for row in cbdkxx_result_rows]
-        fbfbm_list = list(set(row.fbfbm for row in cbdkxx_result_rows if row.fbfbm))
+        dkbm_list = sorted({row.dkbm for row in cbdkxx_result_rows} | {row.dkbm for row in cbdkxx_base_rows})
+        fbfbm_list = sorted({row.fbfbm for row in cbdkxx_result_rows if row.fbfbm} | {row.fbfbm for row in cbdkxx_base_rows if row.fbfbm})
 
         dk_base_rows = db.scalars(
             select(SurveyDkBase).where(
@@ -114,6 +172,17 @@ class LandParcelService:
             )
         ).all()
         dk_base_map = {row.dkbm: row for row in dk_base_rows}
+        dk_result_rows = db.scalars(
+            select(SurveyDkResult)
+            .where(
+                SurveyDkResult.dkbm.in_(dkbm_list),
+                SurveyDkResult.result_status != "removed",
+            )
+            .order_by(SurveyDkResult.dkbm.asc(), SurveyDkResult.id.desc())
+        ).all()
+        dk_result_map = {}
+        for row in dk_result_rows:
+            dk_result_map.setdefault(row.dkbm, row)
         dk_geometry_map = {}
         for row in land_parcel_repository.get_dk_by_codes(db, dkbm_list):
             geometry = None
@@ -136,31 +205,50 @@ class LandParcelService:
                 SurveyCbfResult.cbfbm == cbfbm,
             ).order_by(SurveyCbfResult.id.desc())
         ).first()
+        change_map = self._build_removed_parcel_change_map(
+            db,
+            batch_id,
+            cbf_result_row.contractor_uid if cbf_result_row else None,
+        )
+        active_relation_rows = [row for row in cbdkxx_result_rows if row.result_status != "split_source"]
+        historical_split_rows = [row for row in cbdkxx_result_rows if row.result_status == "split_source"]
+        active_relations_by_dkbm = {row.dkbm: row for row in active_relation_rows}
+        historical_relations_by_dkbm = {row.dkbm: row for row in historical_split_rows}
+        base_relations_by_dkbm = {row.dkbm: row for row in cbdkxx_base_rows}
+        removed_candidate_dkbms = (
+            set(base_relations_by_dkbm)
+            | set(change_map)
+        ) - set(active_relations_by_dkbm) - set(historical_relations_by_dkbm)
+        fallback_relation_rows = db.scalars(
+            select(SurveyCbdkxxResult).where(
+                SurveyCbdkxxResult.dkbm.in_(removed_candidate_dkbms or {""}),
+                SurveyCbdkxxResult.result_status != "removed",
+            ).order_by(SurveyCbdkxxResult.dkbm.asc(), SurveyCbdkxxResult.id.desc())
+        ).all() if removed_candidate_dkbms else []
+        fallback_relations_by_dkbm = {}
+        for row in fallback_relation_rows:
+            fallback_relations_by_dkbm.setdefault(row.dkbm, row)
 
-        result = []
-        for cbdkxx in cbdkxx_result_rows:
-            dk_base = dk_base_map.get(cbdkxx.dkbm)
-            fbf = fbf_map.get(cbdkxx.fbfbm)
-
-            item = {
+        def build_item(cbdkxx, dk_source, fbf, result_status=None, is_changed=None, change_type=None, change_reason=None):
+            return {
                 "dkbm": cbdkxx.dkbm,
-                "dkmc": dk_base.dkmc if dk_base else None,
-                "scmj": str(dk_base.scmj) if dk_base and dk_base.scmj is not None else None,
+                "dkmc": dk_source.dkmc if dk_source else None,
+                "scmj": str(dk_source.scmj) if dk_source and dk_source.scmj is not None else None,
                 "htmj": str(cbdkxx.htmj) if cbdkxx.htmj is not None else None,
                 "yhtmj": str(cbdkxx.yhtmj) if cbdkxx.yhtmj is not None else None,
                 "htmjm": str(cbdkxx.htmjm) if cbdkxx.htmjm is not None else None,
                 "yhtmjm": str(cbdkxx.yhtmjm) if cbdkxx.yhtmjm is not None else None,
-                "syqxz": dk_base.syqxz if dk_base else None,
-                "dklb": dk_base.dklb if dk_base else None,
-                "dldj": dk_base.dldj if dk_base else None,
-                "tdyt": dk_base.tdyt if dk_base else None,
-                "tdlylx": dk_base.tdlylx if dk_base else None,
-                "sfjbnt": dk_base.sfjbnt if dk_base else None,
-                "dkdz": dk_base.dkdz if dk_base else None,
-                "dkxz": dk_base.dkxz if dk_base else None,
-                "dknz": dk_base.dknz if dk_base else None,
-                "dkbz": dk_base.dkbz if dk_base else None,
-                "dkbzxx": dk_base.dkbzxx if dk_base else None,
+                "syqxz": dk_source.syqxz if dk_source else None,
+                "dklb": dk_source.dklb if dk_source else None,
+                "dldj": dk_source.dldj if dk_source else None,
+                "tdyt": dk_source.tdyt if dk_source else None,
+                "tdlylx": dk_source.tdlylx if dk_source else None,
+                "sfjbnt": dk_source.sfjbnt if dk_source else None,
+                "dkdz": dk_source.dkdz if dk_source else None,
+                "dkxz": dk_source.dkxz if dk_source else None,
+                "dknz": dk_source.dknz if dk_source else None,
+                "dkbz": dk_source.dkbz if dk_source else None,
+                "dkbzxx": dk_source.dkbzxx if dk_source else None,
                 "fbfbm": cbdkxx.fbfbm,
                 "fbfmc": fbf.fbfmc if fbf else None,
                 "cbjyqqdfs": cbdkxx.cbjyqqdfs,
@@ -171,10 +259,76 @@ class LandParcelService:
                 "cbfbm": cbdkxx.cbfbm,
                 "cbfmc": cbf_result_row.cbfmc if cbf_result_row else None,
                 "cbflx": cbf_result_row.cbflx if cbf_result_row else None,
+                "resultStatus": result_status or cbdkxx.result_status,
+                "isChanged": cbdkxx.is_changed if is_changed is None else is_changed,
+                "changeType": cbdkxx.change_type if change_type is None else change_type,
+                "changeReason": cbdkxx.change_reason if change_reason is None else change_reason,
                 "geometry": dk_geometry_map.get(cbdkxx.dkbm),
             }
-            result.append(item)
 
+        result = []
+        for cbdkxx in active_relation_rows:
+            dk_result = dk_result_map.get(cbdkxx.dkbm)
+            dk_base = dk_base_map.get(cbdkxx.dkbm)
+            dk_source = dk_result or dk_base
+            fbf = fbf_map.get(cbdkxx.fbfbm)
+            result.append(build_item(cbdkxx, dk_source, fbf))
+
+        for cbdkxx in historical_split_rows:
+            dk_result = dk_result_map.get(cbdkxx.dkbm)
+            dk_base = dk_base_map.get(cbdkxx.dkbm)
+            dk_source = dk_result or dk_base
+            fbf = fbf_map.get(cbdkxx.fbfbm)
+            result.append(build_item(cbdkxx, dk_source, fbf, result_status="split_source"))
+
+        for dkbm in sorted(removed_candidate_dkbms):
+            base_relation = base_relations_by_dkbm.get(dkbm)
+            fallback_relation = fallback_relations_by_dkbm.get(dkbm)
+            relation_source = base_relation or fallback_relation
+            if relation_source is None:
+                continue
+            dk_result = dk_result_map.get(dkbm)
+            dk_base = dk_base_map.get(dkbm)
+            dk_source = dk_result or dk_base
+            fbf = fbf_map.get(relation_source.fbfbm)
+            change_meta = change_map.get(dkbm, {})
+            result.append({
+                "dkbm": relation_source.dkbm,
+                "dkmc": dk_source.dkmc if dk_source else None,
+                "scmj": str(dk_source.scmj) if dk_source and dk_source.scmj is not None else None,
+                "htmj": str(relation_source.htmj) if relation_source.htmj is not None else None,
+                "yhtmj": str(relation_source.yhtmj) if relation_source.yhtmj is not None else None,
+                "htmjm": str(relation_source.htmjm) if relation_source.htmjm is not None else None,
+                "yhtmjm": str(relation_source.yhtmjm) if relation_source.yhtmjm is not None else None,
+                "syqxz": dk_source.syqxz if dk_source else None,
+                "dklb": dk_source.dklb if dk_source else None,
+                "dldj": dk_source.dldj if dk_source else None,
+                "tdyt": dk_source.tdyt if dk_source else None,
+                "tdlylx": dk_source.tdlylx if dk_source else None,
+                "sfjbnt": dk_source.sfjbnt if dk_source else None,
+                "dkdz": dk_source.dkdz if dk_source else None,
+                "dkxz": dk_source.dkxz if dk_source else None,
+                "dknz": dk_source.dknz if dk_source else None,
+                "dkbz": dk_source.dkbz if dk_source else None,
+                "dkbzxx": dk_source.dkbzxx if dk_source else None,
+                "fbfbm": relation_source.fbfbm,
+                "fbfmc": fbf.fbfmc if fbf else None,
+                "cbjyqqdfs": relation_source.cbjyqqdfs,
+                "cbhtbm": relation_source.cbhtbm,
+                "cbjyqzbm": relation_source.cbjyqzbm,
+                "lzhtbm": relation_source.lzhtbm,
+                "sfqqqg": relation_source.sfqqqg,
+                "cbfbm": cbfbm,
+                "cbfmc": cbf_result_row.cbfmc if cbf_result_row else None,
+                "cbflx": cbf_result_row.cbflx if cbf_result_row else None,
+                "resultStatus": "split_source" if change_meta.get("changeType") == "split_parcel" else "removed",
+                "isChanged": True,
+                "changeType": change_meta.get("changeType") or "remove_parcel",
+                "changeReason": change_meta.get("changeReason"),
+                "geometry": dk_geometry_map.get(dkbm),
+            })
+
+        result.sort(key=lambda item: (item.get("dkbm") or "", 1 if item.get("resultStatus") in {"removed", "split_source"} else 0))
         return result
 
     def get_nearby_survey_parcels(
@@ -191,9 +345,10 @@ class LandParcelService:
         dkbm_list = db.scalars(
             select(SurveyCbdkxxResult.dkbm).where(
                 SurveyCbdkxxResult.cbfbm == cbfbm,
+                SurveyCbdkxxResult.result_status != "removed",
             )
         ).all()
-        rows = land_parcel_repository.get_nearby_dk_by_codes(db, batch_id, dkbm_list)
+        rows = land_parcel_repository.get_nearby_dk_by_codes(db, dkbm_list)
 
         result = []
         for row in rows:

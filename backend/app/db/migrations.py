@@ -25,6 +25,8 @@ def upgrade_schema(engine: Engine) -> None:
     _migrate_legacy_cbf_tables_to_survey(engine)
     _upgrade_survey_dk_postgis_geometry(engine)
     _upgrade_spatial_tables(engine)
+    _upgrade_survey_base_result_refactor(engine)
+    _upgrade_survey_cbf_base_task_columns(engine)
 
 
 def _upgrade_data_import_operations(engine: Engine) -> None:
@@ -166,7 +168,7 @@ def _upgrade_tenant_scope_columns(engine: Engine) -> None:
             "data_import_files",
             "data_import_rows",
             "survey_batches",
-            "survey_contractor_tasks",
+            # "survey_contractor_tasks",  # table removed
             "survey_cbf_base",
             "survey_cbf_result",
             "survey_cbf_jtcy_base",
@@ -356,7 +358,6 @@ def _upgrade_import_performance_indexes(engine: Engine) -> None:
         ("data_import_rows", "ix_data_import_rows_batch_status_id_desc", ("import_batch_id", "status", "id"), "import_batch_id, status, id DESC"),
         ("data_import_operations", "ix_data_import_operations_batch_id_desc", ("import_batch_id", "id"), "import_batch_id, id DESC"),
         ("survey_cbf_base", "ix_survey_cbf_base_batch_source_cbfbm", ("batch_id", "source_cbfbm"), "batch_id, source_cbfbm"),
-        ("survey_cbf_result", "ix_survey_cbf_result_base_id", ("base_id",), "base_id"),
         ("survey_cbf_result", "ix_survey_cbf_result_cbfbm_id", ("cbfbm", "id"), "cbfbm, id DESC"),
         (
             "survey_cbf_jtcy_base",
@@ -364,21 +365,18 @@ def _upgrade_import_performance_indexes(engine: Engine) -> None:
             ("batch_id", "base_contractor_code", "base_member_id_no"),
             "batch_id, base_contractor_code, base_member_id_no",
         ),
-        ("survey_cbf_jtcy_result", "ix_survey_cbf_jtcy_result_base_id", ("base_id",), "base_id"),
         ("survey_cbf_jtcy_result", "ix_survey_cbf_jtcy_result_cbfbm_cyzjhm_id", ("cbfbm", "cyzjhm", "id"), "cbfbm, cyzjhm, id DESC"),
         ("survey_fbf_base", "ix_survey_fbf_base_batch_source_fbfbm", ("batch_id", "source_fbfbm"), "batch_id, source_fbfbm"),
-        ("survey_fbf_result", "ix_survey_fbf_result_base_id", ("base_id",), "base_id"),
         ("survey_fbf_result", "ix_survey_fbf_result_fbfbm_id", ("fbfbm", "id"), "fbfbm, id DESC"),
         ("survey_cbdkxx_base", "ix_survey_cbdkxx_base_batch_source_dkbm_cbfbm", ("batch_id", "source_dkbm", "cbfbm"), "batch_id, source_dkbm, cbfbm"),
-        ("survey_cbdkxx_result", "ix_survey_cbdkxx_result_base_id", ("base_id",), "base_id"),
         ("survey_cbdkxx_result", "ix_survey_cbdkxx_result_dkbm_cbfbm_id", ("dkbm", "cbfbm", "id"), "dkbm, cbfbm, id DESC"),
         ("survey_cbdkxx_result", "ix_survey_cbdkxx_result_fbfbm_cbfbm", ("fbfbm", "cbfbm"), "fbfbm, cbfbm"),
         ("survey_dk_base", "ix_survey_dk_base_batch_source_dkbm", ("batch_id", "source_dkbm"), "batch_id, source_dkbm"),
-        ("survey_dk_result", "ix_survey_dk_result_base_id", ("base_id",), "base_id"),
+        # Removed: ix_survey_dk_result_base_id (base_id column removed from result table),
         ("survey_dk_result", "ix_survey_dk_result_dkbm_id", ("dkbm", "id"), "dkbm, id DESC"),
-        ("survey_contractor_tasks", "ix_survey_contractor_tasks_batch_cbfbm", ("batch_id", "cbfbm"), "batch_id, cbfbm"),
-        ("survey_contractor_tasks", "ix_survey_contractor_tasks_batch_status_cbfbm", ("batch_id", "task_status", "cbfbm"), "batch_id, task_status, cbfbm"),
-        ("survey_contractor_tasks", "ix_survey_contractor_tasks_batch_region_cbfbm", ("batch_id", "region_code", "cbfbm"), "batch_id, region_code, cbfbm"),
+        ("survey_contractor_tasks" if inspector.has_table("survey_contractor_tasks") else None, "ix_survey_contractor_tasks_batch_cbfbm", ("batch_id", "cbfbm"), "batch_id, cbfbm"),
+        ("survey_contractor_tasks" if inspector.has_table("survey_contractor_tasks") else None, "ix_survey_contractor_tasks_batch_status_cbfbm", ("batch_id", "task_status", "cbfbm"), "batch_id, task_status, cbfbm"),
+        ("survey_contractor_tasks" if inspector.has_table("survey_contractor_tasks") else None, "ix_survey_contractor_tasks_batch_region_cbfbm", ("batch_id", "region_code", "cbfbm"), "batch_id, region_code, cbfbm"),
     ]
     with engine.begin() as connection:
         for table_name, index_name, columns, expression in index_specs:
@@ -390,8 +388,8 @@ def _upgrade_survey_search_indexes(engine: Engine) -> None:
         return
     inspector = inspect(engine)
     index_specs = [
-        ("survey_contractor_tasks", "ix_survey_contractor_tasks_cbfbm_trgm", ("cbfbm",), "cbfbm"),
-        ("survey_contractor_tasks", "ix_survey_contractor_tasks_cbfmc_trgm", ("cbfmc",), "cbfmc"),
+        ("survey_contractor_tasks" if inspector.has_table("survey_contractor_tasks") else None, "ix_survey_contractor_tasks_cbfbm_trgm", ("cbfbm",), "cbfbm"),
+        ("survey_contractor_tasks" if inspector.has_table("survey_contractor_tasks") else None, "ix_survey_contractor_tasks_cbfmc_trgm", ("cbfmc",), "cbfmc"),
         ("survey_fbf_result", "ix_survey_fbf_result_fbfbm_trgm", ("fbfbm",), "fbfbm"),
         ("survey_fbf_result", "ix_survey_fbf_result_fbfmc_trgm", ("fbfmc",), "fbfmc"),
         ("survey_fbf_result", "ix_survey_fbf_result_fbffzrxm_trgm", ("fbffzrxm",), "fbffzrxm"),
@@ -582,20 +580,8 @@ def _migrate_legacy_cbf_tables_to_survey(engine: Engine) -> None:
               )
             """
         )
-        connection.exec_driver_sql(
-            f"""
-            INSERT INTO survey_contractor_tasks (
-                tenant_code, region_code, batch_id, contractor_uid, cbfbm, cbfmc, task_status, has_change, change_count, created_at, updated_at
-            )
-            SELECT b.tenant_code, b.region_code, b.batch_id, b.contractor_uid, b.cbfbm, b.cbfmc, 'not_started', FALSE, 0, NOW(), NOW()
-            FROM survey_cbf_base AS b
-            WHERE b.batch_id = {batch_id}
-              AND NOT EXISTS (
-                  SELECT 1 FROM survey_contractor_tasks AS t
-                  WHERE t.batch_id = b.batch_id AND t.cbfbm = b.cbfbm
-              )
-            """
-        )
+        # survey_contractor_tasks removed - task fields now in survey_cbf_base
+        # Legacy migration no longer inserts into survey_contractor_tasks
         if inspector.has_table("cbf_jtcy") and inspector.has_table("survey_cbf_jtcy_base") and inspector.has_table("survey_cbf_jtcy_result"):
             member_uid_expr = uuid_expr % tuple([f"'survey:' || {batch_id} || ':member:' || m.cbfbm || ':' || m.cyzjhm"] * 5)
             connection.exec_driver_sql(
@@ -686,18 +672,14 @@ def _drop_survey_result_batch_ids(engine: Engine) -> None:
             if "batch_id" in columns:
                 connection.exec_driver_sql(f"ALTER TABLE {table_name} DROP COLUMN IF EXISTS batch_id")
         if "survey_cbf_result" in existing_tables:
-            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_survey_cbf_result_base_id ON survey_cbf_result(base_id)")
             connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_survey_cbf_result_cbfbm_id ON survey_cbf_result(cbfbm, id DESC)")
         if "survey_cbf_jtcy_result" in existing_tables:
-            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_survey_cbf_jtcy_result_base_id ON survey_cbf_jtcy_result(base_id)")
             connection.exec_driver_sql(
                 "CREATE INDEX IF NOT EXISTS ix_survey_cbf_jtcy_result_cbfbm_cyzjhm_id ON survey_cbf_jtcy_result(cbfbm, cyzjhm, id DESC)"
             )
         if "survey_fbf_result" in existing_tables:
-            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_survey_fbf_result_base_id ON survey_fbf_result(base_id)")
             connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_survey_fbf_result_fbfbm_id ON survey_fbf_result(fbfbm, id DESC)")
         if "survey_cbdkxx_result" in existing_tables:
-            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_survey_cbdkxx_result_base_id ON survey_cbdkxx_result(base_id)")
             connection.exec_driver_sql(
                 "CREATE INDEX IF NOT EXISTS ix_survey_cbdkxx_result_dkbm_cbfbm_id ON survey_cbdkxx_result(dkbm, cbfbm, id DESC)"
             )
@@ -705,7 +687,6 @@ def _drop_survey_result_batch_ids(engine: Engine) -> None:
                 "CREATE INDEX IF NOT EXISTS ix_survey_cbdkxx_result_fbfbm_cbfbm ON survey_cbdkxx_result(fbfbm, cbfbm)"
             )
         if "survey_dk_result" in existing_tables:
-            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_survey_dk_result_base_id ON survey_dk_result(base_id)")
             connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_survey_dk_result_dkbm_id ON survey_dk_result(dkbm, id DESC)")
 
 
@@ -1445,3 +1426,128 @@ def _upgrade_spatial_tables(engine: Engine) -> None:
                 """
             )
             connection.exec_driver_sql(f"ANALYZE public.{table_name}")
+
+def _upgrade_survey_base_result_refactor(engine: Engine) -> None:
+    """Refactor: base tables get result_id + task fields, result tables drop base_id, drop survey_contractor_tasks."""
+    inspector = inspect(engine)
+
+    # If survey_cbf_base doesn't exist yet (fresh install), skip - SQLAlchemy create_all handles it
+    if not inspector.has_table("survey_cbf_base"):
+        return
+
+    base_tables = [
+        ("survey_cbf_base", "result_id", "INTEGER", False),
+        ("survey_cbf_jtcy_base", "result_id", "INTEGER", True),
+        ("survey_fbf_base", "result_id", "INTEGER", False),
+        ("survey_cbdkxx_base", "result_id", "INTEGER", False),
+        ("survey_dk_base", "result_id", "INTEGER", False),
+    ]
+
+    task_fields = [
+        ("task_status", "VARCHAR(32) NOT NULL DEFAULT 'not_started'"),
+        ("has_change", "BOOLEAN NOT NULL DEFAULT FALSE"),
+        ("change_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("assigned_to", "INTEGER"),
+        ("assigned_to_name", "VARCHAR(50)"),
+        ("assigned_at", "TIMESTAMPTZ"),
+        ("reviewed_at", "TIMESTAMPTZ"),
+        ("skip_reason", "TEXT"),
+    ]
+
+    result_tables = [
+        "survey_cbf_result",
+        "survey_cbf_jtcy_result",
+        "survey_fbf_result",
+        "survey_cbdkxx_result",
+        "survey_dk_result",
+    ]
+
+    base_result_pairs = [
+        ("survey_cbf_base", "survey_cbf_result", "cbf"),
+        ("survey_cbf_jtcy_base", "survey_cbf_jtcy_result", "jtcy"),
+        ("survey_fbf_base", "survey_fbf_result", "fbf"),
+        ("survey_cbdkxx_base", "survey_cbdkxx_result", "cbdkxx"),
+        ("survey_dk_base", "survey_dk_result", "dk"),
+    ]
+
+    with engine.begin() as connection:
+        # Step 1: Add result_id to base tables
+        for table, col, col_type, nullable in base_tables:
+            columns = {c["name"] for c in inspector.get_columns(table)}
+            if col not in columns:
+                connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+                print(f"  Added {col} to {table}")
+
+        # Step 2: Add task fields to all base tables
+        all_base_tables = [t for t, _, _, _ in base_tables]
+        for base_tbl in all_base_tables:
+            if not inspector.has_table(base_tbl):
+                continue
+            tbl_columns = {c["name"] for c in inspector.get_columns(base_tbl)}
+            for field_name, field_type in task_fields:
+                if field_name not in tbl_columns:
+                    connection.exec_driver_sql(f"ALTER TABLE {base_tbl} ADD COLUMN {field_name} {field_type}")
+                    print(f"  Added {field_name} to {base_tbl}")
+
+        # Step 3: Migrate data from result.base_id to base.result_id
+        for base_table, result_table, label in base_result_pairs:
+            result_cols = {c["name"] for c in inspector.get_columns(result_table)} if inspector.has_table(result_table) else set()
+            if "base_id" in result_cols:
+                connection.exec_driver_sql(
+                    f"UPDATE {base_table} b SET result_id = r.id FROM {result_table} r WHERE r.base_id = b.id AND b.result_id IS NULL"
+                )
+                print(f"  Migrated result_id for {label}")
+
+        # Step 4: Set NOT NULL on result_id where needed (cbf, fbf, cbdkxx, dk)
+        for table in ["survey_cbf_base", "survey_fbf_base", "survey_cbdkxx_base", "survey_dk_base"]:
+            try:
+                connection.exec_driver_sql(f"ALTER TABLE {table} ALTER COLUMN result_id SET NOT NULL")
+            except Exception:
+                pass  # Already NOT NULL or has NULLs
+
+        # Step 5: Migrate task data from survey_contractor_tasks to survey_cbf_base
+        if inspector.has_table("survey_contractor_tasks"):
+            task_cols = {c["name"] for c in inspector.get_columns("survey_contractor_tasks")}
+            connection.exec_driver_sql("""
+                UPDATE survey_cbf_base b SET
+                    task_status = COALESCE(t.task_status, 'not_started'),
+                    has_change = COALESCE(t.has_change, FALSE),
+                    change_count = COALESCE(t.change_count, 0),
+                    assigned_to = t.assigned_to,
+                    assigned_to_name = t.assigned_to_name,
+                    assigned_at = t.assigned_at,
+                    reviewed_at = t.reviewed_at,
+                    skip_reason = t.skip_reason
+                FROM survey_contractor_tasks t
+                WHERE t.batch_id = b.batch_id AND t.contractor_uid = b.contractor_uid
+                  AND b.task_status = 'not_started'
+            """)
+            print("  Migrated task data to survey_cbf_base")
+
+        # Step 6: Drop base_id and initialized_from_base_id from result tables
+        for table in result_tables:
+            cols = {c["name"] for c in inspector.get_columns(table)} if inspector.has_table(table) else set()
+            if "base_id" in cols:
+                connection.exec_driver_sql(f"ALTER TABLE {table} DROP COLUMN base_id")
+                print(f"  Dropped base_id from {table}")
+            if "initialized_from_base_id" in cols:
+                connection.exec_driver_sql(f"ALTER TABLE {table} DROP COLUMN initialized_from_base_id")
+                print(f"  Dropped initialized_from_base_id from {table}")
+
+        # Step 7: Drop survey_contractor_tasks table
+        if inspector.has_table("survey_contractor_tasks"):
+            connection.exec_driver_sql("DROP TABLE survey_contractor_tasks")
+            print("  Dropped survey_contractor_tasks")
+
+
+def _upgrade_survey_cbf_base_task_columns(engine: Engine) -> None:
+    """Add investigated_at and remark to survey_cbf_base if missing."""
+    inspector = inspect(engine)
+    if not inspector.has_table('survey_cbf_base'):
+        return
+    columns = {c['name'] for c in inspector.get_columns('survey_cbf_base')}
+    with engine.begin() as connection:
+        if 'investigated_at' not in columns:
+            connection.exec_driver_sql('ALTER TABLE survey_cbf_base ADD COLUMN investigated_at TIMESTAMPTZ')
+        if 'remark' not in columns:
+            connection.exec_driver_sql('ALTER TABLE survey_cbf_base ADD COLUMN remark TEXT')

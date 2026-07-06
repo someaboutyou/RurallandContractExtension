@@ -104,7 +104,7 @@ DEFAULT_MAP_LAYERS = [
         "layer_type": "XYZ",
         "category": "basemap",
         "group_name": "基础底图",
-        "service_url": "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        "service_url": "https://t6.tianditu.gov.cn/DataServer?T=img_w&x={x}&y={y}&l={z}&tk=d9d9f17f6979a9b6cc681e5b1589f750",
         "projection": "EPSG:3857",
         "default_visible": True,
         "is_default": True,
@@ -474,6 +474,8 @@ DEFAULT_MAP_LAYERS = [
         "enabled": True,
     },
 ]
+
+LEGACY_ARCGIS_IMAGE_BASEMAP_URL = "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
 
 LEGACY_DEFAULT_MAP_LAYER_KEYS = {
     "contract_land",
@@ -1131,6 +1133,11 @@ def ensure_default_map_layers(db: Session) -> None:
         elif item["key"] == "survey_dk_result" and (row.name != item["name"] or row.group_name != item["group_name"]):
             row.name = item["name"]
             row.group_name = item["group_name"]
+            changed = True
+        elif item["key"] == "image" and row.service_url == LEGACY_ARCGIS_IMAGE_BASEMAP_URL:
+            row.service_url = item["service_url"]
+            row.layer_type = item["layer_type"]
+            row.projection = item.get("projection")
             changed = True
 
     if changed:

@@ -7,19 +7,18 @@
     @closed="resetForm"
   >
     <el-alert
-      title="选择目标承包方后，勾选双方要交换的地块，确认后交换归属。"
+      title="目标承包方仅限本组。选择目标承包方后，勾选双方要互换的地块，确认后交换归属。"
       type="info"
       :closable="false"
       show-icon
       class="dialog-alert"
     />
 
-    <!-- 选择目标承包方 -->
     <el-form :model="form" label-position="top">
       <el-form-item label="目标承包方" required>
         <el-select
           v-model="form.targetContractorUid"
-          placeholder="请选择互换对象"
+          placeholder="请选择本组互换对象"
           filterable
           style="width: 100%"
           @change="onTargetChange"
@@ -34,25 +33,24 @@
       </el-form-item>
     </el-form>
 
-    <!-- 互换表格 -->
     <div v-if="form.targetContractorUid" class="swap-tables">
       <div class="swap-panel">
         <div class="swap-panel-header">
           <span class="swap-panel-title">本方地块</span>
-          <span class="swap-panel-sub">{{ sourceParcels.length }} 个地块</span>
+          <span class="swap-panel-sub">{{ exchangeableSourceParcels.length }} 个地块</span>
         </div>
         <el-table
-          :data="sourceParcels"
+          ref="sourceTable"
+          :data="exchangeableSourceParcels"
           border
           size="small"
           max-height="260"
           @selection-change="handleSourceSelection"
-          ref="sourceTable"
         >
           <el-table-column type="selection" width="40" />
           <el-table-column prop="dkbm" label="地块编码" min-width="150" />
           <el-table-column prop="dkmc" label="地块名称" min-width="120" show-overflow-tooltip />
-          <el-table-column prop="scmj" label="实测面积（亩）" width="110" />
+          <el-table-column prop="scmj" label="实测面积（㎡）" width="120" />
           <el-table-column prop="dklb" label="类别" width="70" />
         </el-table>
       </div>
@@ -68,17 +66,18 @@
           <span class="swap-panel-sub">{{ targetParcels.length }} 个地块</span>
         </div>
         <el-table
+          ref="targetTable"
+          v-loading="targetLoading"
           :data="targetParcels"
           border
           size="small"
           max-height="260"
           @selection-change="handleTargetSelection"
-          ref="targetTable"
         >
           <el-table-column type="selection" width="40" />
           <el-table-column prop="dkbm" label="地块编码" min-width="150" />
           <el-table-column prop="dkmc" label="地块名称" min-width="120" show-overflow-tooltip />
-          <el-table-column prop="scmj" label="实测面积（亩）" width="110" />
+          <el-table-column prop="scmj" label="实测面积（㎡）" width="120" />
           <el-table-column prop="dklb" label="类别" width="70" />
         </el-table>
       </div>
@@ -86,7 +85,6 @@
 
     <el-divider />
 
-    <!-- 互换预览 -->
     <el-descriptions v-if="swappedCount" :column="2" border size="small" class="swap-summary">
       <el-descriptions-item label="本方换出">
         <el-tag v-for="d in selectedSource" :key="d" size="small" type="warning" style="margin: 2px">{{ d }}</el-tag>
@@ -96,7 +94,6 @@
       </el-descriptions-item>
     </el-descriptions>
 
-    <!-- 原因 -->
     <el-form :model="form" label-position="top" style="margin-top: 12px">
       <el-form-item label="互换原因">
         <el-input
@@ -127,7 +124,7 @@
 <script setup>
 import { computed, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
-import { fetchSurveyParcels, swapSurveyParcels } from "../../api/survey";
+import { fetchSurveyParcels } from "../../api/survey";
 
 const emit = defineEmits(["done"]);
 
@@ -135,6 +132,7 @@ const visible = ref(false);
 const submitting = ref(false);
 const batchId = ref(null);
 const contractorUid = ref("");
+const currentGroupRegionCode = ref("");
 
 const targetOptions = ref([]);
 const sourceParcels = ref([]);
@@ -142,14 +140,15 @@ const targetParcels = ref([]);
 const selectedSourceDkbms = ref([]);
 const selectedTargetDkbms = ref([]);
 const targetLoading = ref(false);
-const sourceTable = ref(null);
-const targetTable = ref(null);
 
 const form = reactive({
   targetContractorUid: "",
   reason: "",
 });
 
+const exchangeableSourceParcels = computed(() =>
+  (sourceParcels.value || []).filter((item) => !["removed", "split_source"].includes(item.resultStatus)),
+);
 const selectedSource = computed(() => selectedSourceDkbms.value);
 const selectedTarget = computed(() => selectedTargetDkbms.value);
 const swappedCount = computed(() => Math.min(selectedSource.value.length, selectedTarget.value.length));
@@ -160,16 +159,19 @@ const canSubmit = computed(() =>
   selectedTargetDkbms.value.length > 0
 );
 
-function open(bid, cuid, taskList, parcelList) {
+function sameGroup(task) {
+  if (!currentGroupRegionCode.value) return true;
+  const taskGroup = task.groupRegionCode || task.cbfbm?.slice(0, 14) || "";
+  return taskGroup === currentGroupRegionCode.value;
+}
+
+function open(bid, cuid, taskList, parcelList, currentContractor) {
   batchId.value = bid;
   contractorUid.value = cuid;
   sourceParcels.value = parcelList || [];
-  targetOptions.value = (taskList || []).filter((t) => t.contractorUid !== cuid);
-  form.targetContractorUid = "";
-  form.reason = "";
-  selectedSourceDkbms.value = [];
-  selectedTargetDkbms.value = [];
-  targetParcels.value = [];
+  currentGroupRegionCode.value = currentContractor?.groupRegionCode || currentContractor?.code?.slice(0, 14) || "";
+  targetOptions.value = (taskList || []).filter((t) => t.contractorUid !== cuid && sameGroup(t));
+  resetForm();
   visible.value = true;
 }
 
@@ -190,6 +192,7 @@ function handleTargetSelection(rows) {
 }
 
 async function onTargetChange(uid) {
+  selectedTargetDkbms.value = [];
   if (!uid) {
     targetParcels.value = [];
     return;
@@ -212,17 +215,19 @@ async function handleSubmit() {
   }
   submitting.value = true;
   try {
-    await swapSurveyParcels(batchId.value, contractorUid.value, {
+    const payload = {
       targetContractorUid: form.targetContractorUid,
       sourceDkbms: selectedSourceDkbms.value,
       targetDkbms: selectedTargetDkbms.value,
+      sourceParcels: exchangeableSourceParcels.value.filter((item) => selectedSourceDkbms.value.includes(item.dkbm)),
+      targetParcels: targetParcels.value.filter((item) => selectedTargetDkbms.value.includes(item.dkbm)),
       reason: form.reason || undefined,
-    });
-    ElMessage.success("地块互换完成");
+    };
+    ElMessage.success("地块互换已加入待保存");
     visible.value = false;
-    emit("done");
+    emit("done", { type: "swap_parcels", payload });
   } catch (e) {
-    ElMessage.error(e?.response?.data?.detail || "互换失败");
+    ElMessage.error(e?.message || "互换失败");
   } finally {
     submitting.value = false;
   }

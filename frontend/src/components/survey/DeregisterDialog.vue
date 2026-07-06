@@ -50,7 +50,6 @@
 <script setup>
 import { reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { deregisterContractor } from "../../api/survey";
 
 const emit = defineEmits(["done"]);
 
@@ -96,14 +95,14 @@ async function handleSubmit() {
   }
   submitting.value = true;
   try {
-    await deregisterContractor(batchId.value, contractorUid.value, {
+    const payload = {
       reason: form.reason.trim(),
-    });
-    ElMessage.success("承包方已注销");
+    };
+    ElMessage.success("注销承包方已加入待保存");
     visible.value = false;
-    emit("done");
+    emit("done", { type: "deregister", payload });
   } catch (e) {
-    ElMessage.error(e?.response?.data?.detail || "注销失败");
+    ElMessage.error(e?.message || "注销失败");
   } finally {
     submitting.value = false;
   }

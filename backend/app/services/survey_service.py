@@ -1,5 +1,6 @@
-import csv
+﻿import csv
 import io
+import json
 import logging
 import zipfile
 from datetime import date, datetime, timezone
@@ -8,7 +9,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import delete, func, or_, select, text, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.models.fbf import Fbf
 from app.models.survey import (
@@ -21,7 +22,6 @@ from app.models.survey import (
     SurveyAuthorization,
     SurveyChangeDiff,
     SurveyChangeRecord,
-    SurveyContractorTask,
     SurveyHouseholdRestructure,
     SurveyHouseholdRestructureMember,
     SurveyHouseholdTag,
@@ -43,11 +43,27 @@ logger = logging.getLogger(__name__)
 class SurveyService:
     attachment_root = Path(__file__).resolve().parents[2] / "storage" / "survey_attachments"
     authorization_root = Path(__file__).resolve().parents[2] / "storage" / "survey_authorizations"
+    operation_change_types = {
+        "change_head",
+        "member_maintain",
+        "deregister",
+        "add_parcel",
+        "split_parcel",
+        "rollback_split_parcel",
+        "swap_parcels",
+        "rollback_swap_parcels",
+        "remove_parcel",
+        "split_household",
+        "merge_household",
+    }
+    terminal_operation_types = {"deregister", "merge_household"}
+    form_diff_entity_types = {"contractor", "issuer", "member"}
+    parcel_diff_entity_types = {"parcel", "parcel_relation"}
     tag_names = {
-        "whole_family_urbanized": "全家进城落户",
-        "household_extinct": "整户消亡",
-        "five_guarantees": "五保户",
-        "little_or_no_land": "无地少地",
+        "whole_family_urbanized": "鍏ㄥ杩涘煄钀芥埛",
+        "household_extinct": "鏁存埛娑堜骸",
+        "five_guarantees": "浜斾繚鎴?",
+        "little_or_no_land": "鏃犲湴灏戝湴",
     }
     def list_batches(
         self,
@@ -95,9 +111,22 @@ class SurveyService:
         now = datetime.now(timezone.utc)
         region_code = data_access_service.normalize_region_code(payload.get("regionCode"))
         if not region_code:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="璇烽€夋嫨璋冩煡鍖哄煙")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="region code is required")
         data_access_service.ensure_region_in_scope(current_user, region_code)
         tenant_code = data_access_service.get_tenant_code(current_user) or data_access_service.derive_tenant_code(region_code)
+        # 妫€鏌ュ悓鍖哄煙鏄惁鏈夋湭缁撴潫鐨勮皟鏌ユ壒娆?
+        active_batch = db.scalars(
+            select(SurveyBatch).where(
+                SurveyBatch.region_code.like(f"{region_code}%"),
+                SurveyBatch.survey_type == "household_survey",
+                SurveyBatch.status == "active",
+            ).limit(1)
+        ).first()
+        if active_batch:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"an active survey batch already exists in this region: {active_batch.batch_no}",
+            )
         batch_no = self._next_no(db, "SUR", SurveyBatch.id)
         batch = SurveyBatch(
             tenant_code=tenant_code,
@@ -113,7 +142,6 @@ class SurveyService:
         )
         db.add(batch)
         db.flush()
-
         filters = self._tenant_filters(SurveyCbfResult, current_user)
         filters.extend(data_access_service.build_code_scope_filters(SurveyCbfResult.group_region_code, current_user))
         self._append_group_region_filter(filters, SurveyCbfResult.group_region_code, region_code)
@@ -127,7 +155,7 @@ class SurveyService:
         for item in source_results:
             latest_by_code.setdefault(item.cbfbm, item)
         if not latest_by_code:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前范围内没有可初始化的承包方数据")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="no contractor data available for initialization")
 
         for contractor in latest_by_code.values():
             contractor_uid = str(uuid5(NAMESPACE_URL, f"survey:{batch.id}:cbf:{contractor.cbfbm}"))
@@ -163,13 +191,12 @@ class SurveyService:
                 initialized_from_key=contractor.cbfbm,
                 initialized_at=now,
                 snapshot_at=now,
+                result_id=contractor.id,
             )
             db.add(base)
             db.flush()
-            result = self._result_from_base(base, now)
-            db.add(result)
             db.add(
-                SurveyContractorTask(
+                SurveyCbfBase(
                     batch_id=batch.id,
                     contractor_uid=contractor_uid,
                     cbfbm=contractor.cbfbm,
@@ -216,7 +243,6 @@ class SurveyService:
                 )
                 db.add(member_base)
                 db.flush()
-                db.add(self._member_result_from_base(member_base, now))
 
         self._initialize_related_survey_data(db, batch, list(latest_by_code.values()), now)
         db.commit()
@@ -239,26 +265,26 @@ class SurveyService:
         effective_region_code = normalized_region_code or data_access_service.normalize_region_code(batch.region_code)
         if normalized_region_code:
             data_access_service.ensure_region_in_scope(current_user, normalized_region_code)
-        filters = self._tenant_filters(SurveyContractorTask, current_user)
-        filters.append(SurveyContractorTask.batch_id == batch_id)
-        filters.extend(data_access_service.build_code_scope_filters(SurveyContractorTask.cbfbm, current_user))
+        filters = self._tenant_filters(SurveyCbfBase, current_user)
+        filters.append(SurveyCbfBase.batch_id == batch_id)
+        filters.extend(data_access_service.build_code_scope_filters(SurveyCbfBase.cbfbm, current_user))
         if effective_region_code:
-            filters.append(SurveyContractorTask.cbfbm.like(f"{effective_region_code}%"))
+            filters.append(SurveyCbfBase.cbfbm.like(f"{effective_region_code}%"))
         if keyword:
             pattern = f"%{keyword.strip()}%"
-            filters.append(or_(SurveyContractorTask.cbfbm.ilike(pattern), SurveyContractorTask.cbfmc.ilike(pattern)))
+            filters.append(or_(SurveyCbfBase.cbfbm.ilike(pattern), SurveyCbfBase.cbfmc.ilike(pattern)))
         if task_status:
-            filters.append(SurveyContractorTask.task_status == task_status)
+            filters.append(SurveyCbfBase.task_status == task_status)
 
         task_count_stmt = (
-            select(func.count(SurveyContractorTask.id))
+            select(func.count(SurveyCbfBase.id))
             .where(*filters)
             .execution_options(skip_tenant_scope=True)
         )
         task_list_stmt = (
-            select(SurveyContractorTask)
+            select(SurveyCbfBase)
             .where(*filters)
-            .order_by(SurveyContractorTask.cbfbm.asc(), SurveyContractorTask.id.desc())
+            .order_by(SurveyCbfBase.cbfbm.asc(), SurveyCbfBase.id.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
             .execution_options(skip_tenant_scope=True)
@@ -344,11 +370,11 @@ class SurveyService:
             task_overlays = {
                 item.cbfbm: item
                 for item in db.scalars(
-                    select(SurveyContractorTask)
+                    select(SurveyCbfBase)
                     .where(
-                        SurveyContractorTask.tenant_code == batch.tenant_code,
-                        SurveyContractorTask.batch_id == batch.id,
-                        SurveyContractorTask.cbfbm.in_(cbfbms),
+                        SurveyCbfBase.tenant_code == batch.tenant_code,
+                        SurveyCbfBase.batch_id == batch.id,
+                        SurveyCbfBase.cbfbm.in_(cbfbms),
                     )
                     .execution_options(skip_tenant_scope=True)
                 ).all()
@@ -427,11 +453,11 @@ class SurveyService:
         source_tasks = {}
         if first_contractors:
             task_rows = db.scalars(
-                select(SurveyContractorTask)
+                select(SurveyCbfBase)
                 .where(
-                    SurveyContractorTask.tenant_code == batch.tenant_code,
-                    SurveyContractorTask.batch_id == batch_id,
-                    SurveyContractorTask.cbfbm.in_(set(first_contractors.values())),
+                    SurveyCbfBase.tenant_code == batch.tenant_code,
+                    SurveyCbfBase.batch_id == batch_id,
+                    SurveyCbfBase.cbfbm.in_(set(first_contractors.values())),
                 )
                 .execution_options(skip_tenant_scope=True)
             ).all()
@@ -450,11 +476,11 @@ class SurveyService:
     def create_contractor(self, db: Session, batch_id: int, payload: dict, current_user: User) -> dict:
         batch = self._ensure_batch(db, batch_id)
         if batch.status == "finished":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="璋冩煡鎵规宸茬粨鏉燂紝涓嶈兘鏂板")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鐠嬪啯鐓￠幍瑙勵偧瀹歌尙绮ㄩ弶鐕傜礉娑撳秷鍏橀弬鏉款杻")
         code = payload["code"].strip()
-        data_access_service.ensure_code_in_scope(current_user, code, detail="鎵垮寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
+        data_access_service.ensure_code_in_scope(current_user, code, detail="contractor is out of scope")
         if batch.region_code and not code.startswith(batch.region_code):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鎵垮寘鏂圭紪鐮佷笉鍦ㄥ綋鍓嶈皟鏌ユ壒娆″尯鍩熷唴")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contractor code is outside the batch region")
         exists = db.scalars(
             select(SurveyCbfBase).where(
                 SurveyCbfBase.tenant_code == batch.tenant_code,
@@ -463,7 +489,7 @@ class SurveyService:
             ).execution_options(skip_tenant_scope=True)
         ).first()
         if exists:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="鎵垮寘鏂硅皟鏌ユ暟鎹凡瀛樺湪")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="contractor survey result already exists")
 
         now = datetime.now(timezone.utc)
         contractor_uid = str(uuid5(NAMESPACE_URL, f"survey:{batch_id}:cbf:{code}"))
@@ -495,7 +521,26 @@ class SurveyService:
         )
         db.add(base)
         db.flush()
-        result = self._result_from_base(base, now)
+        result = SurveyCbfResult(
+            tenant_code=batch.tenant_code,
+            region_code=group_region_code or batch.region_code,
+            contractor_uid=contractor_uid,
+            cbfbm=base.cbfbm,
+            cbflx=base.cbflx,
+            cbfmc=base.cbfmc,
+            cbfzjlx=base.cbfzjlx,
+            cbfzjhm=base.cbfzjhm,
+            cbfdz=base.cbfdz,
+            yzbm=base.yzbm,
+            lxdh=base.lxdh,
+            cbfcysl=base.cbfcysl,
+            cbfdcrq=base.cbfdcrq,
+            cbfdcy=base.cbfdcy,
+            cbfdcjs=base.cbfdcjs,
+            group_region_code=base.group_region_code,
+            group_region_name=base.group_region_name,
+            initialized_at=now,
+        )
         result.tenant_code = batch.tenant_code
         result.region_code = group_region_code or batch.region_code
         result.result_status = "added"
@@ -503,7 +548,9 @@ class SurveyService:
         result.change_type = "add_contractor"
         result.remark = payload.get("remark")
         db.add(result)
-        db.add(SurveyContractorTask(
+        db.flush()
+        base.result_id = result.id
+        db.add(SurveyCbfBase(
             tenant_code=batch.tenant_code,
             region_code=group_region_code or batch.region_code,
             batch_id=batch_id,
@@ -521,15 +568,15 @@ class SurveyService:
     def create_issuer(self, db: Session, batch_id: int, payload: dict, current_user: User) -> dict:
         batch = self._ensure_batch(db, batch_id)
         if batch.status == "finished":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="璋冩煡鎵规宸茬粨鏉燂紝涓嶈兘鏂板")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鐠嬪啯鐓￠幍瑙勵偧瀹歌尙绮ㄩ弶鐕傜礉娑撳秷鍏橀弬鏉款杻")
         code = payload["code"].strip()
-        data_access_service.ensure_code_in_scope(current_user, code, detail="鍙戝寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
+        data_access_service.ensure_code_in_scope(current_user, code, detail="issuer is out of scope")
         if batch.region_code:
             expected = batch.region_code[:14]
             if len(batch.region_code) >= 14 and code != expected:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="灏忕粍鎵规鐨勫彂鍖呮柟缂栫爜蹇呴』绛変簬鎵规鍖哄煙缂栫爜")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="issuer code must equal the 14-digit batch region code")
             if len(batch.region_code) < 14 and not code.startswith(batch.region_code):
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鍙戝寘鏂圭紪鐮佷笉鍦ㄥ綋鍓嶈皟鏌ユ壒娆″尯鍩熷唴")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="issuer code is outside the batch region")
         exists = db.scalars(
             select(SurveyFbfResult).where(
                 SurveyFbfResult.tenant_code == batch.tenant_code,
@@ -537,7 +584,7 @@ class SurveyService:
             ).execution_options(skip_tenant_scope=True)
         ).first()
         if exists:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="鍙戝寘鏂硅皟鏌ユ暟鎹凡瀛樺湪")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="issuer survey result already exists")
 
         now = datetime.now(timezone.utc)
         survey_date = self._parse_datetime(payload.get("surveyDate")) or datetime.combine(date.today(), datetime.min.time())
@@ -566,7 +613,6 @@ class SurveyService:
         )
         db.add(base)
         db.flush()
-        result = self._fbf_result_from_base(base, now)
         result.result_status = "added"
         result.is_changed = True
         result.change_type = "add_issuer"
@@ -577,10 +623,10 @@ class SurveyService:
 
     def get_issuer(self, db: Session, batch_id: int, issuer_uid: str, current_user: User) -> dict:
         issuer = self._get_issuer(db, batch_id, issuer_uid)
-        data_access_service.ensure_code_in_scope(current_user, issuer.fbfbm, detail="鍙戝寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
+        data_access_service.ensure_code_in_scope(current_user, issuer.fbfbm, detail="閸欐垵瀵橀弬閫涚瑝閸︺劌缍嬮崜宥嗘殶閹诡喗娼堥梽鎰瘱閸ユ潙鍞?")
         base = db.scalars(
             select(SurveyFbfBase)
-            .where(SurveyFbfBase.tenant_code == issuer.tenant_code, SurveyFbfBase.id == issuer.base_id)
+            .where(SurveyFbfBase.tenant_code == issuer.tenant_code, SurveyFbfBase.result_id == issuer.id)
             .execution_options(skip_tenant_scope=True)
         ).first()
         data = self._serialize_issuer(issuer)
@@ -590,21 +636,21 @@ class SurveyService:
     def update_issuer(self, db: Session, batch_id: int, issuer_uid: str, payload: dict, current_user: User) -> dict:
         batch = self._ensure_batch(db, batch_id)
         if batch.status == "finished":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="璋冩煡鎵规宸茬粨鏉燂紝涓嶈兘缁х画缂栬緫")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鐠嬪啯鐓￠幍瑙勵偧瀹歌尙绮ㄩ弶鐕傜礉娑撳秷鍏樼紒褏鐢荤紓鏍帆")
         issuer = self._get_issuer(db, batch_id, issuer_uid)
         if issuer.survey_status == "confirmed":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="发包方调查成果已确认，不能继续编辑")
-        data_access_service.ensure_code_in_scope(current_user, issuer.fbfbm, detail="鍙戝寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
-        data_access_service.ensure_code_in_scope(current_user, payload["code"], detail="鍙戝寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="issuer survey result already confirmed")
+        data_access_service.ensure_code_in_scope(current_user, issuer.fbfbm, detail="issuer is out of scope")
+        data_access_service.ensure_code_in_scope(current_user, payload["code"], detail="issuer is out of scope")
         if batch.region_code:
             if len(batch.region_code) >= 14 and payload["code"] != batch.region_code[:14]:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="灏忕粍鎵规鐨勫彂鍖呮柟缂栫爜蹇呴』绛変簬鎵规鍖哄煙缂栫爜")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="issuer code must equal the 14-digit batch region code")
             if len(batch.region_code) < 14 and not payload["code"].startswith(batch.region_code):
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鍙戝寘鏂圭紪鐮佷笉鍦ㄥ綋鍓嶈皟鏌ユ壒娆″尯鍩熷唴")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="issuer code is outside the batch region")
 
         base = db.scalars(
             select(SurveyFbfBase)
-            .where(SurveyFbfBase.tenant_code == issuer.tenant_code, SurveyFbfBase.id == issuer.base_id)
+            .where(SurveyFbfBase.tenant_code == issuer.tenant_code, SurveyFbfBase.result_id == issuer.id)
             .execution_options(skip_tenant_scope=True)
         ).first()
         old_fbfbm = issuer.fbfbm
@@ -640,7 +686,7 @@ class SurveyService:
 
     def get_result(self, db: Session, batch_id: int, contractor_uid: str, current_user: User) -> dict:
         result = self._get_result(db, batch_id, contractor_uid)
-        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="调查成果不在当前数据权限范围内")
+        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="survey result out of scope")
         data_batch_id = batch_id
         members = db.scalars(
             select(SurveyCbfJtcyResult)
@@ -653,7 +699,13 @@ class SurveyService:
         ).all()
         base = db.scalars(
             select(SurveyCbfBase)
-            .where(SurveyCbfBase.tenant_code == result.tenant_code, SurveyCbfBase.id == result.base_id)
+            .where(
+                SurveyCbfBase.tenant_code == result.tenant_code,
+                SurveyCbfBase.batch_id == data_batch_id,
+                SurveyCbfBase.contractor_uid == contractor_uid,
+                SurveyCbfBase.initialized_from_table.in_(["survey_cbf_result", "manual_add"]),
+            )
+            .order_by(SurveyCbfBase.id.asc())
             .execution_options(skip_tenant_scope=True)
         ).first()
         base_members = db.scalars(
@@ -667,7 +719,7 @@ class SurveyService:
             .execution_options(skip_tenant_scope=True)
         ).all()
         issuer, base_issuer = self._get_result_issuer(db, result)
-        return self._serialize_result(result, members, base, base_members, issuer, base_issuer)
+        return self._serialize_result(result, members, batch_id, base, base_members, issuer, base_issuer)
 
     def list_diffs(
         self,
@@ -679,7 +731,7 @@ class SurveyService:
         current_user: User,
     ) -> dict:
         result = self._get_result(db, batch_id, contractor_uid)
-        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="调查成果不在当前数据权限范围内")
+        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="survey result out of scope")
         stmt = (
             select(SurveyChangeDiff)
             .where(SurveyChangeDiff.batch_id == batch_id, SurveyChangeDiff.contractor_uid == contractor_uid)
@@ -743,7 +795,7 @@ class SurveyService:
 
     def get_phase2_context(self, db: Session, batch_id: int, contractor_uid: str, current_user: User) -> dict:
         result = self._get_result(db, batch_id, contractor_uid)
-        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="调查成果不在当前数据权限范围内")
+        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="survey result out of scope")
         return {
             "tags": self.list_tags(db, batch_id, contractor_uid, current_user),
             "restructures": self.list_restructures(db, batch_id, contractor_uid, current_user),
@@ -815,7 +867,7 @@ class SurveyService:
         for tag_code, item in existing_auto.items():
             if tag_code not in detected:
                 item.is_active = False
-                item.disabled_reason = "鑷姩瑙勫垯褰撳墠涓嶅啀鍛戒腑"
+                item.disabled_reason = "automatically disabled because detection no longer matches"
         if commit:
             db.commit()
         return self.list_tags(db, batch_id, contractor_uid, current_user)
@@ -874,7 +926,7 @@ class SurveyService:
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="survey result out of scope")
         item = db.get(SurveyHouseholdRestructure, item_id) if item_id else None
         if item_id and item is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="鍒嗗悎鎴蜂笓椤逛笉瀛樺湪")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="restructure record not found")
         if item is None:
             item = SurveyHouseholdRestructure(
                 batch_id=batch_id,
@@ -925,13 +977,13 @@ class SurveyService:
     def update_restructure(self, db: Session, restructure_id: int, payload: dict, current_user: User) -> dict:
         item = db.get(SurveyHouseholdRestructure, restructure_id)
         if item is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="鍒嗗悎鎴蜂笓椤逛笉瀛樺湪")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="restructure record not found")
         return self.save_restructure(db, item.batch_id, item.contractor_uid, payload, current_user, item_id=restructure_id)
 
     def delete_restructure(self, db: Session, restructure_id: int, current_user: User) -> None:
         item = db.get(SurveyHouseholdRestructure, restructure_id)
         if item is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="鍒嗗悎鎴蜂笓椤逛笉瀛樺湪")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="restructure record not found")
         result = self._get_result(db, item.batch_id, item.contractor_uid)
         self._ensure_editable_batch_and_result(db, result)
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="survey result out of scope")
@@ -1017,7 +1069,7 @@ class SurveyService:
         result = self._get_result(db, item.batch_id, item.contractor_uid)
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
         content = item.generated_content or self._build_authorization_text(result, item)
-        return f"{item.authorization_no}_鎺堟潈濮旀墭涔?txt", content.encode("utf-8-sig")
+        return f"{item.authorization_no}_閹哄牊娼堟慨鏃€澧稊?txt", content.encode("utf-8-sig")
 
     def revoke_authorization(self, db: Session, authorization_id: int, revoke_reason: str, current_user: User) -> dict:
         item = db.get(SurveyAuthorization, authorization_id)
@@ -1088,12 +1140,12 @@ class SurveyService:
         result = self._get_result(db, batch_id, contractor_uid)
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
         if result.generated_request_id:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="璇ヨ皟鏌ユ垚鏋滃凡鐢熸垚涓氬姟鐢宠")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="鐠囥儴鐨熼弻銉﹀灇閺嬫粌鍑￠悽鐔稿灇娑撴艾濮熼悽瀹狀嚞")
         request_type = payload.get("requestType") or self._infer_request_type(result)
         issuer_code = self._resolve_issuer_code(db, result.cbfbm)
         request_payload = {
             "requestType": request_type,
-            "requestTitle": payload.get("requestTitle") or f"{request_type}-{result.cbfmc}-璋冩煡杞姙",
+            "requestTitle": payload.get("requestTitle") or f"{request_type}-{result.cbfmc}-survey",
             "issuerCode": issuer_code,
             "contractorCode": result.cbfbm,
             "contractorName": result.cbfmc,
@@ -1130,17 +1182,17 @@ class SurveyService:
         effective_region_code = normalized_region_code or data_access_service.normalize_region_code(batch.region_code)
         if normalized_region_code:
             data_access_service.ensure_region_in_scope(current_user, normalized_region_code)
-        task_filters = self._tenant_filters(SurveyContractorTask, current_user)
-        task_filters.append(SurveyContractorTask.batch_id == batch_id)
+        task_filters = self._tenant_filters(SurveyCbfBase, current_user)
+        task_filters.append(SurveyCbfBase.batch_id == batch_id)
         contractor_filters = self._tenant_filters(SurveyCbfResult, current_user)
         contractor_filters.extend(data_access_service.build_code_scope_filters(SurveyCbfResult.group_region_code, current_user))
         member_filters = self._tenant_filters(SurveyCbfJtcyResult, current_user)
         self._append_group_region_filter(contractor_filters, SurveyCbfResult.group_region_code, effective_region_code)
 
         tasks = db.scalars(
-            select(SurveyContractorTask)
+            select(SurveyCbfBase)
             .where(*task_filters)
-            .order_by(SurveyContractorTask.cbfbm.asc())
+            .order_by(SurveyCbfBase.cbfbm.asc())
             .execution_options(skip_tenant_scope=True)
         ).all()
         source_contractors = db.scalars(
@@ -1170,6 +1222,7 @@ class SurveyService:
                 select(SurveyCbdkxxResult)
                 .where(
                     SurveyCbdkxxResult.cbfbm.in_({item.cbfbm for item in contractors}),
+                    SurveyCbdkxxResult.result_status != "removed",
                 )
                 .execution_options(skip_tenant_scope=True)
             ).all()
@@ -1205,27 +1258,41 @@ class SurveyService:
     def update_result(self, db: Session, batch_id: int, contractor_uid: str, payload: dict, current_user: User) -> dict:
         batch = self._ensure_batch(db, batch_id)
         if batch.status == "finished":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="璋冩煡鎵规宸茬粨鏉燂紝涓嶈兘缁х画缂栬緫")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鐠嬪啯鐓￠幍瑙勵偧瀹歌尙绮ㄩ弶鐕傜礉娑撳秷鍏樼紒褏鐢荤紓鏍帆")
         result = self._get_result(db, batch_id, contractor_uid)
         if result.survey_status == "confirmed":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="璋冩煡鎴愭灉宸茬‘璁わ紝涓嶈兘缁х画缂栬緫")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鐠嬪啯鐓￠幋鎰亯瀹歌尙鈥樼拋銈忕礉娑撳秷鍏樼紒褏鐢荤紓鏍帆")
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
         data_access_service.ensure_code_in_scope(current_user, payload["code"], detail="out of scope")
         now = datetime.now(timezone.utc)
         data_batch_id = batch_id
-        base = db.get(SurveyCbfBase, result.base_id)
+        base = db.scalar(
+            select(SurveyCbfBase)
+            .where(
+                SurveyCbfBase.batch_id == data_batch_id,
+                SurveyCbfBase.contractor_uid == result.contractor_uid,
+                SurveyCbfBase.initialized_from_table.in_(["survey_cbf_result", "manual_add"]),
+            )
+            .order_by(SurveyCbfBase.id.asc())
+        )
         before_summary = self._summary_from_base(base) if base else self._summary_from_result(result)
         issuer_payload = None
         issuer = None
         base_issuer = None
         issuer_changed = False
         issuer_before_summary = None
+        deleted_member_reasons = {
+            item.get("memberUid"): item.get("changeReason")
+            for item in payload.get("deletedMembers") or []
+            if item.get("memberUid")
+        }
+        pending_operations = payload.get("pendingOperations") or []
         if issuer_payload:
             issuer, base_issuer = self._get_result_issuer(db, result)
             if issuer is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="鍙戝寘鏂硅皟鏌ユ垚鏋滀笉瀛樺湪")
-            data_access_service.ensure_code_in_scope(current_user, issuer.fbfbm, detail="鍙戝寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
-            data_access_service.ensure_code_in_scope(current_user, issuer_payload["code"], detail="鍙戝寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="閸欐垵瀵橀弬纭呯殶閺屻儲鍨氶弸婊€绗夌€涙ê婀?")
+            data_access_service.ensure_code_in_scope(current_user, issuer.fbfbm, detail="閸欐垵瀵橀弬閫涚瑝閸︺劌缍嬮崜宥嗘殶閹诡喗娼堥梽鎰瘱閸ユ潙鍞?")
+            data_access_service.ensure_code_in_scope(current_user, issuer_payload["code"], detail="閸欐垵瀵橀弬閫涚瑝閸︺劌缍嬮崜宥嗘殶閹诡喗娼堥梽鎰瘱閸ユ潙鍞?")
             issuer_before_summary = self._issuer_summary_from_base(base_issuer) if base_issuer else self._issuer_summary_from_result(issuer)
 
         result.cbfbm = payload["code"]
@@ -1306,7 +1373,6 @@ class SurveyService:
             member = SurveyCbfJtcyResult(
                 contractor_uid=contractor_uid,
                 member_uid=member_uid,
-                base_id=member_base.id if member_base else None,
                 cbfbm=result.cbfbm,
                 cyxm=item["name"],
                 cyzjlx=item["idType"],
@@ -1338,7 +1404,6 @@ class SurveyService:
                 source_import_row_id=member_base.source_import_row_id if member_base else None,
                 last_import_batch_id=member_base.last_import_batch_id if member_base else None,
                 last_import_row_id=member_base.last_import_row_id if member_base else None,
-                initialized_from_base_id=member_base.id if member_base else None,
                 initialized_at=now,
                 investigator_id=current_user.id,
                 investigator_name=current_user.real_name,
@@ -1374,31 +1439,7 @@ class SurveyService:
         deleted_member_count = len(base_member_uids - result_member_uids)
         contractor_changed = self._contractor_changed(result, base)
         result.is_changed = contractor_changed or bool(changed_members) or deleted_member_count > 0 or issuer_changed
-        task = db.scalars(
-            select(SurveyContractorTask).where(
-                SurveyContractorTask.batch_id == batch_id,
-                SurveyContractorTask.contractor_uid == contractor_uid,
-            )
-        ).first()
-        if task is None:
-            task = SurveyContractorTask(
-                tenant_code=result.tenant_code,
-                region_code=result.group_region_code or result.region_code,
-                batch_id=batch_id,
-                contractor_uid=contractor_uid,
-                cbfbm=result.cbfbm,
-                cbfmc=result.cbfmc,
-            )
-            db.add(task)
-        if task:
-            task.cbfbm = result.cbfbm
-            task.cbfmc = result.cbfmc
-            task.task_status = result.survey_status
-            task.has_change = result.is_changed
-            task.change_count = (1 if contractor_changed else 0) + (1 if issuer_changed else 0) + len(changed_members) + deleted_member_count
-            task.investigated_at = now
-            task.remark = result.remark
-
+        form_change_count = (1 if contractor_changed else 0) + (1 if issuer_changed else 0) + len(changed_members) + deleted_member_count
         after_summary = self._summary_from_result(result)
         if issuer_payload and issuer:
             before_summary["issuer"] = issuer_before_summary
@@ -1426,19 +1467,65 @@ class SurveyService:
                 )
             db.add(change_record)
             db.flush()
-        self._rebuild_diffs(db, batch_id, contractor_uid, result, base, change_record.id if change_record else None, issuer, base_issuer)
-        self.refresh_auto_tags(db, batch_id, contractor_uid, current_user, commit=False)
+        has_terminal_operation = any(
+            (operation.get("type") if isinstance(operation, dict) else None) in self.terminal_operation_types
+            for operation in pending_operations
+        )
+        self._apply_pending_operations(db, batch_id, contractor_uid, pending_operations, current_user)
+        if not has_terminal_operation:
+            preserved_operation_change_count = db.scalar(
+                select(func.count(SurveyChangeRecord.id)).where(
+                    SurveyChangeRecord.batch_id == batch_id,
+                    SurveyChangeRecord.contractor_uid == contractor_uid,
+                    SurveyChangeRecord.change_type.in_(self.operation_change_types),
+                )
+            ) or 0
+            task = db.scalars(
+                select(SurveyCbfBase).where(
+                    SurveyCbfBase.batch_id == batch_id,
+                    SurveyCbfBase.contractor_uid == contractor_uid,
+                )
+            ).first()
+            if task is None:
+                task = SurveyCbfBase(
+                    tenant_code=result.tenant_code,
+                    region_code=result.group_region_code or result.region_code,
+                    batch_id=batch_id,
+                    contractor_uid=contractor_uid,
+                    cbfbm=result.cbfbm,
+                    cbfmc=result.cbfmc,
+                )
+                db.add(task)
+            if task:
+                task.cbfbm = result.cbfbm
+                task.cbfmc = result.cbfmc
+                task.task_status = result.survey_status
+                task.has_change = result.is_changed or preserved_operation_change_count > 0
+                task.change_count = form_change_count + preserved_operation_change_count
+                task.investigated_at = now
+                task.remark = result.remark
+            affected_uids = self._collect_diff_rebuild_uids(batch_id, contractor_uid, pending_operations)
+            self._rebuild_contractor_diffs(
+                db,
+                batch_id,
+                affected_uids,
+                change_ids={contractor_uid: change_record.id if change_record else None},
+                deleted_member_reasons={contractor_uid: deleted_member_reasons},
+            )
+            self.refresh_auto_tags(db, batch_id, contractor_uid, current_user, commit=False)
         db.commit()
+        if has_terminal_operation:
+            return {"contractorUid": contractor_uid, "status": "closed"}
         return self.get_result(db, batch_id, contractor_uid, current_user)
 
     def confirm_result(self, db: Session, batch_id: int, contractor_uid: str, current_user: User) -> dict:
         batch = self._ensure_batch(db, batch_id)
         if batch.status == "finished":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="璋冩煡鎵规宸茬粨鏉燂紝涓嶈兘缁х画纭")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鐠嬪啯鐓￠幍瑙勵偧瀹歌尙绮ㄩ弶鐕傜礉娑撳秷鍏樼紒褏鐢荤涵顔款吇")
         result = self._get_result(db, batch_id, contractor_uid)
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
         if result.survey_status not in {"surveyed", "changed", "unchanged"}:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="璇峰厛淇濆瓨璋冩煡缁撴灉鍚庡啀纭")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鐠囧嘲鍘涙穱婵嗙摠鐠嬪啯鐓＄紒鎾寸亯閸氬骸鍟€绾喛顓?")
         self._validate_confirmable(db, result)
         now = datetime.now(timezone.utc)
         result.survey_status = "confirmed"
@@ -1447,13 +1534,13 @@ class SurveyService:
         result.reviewer_name = current_user.real_name
         result.reviewed_at = now
         task = db.scalars(
-            select(SurveyContractorTask).where(
-                SurveyContractorTask.batch_id == batch_id,
-                SurveyContractorTask.contractor_uid == contractor_uid,
+            select(SurveyCbfBase).where(
+                SurveyCbfBase.batch_id == batch_id,
+                SurveyCbfBase.contractor_uid == contractor_uid,
             )
         ).first()
         if task is None:
-            task = SurveyContractorTask(
+            task = SurveyCbfBase(
                 tenant_code=result.tenant_code,
                 region_code=result.group_region_code or result.region_code,
                 batch_id=batch_id,
@@ -1472,11 +1559,11 @@ class SurveyService:
     def skip_task(self, db: Session, batch_id: int, contractor_uid: str, skip_reason: str, current_user: User) -> dict:
         batch = self._ensure_batch(db, batch_id)
         if batch.status == "finished":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="璋冩煡鎵规宸茬粨鏉燂紝涓嶈兘缁х画鎿嶄綔")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鐠嬪啯鐓￠幍瑙勵偧瀹歌尙绮ㄩ弶鐕傜礉娑撳秷鍏樼紒褏鐢婚幙宥勭稊")
         result = self._get_result(db, batch_id, contractor_uid)
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
         if result.survey_status == "confirmed":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="璋冩煡鎴愭灉宸茬‘璁わ紝涓嶈兘璺宠繃")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鐠嬪啯鐓￠幋鎰亯瀹歌尙鈥樼拋銈忕礉娑撳秷鍏樼捄瀹犵箖")
         now = datetime.now(timezone.utc)
         result.survey_status = "skipped"
         result.result_status = "normal"
@@ -1485,13 +1572,13 @@ class SurveyService:
         result.investigator_name = current_user.real_name
         result.investigated_at = now
         task = db.scalars(
-            select(SurveyContractorTask).where(
-                SurveyContractorTask.batch_id == batch_id,
-                SurveyContractorTask.contractor_uid == contractor_uid,
+            select(SurveyCbfBase).where(
+                SurveyCbfBase.batch_id == batch_id,
+                SurveyCbfBase.contractor_uid == contractor_uid,
             )
         ).first()
         if task is None:
-            task = SurveyContractorTask(
+            task = SurveyCbfBase(
                 tenant_code=result.tenant_code,
                 region_code=result.group_region_code or result.region_code,
                 batch_id=batch_id,
@@ -1513,27 +1600,27 @@ class SurveyService:
     def finish_batch(self, db: Session, batch_id: int, current_user: User) -> dict:
         batch = self._ensure_batch(db, batch_id)
         unfinished = db.scalar(
-            select(func.count(SurveyContractorTask.id)).where(
-                SurveyContractorTask.batch_id == batch_id,
-                SurveyContractorTask.task_status.notin_(["confirmed", "skipped"]),
+            select(func.count(SurveyCbfBase.id)).where(
+                SurveyCbfBase.batch_id == batch_id,
+                SurveyCbfBase.task_status.notin_(["confirmed", "skipped"]),
             )
         ) or 0
         if unfinished:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="request failed")
         skipped_without_reason = db.scalar(
-            select(func.count(SurveyContractorTask.id)).where(
-                SurveyContractorTask.batch_id == batch_id,
-                SurveyContractorTask.task_status == "skipped",
-                or_(SurveyContractorTask.skip_reason.is_(None), SurveyContractorTask.skip_reason == ""),
+            select(func.count(SurveyCbfBase.id)).where(
+                SurveyCbfBase.batch_id == batch_id,
+                SurveyCbfBase.task_status == "skipped",
+                or_(SurveyCbfBase.skip_reason.is_(None), SurveyCbfBase.skip_reason == ""),
             )
         ) or 0
         if skipped_without_reason:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"杩樻湁 {skipped_without_reason} 鎴疯烦杩囧師鍥犱负绌猴紝涓嶈兘缁撴潫鎵规")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"鏉╂ɑ婀?{skipped_without_reason} 閹寸柉鐑︽潻鍥у斧閸ョ姳璐熺粚鐚寸礉娑撳秷鍏樼紒鎾存将閹佃顐?")
         changed_confirmed = db.scalars(
-            select(SurveyContractorTask).where(
-                SurveyContractorTask.batch_id == batch_id,
-                SurveyContractorTask.task_status == "confirmed",
-                SurveyContractorTask.has_change.is_(True),
+            select(SurveyCbfBase).where(
+                SurveyCbfBase.batch_id == batch_id,
+                SurveyCbfBase.task_status == "confirmed",
+                SurveyCbfBase.has_change.is_(True),
             )
         ).all()
         missing_change_trace = 0
@@ -1553,7 +1640,7 @@ class SurveyService:
             if diff_count == 0 and change_count == 0:
                 missing_change_trace += 1
         if missing_change_trace:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"杩樻湁 {missing_change_trace} 鎴锋湁鍙樺寲浣嗙己灏戝彉鍖栬褰曪紝涓嶈兘缁撴潫鎵规")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"鏉╂ɑ婀?{missing_change_trace} 閹撮攱婀侀崣妯哄娴ｅ棛宸辩亸鎴濆綁閸栨牞顔囪ぐ鏇礉娑撳秷鍏樼紒鎾存将閹佃顐?")
         batch.status = "finished"
         batch.ended_at = datetime.now(timezone.utc)
         db.commit()
@@ -1587,9 +1674,9 @@ class SurveyService:
 
         if result.is_changed or result.change_type != "none":
             if not self._has_text(result.change_reason):
-                errors.append("鎵垮寘鏂瑰瓨鍦ㄥ彉鍖栨椂蹇呴』濉啓鍙樺寲鍘熷洜")
+                errors.append("閹靛灝瀵橀弬鐟扮摠閸︺劌褰夐崠鏍ㄦ韫囧懘銆忔繅顐㈠晸閸欐ê瀵查崢鐔锋礈")
             if not self._has_text(result.policy_basis):
-                errors.append("鎵垮寘鏂瑰瓨鍦ㄥ彉鍖栨椂蹇呴』濉啓鏀跨瓥渚濇嵁")
+                errors.append("閹靛灝瀵橀弬鐟扮摠閸︺劌褰夐崠鏍ㄦ韫囧懘銆忔繅顐㈠晸閺€璺ㄧ摜娓氭繃宓?")
 
         for member in members:
             has_member_survey_change = member.is_changed or member.member_result_status != "normal" or any(
@@ -1608,17 +1695,17 @@ class SurveyService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="request failed")
 
     def _ensure_editable_batch_and_result(self, db: Session, result: SurveyCbfResult) -> None:
-        base = db.get(SurveyCbfBase, result.base_id) if result.base_id else None
+        base = db.scalar(select(SurveyCbfBase).where(SurveyCbfBase.contractor_uid == result.contractor_uid).order_by(SurveyCbfBase.id.desc())) if result else None
         batch = self._ensure_batch(db, base.batch_id) if base else None
         if batch.status == "finished":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="璋冩煡鎵规宸茬粨鏉燂紝涓嶈兘缁х画缂栬緫")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鐠嬪啯鐓￠幍瑙勵偧瀹歌尙绮ㄩ弶鐕傜礉娑撳秷鍏樼紒褏鐢荤紓鏍帆")
         if result.survey_status == "confirmed":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="璋冩煡鎴愭灉宸茬‘璁わ紝涓嶈兘缁х画缂栬緫")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鐠嬪啯鐓￠幋鎰亯瀹歌尙鈥樼拋銈忕礉娑撳秷鍏樼紒褏鐢荤紓鏍帆")
 
     async def _store_upload(self, directory: Path, upload_file: UploadFile) -> tuple[Path, int]:
         content = await upload_file.read()
         if not content:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="涓婁紶鏂囦欢涓虹┖")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="娑撳﹣绱堕弬鍥︽娑撹櫣鈹?")
         directory.mkdir(parents=True, exist_ok=True)
         suffix = Path(upload_file.filename or "").suffix
         storage_path = directory / f"{uuid4().hex}{suffix}"
@@ -1645,8 +1732,8 @@ class SurveyService:
 
     def _infer_request_type(self, result: SurveyCbfResult) -> str:
         if result.change_type in {"extinct"} or result.result_status in {"extinct", "cancelled"}:
-            return "娉ㄩ攢鐧昏"
-        return "鍙樻洿鐧昏"
+            return "濞夈劑鏀㈤惂鏄忣唶"
+        return "閸欐ɑ娲块惂鏄忣唶"
 
     def _resolve_issuer_code(self, db: Session, cbfbm: str) -> str:
         candidates = [cbfbm[:14], cbfbm[:12], cbfbm[:9], cbfbm[:6]]
@@ -1669,7 +1756,7 @@ class SurveyService:
     def _short_region_name(region_name: str | None, region_code: str) -> str:
         if not region_name:
             return region_code
-        parts = [part.strip() for part in region_name.replace("，", "/").split("/") if part.strip()]
+        parts = [part.strip() for part in region_name.replace("、", "/").split("/") if part.strip()]
         return parts[-1] if parts else region_name.strip()
 
     def _get_result(self, db: Session, batch_id: int, contractor_uid: str) -> SurveyCbfResult:
@@ -1687,58 +1774,7 @@ class SurveyService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="request failed")
         return result
 
-    def _result_from_base(self, base: SurveyCbfBase, now: datetime) -> SurveyCbfResult:
-        return SurveyCbfResult(
-            contractor_uid=base.contractor_uid,
-            base_id=base.id,
-            cbfbm=base.cbfbm,
-            cbflx=base.cbflx,
-            cbfmc=base.cbfmc,
-            cbfzjlx=base.cbfzjlx,
-            cbfzjhm=base.cbfzjhm,
-            cbfdz=base.cbfdz,
-            yzbm=base.yzbm,
-            lxdh=base.lxdh,
-            cbfcysl=base.cbfcysl,
-            cbfdcrq=base.cbfdcrq,
-            cbfdcy=base.cbfdcy,
-            cbfdcjs=base.cbfdcjs,
-            gsjs=base.gsjs,
-            gsjsr=base.gsjsr,
-            gsshrq=base.gsshrq,
-            gsshr=base.gsshr,
-            group_region_code=base.group_region_code,
-            group_region_name=base.group_region_name,
-            source_import_batch_id=base.source_import_batch_id,
-            source_import_row_id=base.source_import_row_id,
-            last_import_batch_id=base.last_import_batch_id,
-            last_import_row_id=base.last_import_row_id,
-            initialized_from_base_id=base.id,
-            initialized_at=now,
-        )
 
-    def _member_result_from_base(self, base: SurveyCbfJtcyBase, now: datetime) -> SurveyCbfJtcyResult:
-        return SurveyCbfJtcyResult(
-            contractor_uid=base.contractor_uid,
-            member_uid=base.member_uid,
-            base_id=base.id,
-            cbfbm=base.cbfbm,
-            cyxm=base.cyxm,
-            cyzjlx=base.cyzjlx,
-            cyzjhm=base.cyzjhm,
-            cyxb=base.cyxb,
-            yhzgx=base.yhzgx,
-            cybz=base.cybz,
-            sfgyr=base.sfgyr,
-            cybzsm=base.cybzsm,
-            is_household_head=base.yhzgx == "01",
-            source_import_batch_id=base.source_import_batch_id,
-            source_import_row_id=base.source_import_row_id,
-            last_import_batch_id=base.last_import_batch_id,
-            last_import_row_id=base.last_import_row_id,
-            initialized_from_base_id=base.id,
-            initialized_at=now,
-        )
 
     def _initialize_related_survey_data(self, db: Session, batch: SurveyBatch, contractors: list[SurveyCbfResult], now: datetime) -> None:
         cbfbms = {item.cbfbm for item in contractors if item.cbfbm}
@@ -1749,6 +1785,7 @@ class SurveyService:
             .where(
                 SurveyCbdkxxResult.tenant_code == batch.tenant_code,
                 SurveyCbdkxxResult.cbfbm.in_(cbfbms),
+                SurveyCbdkxxResult.result_status != "removed",
             )
             .order_by(SurveyCbdkxxResult.dkbm.asc(), SurveyCbdkxxResult.cbfbm.asc(), SurveyCbdkxxResult.id.desc())
             .execution_options(skip_tenant_scope=True)
@@ -1766,13 +1803,11 @@ class SurveyService:
             base = self._fbf_base_from_result(batch.id, fbf, now)
             db.add(base)
             db.flush()
-            db.add(self._fbf_result_from_base(base, now))
 
         for dk in dk_by_code.values():
             base = self._dk_base_from_result(batch.id, dk, now)
             db.add(base)
             db.flush()
-            result = self._dk_result_from_base(base, now)
             db.add(result)
             db.flush()
             self._copy_dk_geometry(db, dk.id, "survey_dk_base", base.id)
@@ -1782,7 +1817,6 @@ class SurveyService:
             base = self._cbdkxx_base_from_result(batch.id, parcel_info, now)
             db.add(base)
             db.flush()
-            db.add(self._cbdkxx_result_from_base(base, now))
 
     def _latest_dk_results(self, db: Session, tenant_code: str, dkbms: set[str]) -> dict[str, SurveyDkResult]:
         if not dkbms:
@@ -1826,178 +1860,7 @@ class SurveyService:
             latest.setdefault(item.cbfbm, item)
         return latest
 
-    def _fbf_base_from_result(self, batch_id: int, item: SurveyFbfResult, now: datetime) -> SurveyFbfBase:
-        return SurveyFbfBase(
-            tenant_code=item.tenant_code,
-            region_code=item.region_code,
-            batch_id=batch_id,
-            issuer_uid=str(uuid5(NAMESPACE_URL, f"survey:{batch_id}:fbf:{item.fbfbm}")),
-            source_fbfbm=item.fbfbm,
-            fbfbm=item.fbfbm,
-            fbfmc=item.fbfmc,
-            fbffzrxm=item.fbffzrxm,
-            fzrzjlx=item.fzrzjlx,
-            fzrzjhm=item.fzrzjhm,
-            lxdh=item.lxdh,
-            fbfdz=item.fbfdz,
-            yzbm=item.yzbm,
-            fbfdcy=item.fbfdcy,
-            fbfdcrq=item.fbfdcrq,
-            fbfdcjs=item.fbfdcjs,
-            source_import_batch_id=item.source_import_batch_id,
-            source_import_row_id=item.source_import_row_id,
-            last_import_batch_id=item.last_import_batch_id,
-            last_import_row_id=item.last_import_row_id,
-            initialized_from_table="survey_fbf_result",
-            initialized_from_key=item.fbfbm,
-            initialized_at=now,
-            snapshot_at=now,
-        )
 
-    def _fbf_result_from_base(self, base: SurveyFbfBase, now: datetime) -> SurveyFbfResult:
-        return SurveyFbfResult(
-            tenant_code=base.tenant_code,
-            region_code=base.region_code,
-            issuer_uid=base.issuer_uid,
-            base_id=base.id,
-            fbfbm=base.fbfbm,
-            fbfmc=base.fbfmc,
-            fbffzrxm=base.fbffzrxm,
-            fzrzjlx=base.fzrzjlx,
-            fzrzjhm=base.fzrzjhm,
-            lxdh=base.lxdh,
-            fbfdz=base.fbfdz,
-            yzbm=base.yzbm,
-            fbfdcy=base.fbfdcy,
-            fbfdcrq=base.fbfdcrq,
-            fbfdcjs=base.fbfdcjs,
-            source_import_batch_id=base.source_import_batch_id,
-            source_import_row_id=base.source_import_row_id,
-            last_import_batch_id=base.last_import_batch_id,
-            last_import_row_id=base.last_import_row_id,
-            initialized_from_base_id=base.id,
-            initialized_at=now,
-        )
-
-    def _cbdkxx_base_from_result(self, batch_id: int, item: SurveyCbdkxxResult, now: datetime) -> SurveyCbdkxxBase:
-        return SurveyCbdkxxBase(
-            tenant_code=item.tenant_code,
-            region_code=item.region_code,
-            batch_id=batch_id,
-            parcel_info_uid=str(uuid5(NAMESPACE_URL, f"survey:{batch_id}:cbdkxx:{item.dkbm}:{item.cbfbm}")),
-            source_dkbm=item.dkbm,
-            dkbm=item.dkbm,
-            fbfbm=item.fbfbm,
-            cbfbm=item.cbfbm,
-            cbjyqqdfs=item.cbjyqqdfs,
-            htmj=item.htmj,
-            cbhtbm=item.cbhtbm,
-            lzhtbm=item.lzhtbm,
-            cbjyqzbm=item.cbjyqzbm,
-            yhtmj=item.yhtmj,
-            htmjm=item.htmjm,
-            yhtmjm=item.yhtmjm,
-            sfqqqg=item.sfqqqg,
-            source_import_batch_id=item.source_import_batch_id,
-            source_import_row_id=item.source_import_row_id,
-            last_import_batch_id=item.last_import_batch_id,
-            last_import_row_id=item.last_import_row_id,
-            initialized_from_table="survey_cbdkxx_result",
-            initialized_from_key=f"{item.dkbm}:{item.cbfbm}",
-            initialized_at=now,
-            snapshot_at=now,
-        )
-
-    def _cbdkxx_result_from_base(self, base: SurveyCbdkxxBase, now: datetime) -> SurveyCbdkxxResult:
-        return SurveyCbdkxxResult(
-            tenant_code=base.tenant_code,
-            region_code=base.region_code,
-            parcel_info_uid=base.parcel_info_uid,
-            base_id=base.id,
-            dkbm=base.dkbm,
-            fbfbm=base.fbfbm,
-            cbfbm=base.cbfbm,
-            cbjyqqdfs=base.cbjyqqdfs,
-            htmj=base.htmj,
-            cbhtbm=base.cbhtbm,
-            lzhtbm=base.lzhtbm,
-            cbjyqzbm=base.cbjyqzbm,
-            yhtmj=base.yhtmj,
-            htmjm=base.htmjm,
-            yhtmjm=base.yhtmjm,
-            sfqqqg=base.sfqqqg,
-            source_import_batch_id=base.source_import_batch_id,
-            source_import_row_id=base.source_import_row_id,
-            last_import_batch_id=base.last_import_batch_id,
-            last_import_row_id=base.last_import_row_id,
-            initialized_from_base_id=base.id,
-            initialized_at=now,
-        )
-
-    def _dk_base_from_result(self, batch_id: int, item: SurveyDkResult, now: datetime) -> SurveyDkBase:
-        return SurveyDkBase(
-            tenant_code=item.tenant_code,
-            region_code=item.region_code,
-            batch_id=batch_id,
-            parcel_uid=str(uuid5(NAMESPACE_URL, f"survey:{batch_id}:dk:{item.dkbm}")),
-            source_dkbm=item.dkbm,
-            bsm=item.bsm,
-            ysdm=item.ysdm,
-            dkbm=item.dkbm,
-            dkmc=item.dkmc,
-            syqxz=item.syqxz,
-            dklb=item.dklb,
-            tdlylx=item.tdlylx,
-            dldj=item.dldj,
-            tdyt=item.tdyt,
-            sfjbnt=item.sfjbnt,
-            scmj=item.scmj,
-            dkdz=item.dkdz,
-            dkxz=item.dkxz,
-            dknz=item.dknz,
-            dkbz=item.dkbz,
-            dkbzxx=item.dkbzxx,
-            zjrxm=item.zjrxm,
-            source_import_batch_id=item.source_import_batch_id,
-            source_import_row_id=item.source_import_row_id,
-            last_import_batch_id=item.last_import_batch_id,
-            last_import_row_id=item.last_import_row_id,
-            initialized_from_table="survey_dk_result",
-            initialized_from_key=item.dkbm,
-            initialized_at=now,
-            snapshot_at=now,
-        )
-
-    def _dk_result_from_base(self, base: SurveyDkBase, now: datetime) -> SurveyDkResult:
-        return SurveyDkResult(
-            tenant_code=base.tenant_code,
-            region_code=base.region_code,
-            parcel_uid=base.parcel_uid,
-            base_id=base.id,
-            bsm=base.bsm,
-            ysdm=base.ysdm,
-            dkbm=base.dkbm,
-            dkmc=base.dkmc,
-            syqxz=base.syqxz,
-            dklb=base.dklb,
-            tdlylx=base.tdlylx,
-            dldj=base.dldj,
-            tdyt=base.tdyt,
-            sfjbnt=base.sfjbnt,
-            scmj=base.scmj,
-            dkdz=base.dkdz,
-            dkxz=base.dkxz,
-            dknz=base.dknz,
-            dkbz=base.dkbz,
-            dkbzxx=base.dkbzxx,
-            zjrxm=base.zjrxm,
-            source_import_batch_id=base.source_import_batch_id,
-            source_import_row_id=base.source_import_row_id,
-            last_import_batch_id=base.last_import_batch_id,
-            last_import_row_id=base.last_import_row_id,
-            initialized_from_base_id=base.id,
-            initialized_at=now,
-        )
 
     def _copy_dk_geometry(self, db: Session, source_result_id: int, target_table: str, target_id: int) -> None:
         db.execute(
@@ -2013,10 +1876,667 @@ class SurveyService:
             {"target_id": target_id, "source_result_id": source_result_id},
         )
 
+    def _normalize_geojson_geometry(self, geometry: dict | None) -> dict | None:
+        if geometry is None:
+            return None
+        candidate = geometry
+        if isinstance(candidate, dict) and candidate.get("type") == "Feature":
+            candidate = candidate.get("geometry")
+        if not isinstance(candidate, dict):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid parcel geometry")
+        geometry_type = str(candidate.get("type") or "")
+        if geometry_type not in {"Polygon", "MultiPolygon"}:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="parcel geometry must be Polygon or MultiPolygon")
+        if not candidate.get("coordinates"):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="parcel geometry is empty")
+        return candidate
+
+    def _geojson_4527_sql(self, geojson_param: str = "geojson", srid_param: str = "source_srid") -> str:
+        return (
+            "ST_Multi(ST_CollectionExtract(ST_MakeValid("
+            f"ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON(:{geojson_param}), :{srid_param}), 4527)"
+            "), 3))"
+        )
+
+    def _measure_geojson_area_mu(self, db: Session, geometry: dict, source_srid: int) -> float | None:
+        stmt = text(
+            f"""
+            WITH input_geom AS (
+                SELECT {self._geojson_4527_sql()} AS geom
+            )
+            SELECT
+                CASE
+                    WHEN geom IS NULL OR ST_IsEmpty(geom) THEN NULL
+                    ELSE ROUND(CAST(ST_Area(geom) / 666.6666667 AS numeric), 4)
+                END AS area_mu
+            FROM input_geom
+            """
+        )
+        try:
+            area_mu = db.scalar(
+                stmt,
+                {
+                    "geojson": json.dumps(geometry, ensure_ascii=False),
+                    "source_srid": int(source_srid or 4326),
+                },
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid parcel geometry") from exc
+        return float(area_mu) if area_mu is not None else None
+
+    def _find_local_geometry_conflicts(self, db: Session, geometry: dict, source_srid: int, local_parcels: list[dict] | None) -> list[dict]:
+        candidate_parcels = [
+            {
+                "dkbm": item.get("dkbm"),
+                "dkmc": item.get("dkmc"),
+                "cbfbm": item.get("cbfbm"),
+                "cbfmc": item.get("cbfmc"),
+                "geometry": self._normalize_geojson_geometry(item.get("geometry")),
+            }
+            for item in (local_parcels or [])
+            if isinstance(item, dict) and item.get("resultStatus") != "removed" and item.get("geometry")
+        ]
+        if not candidate_parcels:
+            return []
+        stmt = text(
+            """
+            WITH input_geom AS (
+                SELECT """
+            + self._geojson_4527_sql()
+            + """ AS geom
+            ),
+            local_parcels AS (
+                SELECT
+                    item->>'dkbm' AS dkbm,
+                    item->>'dkmc' AS dkmc,
+                    item->>'cbfbm' AS cbfbm,
+                    item->>'cbfmc' AS cbfmc,
+                    ST_Multi(
+                        ST_CollectionExtract(
+                            ST_MakeValid(
+                                ST_Transform(
+                                    ST_SetSRID(ST_GeomFromGeoJSON((item->'geometry')::text), 4326),
+                                    4527
+                                )
+                            ),
+                            3
+                        )
+                    ) AS geom
+                FROM jsonb_array_elements(CAST(:local_parcels_json AS jsonb)) AS item
+            )
+            SELECT
+                'local' AS source,
+                dkbm,
+                dkmc,
+                cbfbm,
+                cbfmc,
+                ROUND(CAST(ST_Area(ST_Intersection(local_parcels.geom, input_geom.geom)) / 666.6666667 AS numeric), 4) AS overlap_area_mu
+            FROM local_parcels
+            CROSS JOIN input_geom
+            WHERE input_geom.geom IS NOT NULL
+              AND local_parcels.geom IS NOT NULL
+              AND NOT ST_IsEmpty(local_parcels.geom)
+              AND ST_Intersects(local_parcels.geom, input_geom.geom)
+              AND NOT ST_Touches(local_parcels.geom, input_geom.geom)
+            ORDER BY overlap_area_mu DESC NULLS LAST, dkbm
+            LIMIT 20
+            """
+        )
+        rows = db.execute(
+            stmt,
+            {
+                "geojson": json.dumps(geometry, ensure_ascii=False),
+                "source_srid": int(source_srid or 4326),
+                "local_parcels_json": json.dumps(candidate_parcels, ensure_ascii=False),
+            },
+        ).mappings().all()
+        return [
+            {
+                "source": row["source"],
+                "dkbm": row["dkbm"],
+                "dkmc": row["dkmc"],
+                "cbfbm": row["cbfbm"],
+                "cbfmc": row["cbfmc"],
+                "overlapAreaMu": float(row["overlap_area_mu"]) if row["overlap_area_mu"] is not None else None,
+            }
+            for row in rows
+        ]
+
+    def _find_database_geometry_conflicts(
+        self,
+        db: Session,
+        tenant_code: str,
+        geometry: dict,
+        source_srid: int,
+        exclude_dkbms: list[str] | None = None,
+    ) -> list[dict]:
+        params = {
+            "tenant_code": tenant_code,
+            "geojson": json.dumps(geometry, ensure_ascii=False),
+            "source_srid": int(source_srid or 4326),
+        }
+        exclude_codes = [str(code).strip() for code in (exclude_dkbms or []) if str(code).strip()]
+        exclude_sql = ""
+        if exclude_codes:
+            placeholders = []
+            for index, code in enumerate(exclude_codes):
+                key = f"exclude_dkbm_{index}"
+                params[key] = code
+                placeholders.append(f":{key}")
+            exclude_sql = f" AND dk.dkbm NOT IN ({', '.join(placeholders)})"
+        stmt = text(
+            f"""
+            WITH input_geom AS (
+                SELECT {self._geojson_4527_sql()} AS geom
+            ),
+            current_dk AS (
+                SELECT DISTINCT ON (dkbm)
+                    dkbm,
+                    dkmc,
+                    geom
+                FROM public.survey_dk_result
+                WHERE tenant_code = :tenant_code
+                  AND result_status NOT IN ('removed', 'split_source')
+                  AND geom IS NOT NULL
+                ORDER BY dkbm, id DESC
+            ),
+            current_relation AS (
+                SELECT DISTINCT ON (dkbm)
+                    dkbm,
+                    cbfbm
+                FROM public.survey_cbdkxx_result
+                WHERE tenant_code = :tenant_code
+                  AND result_status NOT IN ('removed', 'split_source')
+                ORDER BY dkbm, id DESC
+            ),
+            current_contractor AS (
+                SELECT DISTINCT ON (cbfbm)
+                    cbfbm,
+                    cbfmc
+                FROM public.survey_cbf_result
+                WHERE tenant_code = :tenant_code
+                ORDER BY cbfbm, id DESC
+            )
+            SELECT
+                'database' AS source,
+                dk.dkbm,
+                dk.dkmc,
+                relation.cbfbm,
+                contractor.cbfmc,
+                ROUND(CAST(ST_Area(ST_Intersection(dk.geom, input_geom.geom)) / 666.6666667 AS numeric), 4) AS overlap_area_mu
+            FROM current_dk AS dk
+            CROSS JOIN input_geom
+            LEFT JOIN current_relation AS relation ON relation.dkbm = dk.dkbm
+            LEFT JOIN current_contractor AS contractor ON contractor.cbfbm = relation.cbfbm
+            WHERE input_geom.geom IS NOT NULL
+              AND dk.geom IS NOT NULL
+              AND NOT ST_IsEmpty(dk.geom)
+              AND ST_Intersects(dk.geom, input_geom.geom)
+              AND NOT ST_Touches(dk.geom, input_geom.geom)
+              {exclude_sql}
+            ORDER BY overlap_area_mu DESC NULLS LAST, dk.dkbm
+            LIMIT 20
+            """
+        )
+        rows = db.execute(stmt, params).mappings().all()
+        return [
+            {
+                "source": row["source"],
+                "dkbm": row["dkbm"],
+                "dkmc": row["dkmc"],
+                "cbfbm": row["cbfbm"],
+                "cbfmc": row["cbfmc"],
+                "overlapAreaMu": float(row["overlap_area_mu"]) if row["overlap_area_mu"] is not None else None,
+            }
+            for row in rows
+        ]
+
+    def _write_survey_dk_geometry(self, db: Session, table_name: str, row_id: int, geometry: dict, source_srid: int) -> None:
+        stmt = text(
+            f"""
+            UPDATE {table_name}
+            SET geom = {self._geojson_4527_sql()}
+            WHERE id = :row_id
+            """
+        )
+        try:
+            db.execute(
+                stmt,
+                {
+                    "row_id": row_id,
+                    "geojson": json.dumps(geometry, ensure_ascii=False),
+                    "source_srid": int(source_srid or 4326),
+                },
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="failed to save parcel geometry") from exc
+
+    def _normalize_split_geometry(self, geometry: dict | None) -> dict | None:
+        if geometry is None:
+            return None
+        candidate = geometry
+        if isinstance(candidate, dict) and candidate.get("type") == "Feature":
+            candidate = candidate.get("geometry")
+        if not isinstance(candidate, dict):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid split geometry")
+        geometry_type = str(candidate.get("type") or "")
+        if geometry_type not in {"LineString", "MultiLineString", "Polygon", "MultiPolygon"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="split geometry must be line or polygon",
+            )
+        if not candidate.get("coordinates"):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="split geometry is empty")
+        return candidate
+
+    @staticmethod
+    def _parse_geojson_text(value: str | None) -> dict | None:
+        if not value:
+            return None
+        try:
+            return json.loads(value)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid split geometry result") from exc
+
+    def _load_result_geometry_extent(self, db: Session, row_id: int) -> dict:
+        row = db.execute(
+            text(
+                """
+                SELECT
+                    ST_XMin(geom) AS min_x,
+                    ST_YMin(geom) AS min_y,
+                    ST_XMax(geom) AS max_x,
+                    ST_YMax(geom) AS max_y,
+                    ST_Area(geom) AS area_sqm
+                FROM survey_dk_result
+                WHERE id = :row_id
+                  AND geom IS NOT NULL
+                  AND NOT ST_IsEmpty(geom)
+                """
+            ),
+            {"row_id": row_id},
+        ).mappings().first()
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="selected parcel does not have geometry",
+            )
+        return {
+            "minX": float(row["min_x"]),
+            "minY": float(row["min_y"]),
+            "maxX": float(row["max_x"]),
+            "maxY": float(row["max_y"]),
+            "areaSqm": float(row["area_sqm"]),
+        }
+
+    @staticmethod
+    def _direction_clip_bounds(direction: str, threshold: float, extent: dict) -> dict:
+        min_x = extent["minX"]
+        min_y = extent["minY"]
+        max_x = extent["maxX"]
+        max_y = extent["maxY"]
+        padding = 1.0
+        if direction == "east":
+            return {"left": threshold, "bottom": min_y - padding, "right": max_x + padding, "top": max_y + padding}
+        if direction == "west":
+            return {"left": min_x - padding, "bottom": min_y - padding, "right": threshold, "top": max_y + padding}
+        if direction == "south":
+            return {"left": min_x - padding, "bottom": min_y - padding, "right": max_x + padding, "top": threshold}
+        if direction == "north":
+            return {"left": min_x - padding, "bottom": threshold, "right": max_x + padding, "top": max_y + padding}
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid split direction")
+
+    def _measure_directional_split_area_sqm(self, db: Session, row_id: int, bounds: dict) -> float:
+        area_sqm = db.scalar(
+            text(
+                """
+                WITH source AS (
+                    SELECT ST_Multi(ST_CollectionExtract(ST_MakeValid(geom), 3)) AS geom
+                    FROM survey_dk_result
+                    WHERE id = :row_id
+                ),
+                clip AS (
+                    SELECT ST_MakeEnvelope(:left, :bottom, :right, :top, 4527) AS geom
+                )
+                SELECT COALESCE(
+                    ST_Area(
+                        ST_Multi(
+                            ST_CollectionExtract(
+                                ST_MakeValid(ST_Intersection(source.geom, clip.geom)),
+                                3
+                            )
+                        )
+                    ),
+                    0
+                )
+                FROM source
+                CROSS JOIN clip
+                """
+            ),
+            {"row_id": row_id, **bounds},
+        )
+        return float(area_sqm or 0)
+
+    def _split_rows_to_parts(self, rows: list[dict] | None) -> list[dict]:
+        parts: list[dict] = []
+        for row in rows or []:
+            geometry = self._parse_geojson_text(row.get("geojson"))
+            area_mu = float(row["area_mu"]) if row.get("area_mu") is not None else 0
+            if geometry and area_mu > 0:
+                parts.append({
+                    "geometry": geometry,
+                    "areaMu": round(area_mu, 4),
+                })
+        return parts
+
+    def _split_row_geometry_by_direction(
+        self,
+        db: Session,
+        row_id: int,
+        direction: str,
+        target_area_mu: float,
+    ) -> dict:
+        normalized_direction = str(direction or "").strip().lower()
+        if normalized_direction not in {"east", "west", "south", "north"}:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid split direction")
+        extent = self._load_result_geometry_extent(db, row_id)
+        target_area_sqm = float(target_area_mu) * 666.6666667
+        source_area_sqm = float(extent["areaSqm"])
+        if target_area_sqm <= 0 or target_area_sqm >= source_area_sqm:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="split area must be smaller than source parcel area")
+
+        low = extent["minX"] if normalized_direction in {"east", "west"} else extent["minY"]
+        high = extent["maxX"] if normalized_direction in {"east", "west"} else extent["maxY"]
+        increasing = normalized_direction in {"west", "south"}
+        for _ in range(32):
+            middle = (low + high) / 2
+            bounds = self._direction_clip_bounds(normalized_direction, middle, extent)
+            current_area_sqm = self._measure_directional_split_area_sqm(db, row_id, bounds)
+            if increasing:
+                if current_area_sqm < target_area_sqm:
+                    low = middle
+                else:
+                    high = middle
+            else:
+                if current_area_sqm > target_area_sqm:
+                    low = middle
+                else:
+                    high = middle
+        threshold = (low + high) / 2
+        bounds = self._direction_clip_bounds(normalized_direction, threshold, extent)
+        rows = db.execute(
+            text(
+                """
+                WITH source AS (
+                    SELECT ST_Multi(ST_CollectionExtract(ST_MakeValid(geom), 3)) AS geom
+                    FROM survey_dk_result
+                    WHERE id = :row_id
+                ),
+                clip AS (
+                    SELECT ST_MakeEnvelope(:left, :bottom, :right, :top, 4527) AS geom
+                ),
+                fragments AS (
+                    SELECT
+                        0 AS part_group,
+                        ST_Multi(ST_CollectionExtract(ST_MakeValid((dump).geom), 3)) AS geom
+                    FROM source
+                    CROSS JOIN clip
+                    CROSS JOIN LATERAL ST_Dump(
+                        ST_CollectionExtract(ST_MakeValid(ST_Intersection(source.geom, clip.geom)), 3)
+                    ) AS dump
+                    UNION ALL
+                    SELECT
+                        1 AS part_group,
+                        ST_Multi(ST_CollectionExtract(ST_MakeValid((dump).geom), 3)) AS geom
+                    FROM source
+                    CROSS JOIN clip
+                    CROSS JOIN LATERAL ST_Dump(
+                        ST_CollectionExtract(ST_MakeValid(ST_Difference(source.geom, clip.geom)), 3)
+                    ) AS dump
+                )
+                SELECT
+                    part_group,
+                    ST_AsGeoJSON(ST_Transform(geom, 4326)) AS geojson,
+                    ROUND(CAST(ST_Area(geom) / 666.6666667 AS numeric), 4) AS area_mu
+                FROM fragments
+                WHERE geom IS NOT NULL
+                  AND NOT ST_IsEmpty(geom)
+                ORDER BY part_group, ST_Area(geom) DESC, ST_XMin(geom), ST_YMin(geom)
+                """
+            ),
+            {"row_id": row_id, **bounds},
+        ).mappings().all()
+        parts = self._split_rows_to_parts(rows)
+        if len(parts) < 2:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="failed to split parcel by direction")
+        return {"parts": parts}
+
+    def _split_row_geometry_by_shape(
+        self,
+        db: Session,
+        row_id: int,
+        split_geometry: dict,
+        source_srid: int,
+    ) -> dict:
+        normalized_geometry = self._normalize_split_geometry(split_geometry)
+        if normalized_geometry is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="split geometry is required")
+        geometry_type = str(normalized_geometry.get("type") or "")
+        params = {
+            "row_id": row_id,
+            "geojson": json.dumps(normalized_geometry, ensure_ascii=False),
+            "source_srid": int(source_srid or 4326),
+        }
+        if geometry_type in {"Polygon", "MultiPolygon"}:
+            stmt = text(
+                f"""
+                WITH source AS (
+                    SELECT ST_Multi(ST_CollectionExtract(ST_MakeValid(geom), 3)) AS geom
+                    FROM survey_dk_result
+                    WHERE id = :row_id
+                ),
+                splitter AS (
+                    SELECT ST_MakeValid({self._geojson_4527_sql()}) AS geom
+                ),
+                fragments AS (
+                    SELECT
+                        0 AS part_group,
+                        ST_Multi(ST_CollectionExtract(ST_MakeValid((dump).geom), 3)) AS geom
+                    FROM source
+                    CROSS JOIN splitter
+                    CROSS JOIN LATERAL ST_Dump(
+                        ST_CollectionExtract(ST_MakeValid(ST_Intersection(source.geom, splitter.geom)), 3)
+                    ) AS dump
+                    UNION ALL
+                    SELECT
+                        1 AS part_group,
+                        ST_Multi(ST_CollectionExtract(ST_MakeValid((dump).geom), 3)) AS geom
+                    FROM source
+                    CROSS JOIN splitter
+                    CROSS JOIN LATERAL ST_Dump(
+                        ST_CollectionExtract(ST_MakeValid(ST_Difference(source.geom, splitter.geom)), 3)
+                    ) AS dump
+                )
+                SELECT
+                    part_group,
+                    ST_AsGeoJSON(ST_Transform(geom, 4326)) AS geojson,
+                    ROUND(CAST(ST_Area(geom) / 666.6666667 AS numeric), 4) AS area_mu
+                FROM fragments
+                WHERE geom IS NOT NULL
+                  AND NOT ST_IsEmpty(geom)
+                ORDER BY part_group, ST_Area(geom) DESC, ST_XMin(geom), ST_YMin(geom)
+                """
+            )
+        else:
+            stmt = text(
+                f"""
+                WITH source AS (
+                    SELECT ST_Multi(ST_CollectionExtract(ST_MakeValid(geom), 3)) AS geom
+                    FROM survey_dk_result
+                    WHERE id = :row_id
+                ),
+                splitter AS (
+                    SELECT ST_MakeValid(
+                        ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON(:geojson), :source_srid), 4527)
+                    ) AS geom
+                ),
+                fragments AS (
+                    SELECT
+                        0 AS part_group,
+                        ST_Multi(ST_CollectionExtract(ST_MakeValid((dump).geom), 3)) AS geom
+                    FROM source
+                    CROSS JOIN splitter
+                    CROSS JOIN LATERAL ST_Dump(ST_Split(source.geom, splitter.geom)) AS dump
+                )
+                SELECT
+                    part_group,
+                    ST_AsGeoJSON(ST_Transform(geom, 4326)) AS geojson,
+                    ROUND(CAST(ST_Area(geom) / 666.6666667 AS numeric), 4) AS area_mu
+                FROM fragments
+                WHERE geom IS NOT NULL
+                  AND NOT ST_IsEmpty(geom)
+                ORDER BY ST_Area(geom) DESC, ST_XMin(geom), ST_YMin(geom)
+                """
+            )
+        rows = db.execute(stmt, params).mappings().all()
+        parts = self._split_rows_to_parts(rows)
+        if geometry_type in {"LineString", "MultiLineString"} and len(parts) < 2:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="split line does not divide the parcel")
+        if len(parts) < 2:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="split geometry is invalid")
+        return {"parts": parts}
+
+    def validate_parcel_geometry(
+        self,
+        db: Session,
+        batch_id: int,
+        contractor_uid: str,
+        payload: dict,
+        current_user: User,
+    ) -> dict:
+        logger.info(
+            "survey.validate_parcel_geometry start batch_id=%s contractor_uid=%s payload_geometry_type=%s local_parcel_count=%s",
+            batch_id,
+            contractor_uid,
+            payload.get("geometry", {}).get("type") if isinstance(payload.get("geometry"), dict) else None,
+            len(payload.get("localParcels") or []),
+        )
+        batch = self._ensure_batch(db, batch_id)
+        if batch.status == "finished":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid operation")
+        result = self._get_result(db, batch_id, contractor_uid)
+        if result.survey_status == "confirmed":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid operation")
+        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
+
+        geometry = self._normalize_geojson_geometry(payload.get("geometry"))
+        if geometry is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="parcel geometry is required")
+        source_srid = int(payload.get("geometrySourceSrid") or 4326)
+        area_mu = self._measure_geojson_area_mu(db, geometry, source_srid)
+        if area_mu is None or area_mu <= 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="parcel geometry is invalid")
+
+        local_conflicts = self._find_local_geometry_conflicts(db, geometry, source_srid, payload.get("localParcels") or [])
+        known_dkbms = [
+            item.get("dkbm")
+            for item in (payload.get("localParcels") or [])
+            if isinstance(item, dict) and item.get("dkbm")
+        ]
+        db_conflicts = self._find_database_geometry_conflicts(
+            db,
+            batch.tenant_code,
+            geometry,
+            source_srid,
+            exclude_dkbms=known_dkbms,
+        )
+        overlaps = local_conflicts + db_conflicts
+        logger.info(
+            "survey.validate_parcel_geometry result batch_id=%s contractor_uid=%s area_mu=%s local_conflicts=%s db_conflicts=%s valid=%s",
+            batch_id,
+            contractor_uid,
+            area_mu,
+            len(local_conflicts),
+            len(db_conflicts),
+            len(overlaps) == 0,
+        )
+        return {
+            "valid": len(overlaps) == 0,
+            "areaMu": area_mu,
+            "overlaps": overlaps,
+        }
+
+    def generate_next_parcel_code(
+        self,
+        db: Session,
+        batch_id: int,
+        contractor_uid: str,
+        current_user: User,
+    ) -> dict:
+        batch = self._ensure_batch(db, batch_id)
+        if batch.status == "finished":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid operation")
+        result = self._get_result(db, batch_id, contractor_uid)
+        if result.survey_status == "confirmed":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid operation")
+        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
+
+        prefix = (result.group_region_code or result.cbfbm[:14] or batch.region_code or "")[:14]
+        if not prefix:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="parcel code prefix is unavailable")
+
+        existing_codes = db.scalars(
+            select(SurveyDkResult.dkbm)
+            .where(
+                SurveyDkResult.tenant_code == batch.tenant_code,
+                SurveyDkResult.dkbm.like(f"{prefix}%"),
+            )
+            .execution_options(skip_tenant_scope=True)
+        ).all()
+
+        max_sequence = 0
+        for code in existing_codes:
+            text = str(code or "").strip()
+            if len(text) < len(prefix) + 5:
+                continue
+            suffix = text[len(prefix) : len(prefix) + 5]
+            if suffix.isdigit():
+                max_sequence = max(max_sequence, int(suffix))
+
+        next_sequence = max_sequence + 1
+        return {
+            "prefix": prefix,
+            "sequence": next_sequence,
+            "dkbm": f"{prefix}{next_sequence:05d}",
+        }
+
     def _contractor_changed(self, result: SurveyCbfResult, base: SurveyCbfBase | None) -> bool:
         if base is None:
             return True
-        fields = ["cbfbm", "cbflx", "cbfmc", "cbfzjlx", "cbfzjhm", "cbfdz", "yzbm", "lxdh", "cbfcysl"]
+        fields = [
+            "cbfbm",
+            "cbflx",
+            "cbfmc",
+            "cbfzjlx",
+            "cbfzjhm",
+            "cbfdz",
+            "yzbm",
+            "lxdh",
+            "cbfcysl",
+            "cbfdcrq",
+            "cbfdcy",
+            "cbfdcjs",
+            "gsjs",
+            "gsjsr",
+            "gsshrq",
+            "gsshr",
+            "group_region_code",
+            "group_region_name",
+        ]
         return any(getattr(result, field) != getattr(base, field) for field in fields) or result.change_type != "none"
 
     def _member_changed(self, result: SurveyCbfJtcyResult, base: SurveyCbfJtcyBase | None) -> bool:
@@ -2086,10 +2606,10 @@ class SurveyService:
         }
 
     def _build_task_scope_filters(self, current_user: User, region_code: str | None = None) -> list:
-        filters = self._tenant_filters(SurveyContractorTask, current_user)
-        filters.extend(data_access_service.build_code_scope_filters(SurveyContractorTask.region_code, current_user))
+        filters = self._tenant_filters(SurveyCbfBase, current_user)
+        filters.extend(data_access_service.build_code_scope_filters(SurveyCbfBase.region_code, current_user))
         if region_code:
-            filters.append(SurveyContractorTask.region_code.like(f"{region_code}%"))
+            filters.append(SurveyCbfBase.region_code.like(f"{region_code}%"))
         return filters
 
     def _tenant_filters(self, model, current_user: User) -> list:
@@ -2126,10 +2646,10 @@ class SurveyService:
         current_user: User,
     ) -> None:
         same_batch_count = db.scalar(
-            select(func.count(SurveyContractorTask.id))
+            select(func.count(SurveyCbfBase.id))
             .where(
-                SurveyContractorTask.tenant_code == batch.tenant_code,
-                SurveyContractorTask.batch_id == batch.id,
+                SurveyCbfBase.tenant_code == batch.tenant_code,
+                SurveyCbfBase.batch_id == batch.id,
             )
             .execution_options(skip_tenant_scope=True)
         ) or 0
@@ -2137,20 +2657,20 @@ class SurveyService:
         region_prefix_count = 0
         if effective_region_code:
             code_prefix_count = db.scalar(
-                select(func.count(SurveyContractorTask.id))
+                select(func.count(SurveyCbfBase.id))
                 .where(
-                    SurveyContractorTask.tenant_code == batch.tenant_code,
-                    SurveyContractorTask.batch_id == batch.id,
-                    SurveyContractorTask.cbfbm.like(f"{effective_region_code}%"),
+                    SurveyCbfBase.tenant_code == batch.tenant_code,
+                    SurveyCbfBase.batch_id == batch.id,
+                    SurveyCbfBase.cbfbm.like(f"{effective_region_code}%"),
                 )
                 .execution_options(skip_tenant_scope=True)
             ) or 0
             region_prefix_count = db.scalar(
-                select(func.count(SurveyContractorTask.id))
+                select(func.count(SurveyCbfBase.id))
                 .where(
-                    SurveyContractorTask.tenant_code == batch.tenant_code,
-                    SurveyContractorTask.batch_id == batch.id,
-                    SurveyContractorTask.region_code.like(f"{effective_region_code}%"),
+                    SurveyCbfBase.tenant_code == batch.tenant_code,
+                    SurveyCbfBase.batch_id == batch.id,
+                    SurveyCbfBase.region_code.like(f"{effective_region_code}%"),
                 )
                 .execution_options(skip_tenant_scope=True)
             ) or 0
@@ -2175,15 +2695,15 @@ class SurveyService:
         task_count = db.scalar(
             select(func.count(func.distinct(SurveyCbfBase.cbfbm))).where(*result_filters).execution_options(skip_tenant_scope=True)
         ) or 0
-        task_filters = [SurveyContractorTask.tenant_code == item.tenant_code, SurveyContractorTask.batch_id == item.id]
+        task_filters = [SurveyCbfBase.tenant_code == item.tenant_code, SurveyCbfBase.batch_id == item.id]
         not_started_count = max(
-            task_count - (db.scalar(select(func.count(SurveyContractorTask.id)).where(*task_filters).execution_options(skip_tenant_scope=True)) or 0),
+            task_count - (db.scalar(select(func.count(SurveyCbfBase.id)).where(*task_filters).execution_options(skip_tenant_scope=True)) or 0),
             0,
         )
         surveyed_count = db.scalar(
-            select(func.count(SurveyContractorTask.id)).where(
+            select(func.count(SurveyCbfBase.id)).where(
                 *task_filters,
-                SurveyContractorTask.task_status.in_(["surveyed", "changed", "unchanged", "confirmed"]),
+                SurveyCbfBase.task_status.in_(["surveyed", "changed", "unchanged", "confirmed"]),
             ).execution_options(skip_tenant_scope=True)
         ) or 0
         changed_count = db.scalar(
@@ -2191,11 +2711,11 @@ class SurveyService:
             .execution_options(skip_tenant_scope=True)
         ) or 0
         confirmed_count = db.scalar(
-            select(func.count(SurveyContractorTask.id)).where(*task_filters, SurveyContractorTask.task_status == "confirmed")
+            select(func.count(SurveyCbfBase.id)).where(*task_filters, SurveyCbfBase.task_status == "confirmed")
             .execution_options(skip_tenant_scope=True)
         ) or 0
         skipped_count = db.scalar(
-            select(func.count(SurveyContractorTask.id)).where(*task_filters, SurveyContractorTask.task_status == "skipped")
+            select(func.count(SurveyCbfBase.id)).where(*task_filters, SurveyCbfBase.task_status == "skipped")
             .execution_options(skip_tenant_scope=True)
         ) or 0
         return {
@@ -2216,7 +2736,13 @@ class SurveyService:
             "remark": item.remark,
         }
 
-    def _serialize_task(self, item: SurveyContractorTask) -> dict:
+    def _serialize_task(self, item: SurveyCbfBase) -> dict:
+        result = None
+        session = object_session(item)
+        if session and item.contractor_uid:
+            result = session.scalar(
+                select(SurveyCbfResult).where(SurveyCbfResult.contractor_uid == item.contractor_uid).order_by(SurveyCbfResult.id.desc())
+            )
         return {
             "id": item.id,
             "batchId": item.batch_id,
@@ -2224,6 +2750,8 @@ class SurveyService:
             "cbfbm": item.cbfbm,
             "cbfmc": item.cbfmc,
             "regionCode": item.region_code,
+            "groupRegionCode": (result.group_region_code if result else None) or item.cbfbm[:14],
+            "groupRegionName": result.group_region_name if result else None,
             "taskStatus": item.task_status,
             "hasChange": item.has_change,
             "changeCount": item.change_count,
@@ -2231,7 +2759,7 @@ class SurveyService:
             "remark": item.remark,
         }
 
-    def _serialize_result_task(self, result: SurveyCbfResult, survey_batch_id: int, task: SurveyContractorTask | None = None) -> dict:
+    def _serialize_result_task(self, result: SurveyCbfResult, survey_batch_id: int, task: SurveyCbfBase | None = None) -> dict:
         result_task_status = "not_started" if result.survey_status == "not_surveyed" else (result.survey_status or "not_started")
         return {
             "id": task.id if task else result.id,
@@ -2240,6 +2768,8 @@ class SurveyService:
             "cbfbm": result.cbfbm,
             "cbfmc": result.cbfmc,
             "regionCode": result.region_code,
+            "groupRegionCode": result.group_region_code,
+            "groupRegionName": result.group_region_name,
             "taskStatus": task.task_status if task else result_task_status,
             "hasChange": task.has_change if task else result.is_changed,
             "changeCount": task.change_count if task else 0,
@@ -2251,7 +2781,7 @@ class SurveyService:
         self,
         base: SurveyCbfBase,
         survey_batch_id: int,
-        task: SurveyContractorTask | None = None,
+        task: SurveyCbfBase | None = None,
         result: SurveyCbfResult | None = None,
     ) -> dict:
         result_task_status = "not_started"
@@ -2264,6 +2794,8 @@ class SurveyService:
             "cbfbm": task.cbfbm if task else base.cbfbm,
             "cbfmc": task.cbfmc if task else base.cbfmc,
             "regionCode": task.region_code if task else base.region_code,
+            "groupRegionCode": (result.group_region_code if result else None) or base.cbfbm[:14],
+            "groupRegionName": result.group_region_name if result else None,
             "taskStatus": task.task_status if task else result_task_status,
             "hasChange": task.has_change if task else bool(result and result.is_changed),
             "changeCount": task.change_count if task else 0,
@@ -2271,7 +2803,7 @@ class SurveyService:
             "remark": task.remark if task else (result.remark if result else None),
         }
 
-    def _serialize_issuer_row(self, item: SurveyFbfResult, survey_batch_id: int, related_count: int = 0, source_task: SurveyContractorTask | None = None) -> dict:
+    def _serialize_issuer_row(self, item: SurveyFbfResult, survey_batch_id: int, related_count: int = 0, source_task: SurveyCbfBase | None = None) -> dict:
         return {
             "id": item.id,
             "batchId": survey_batch_id,
@@ -2302,6 +2834,8 @@ class SurveyService:
             "generatedRequestNo": item.generated_request_no,
             "investigatorName": item.investigator_name,
             "investigatedAt": item.investigated_at,
+            "beforeSummary": item.before_summary,
+            "afterSummary": item.after_summary,
             "createdAt": item.created_at,
         }
 
@@ -2321,6 +2855,72 @@ class SurveyService:
             "changeReason": item.change_reason,
             "createdAt": item.created_at,
         }
+
+    def _collect_diff_rebuild_uids(self, batch_id: int, contractor_uid: str, pending_operations: list[dict] | None) -> list[str]:
+        affected = [contractor_uid]
+        seen = {contractor_uid}
+        for operation in pending_operations or []:
+            if not isinstance(operation, dict):
+                continue
+            op_type = operation.get("type")
+            payload = operation.get("payload") or {}
+            if op_type == "swap_parcels":
+                target_uid = payload.get("targetContractorUid")
+                if target_uid and target_uid not in seen:
+                    seen.add(target_uid)
+                    affected.append(target_uid)
+            elif op_type == "split_household":
+                new_cbfbm = payload.get("newCbfbm")
+                if new_cbfbm:
+                    new_uid = str(uuid5(NAMESPACE_URL, f"survey:{batch_id}:cbf:{new_cbfbm}"))
+                    if new_uid not in seen:
+                        seen.add(new_uid)
+                        affected.append(new_uid)
+        return affected
+
+    def _load_diff_rebuild_context(
+        self,
+        db: Session,
+        batch_id: int,
+        contractor_uid: str,
+    ) -> tuple[SurveyCbfResult, SurveyCbfBase | None, SurveyFbfResult | None, SurveyFbfBase | None]:
+        result = self._get_result(db, batch_id, contractor_uid)
+        base = db.scalar(
+            select(SurveyCbfBase)
+            .where(
+                SurveyCbfBase.batch_id == batch_id,
+                SurveyCbfBase.contractor_uid == contractor_uid,
+                SurveyCbfBase.initialized_from_table.in_(["survey_cbf_result", "manual_add"]),
+            )
+            .order_by(SurveyCbfBase.id.asc())
+        )
+        issuer, base_issuer = self._get_result_issuer(db, result)
+        return result, base, issuer, base_issuer
+
+    def _rebuild_contractor_diffs(
+        self,
+        db: Session,
+        batch_id: int,
+        contractor_uids: list[str],
+        *,
+        change_ids: dict[str, int | None] | None = None,
+        deleted_member_reasons: dict[str, dict[str, str | None]] | None = None,
+    ) -> None:
+        change_ids = change_ids or {}
+        deleted_member_reasons = deleted_member_reasons or {}
+        for uid in contractor_uids:
+            result, base, issuer, base_issuer = self._load_diff_rebuild_context(db, batch_id, uid)
+            self._rebuild_diffs(
+                db,
+                batch_id,
+                uid,
+                result,
+                base,
+                change_ids.get(uid),
+                issuer,
+                base_issuer,
+                deleted_member_reasons.get(uid),
+            )
 
     def _serialize_tag(self, item: SurveyHouseholdTag) -> dict:
         return {
@@ -2438,11 +3038,20 @@ class SurveyService:
         change_id: int | None,
         issuer: SurveyFbfResult | None = None,
         base_issuer: SurveyFbfBase | None = None,
+        deleted_member_reasons: dict[str, str | None] | None = None,
     ) -> None:
         db.execute(
             delete(SurveyChangeDiff).where(
                 SurveyChangeDiff.batch_id == batch_id,
                 SurveyChangeDiff.contractor_uid == contractor_uid,
+                SurveyChangeDiff.entity_type.in_(self.form_diff_entity_types),
+            )
+        )
+        db.execute(
+            delete(SurveyChangeDiff).where(
+                SurveyChangeDiff.batch_id == batch_id,
+                SurveyChangeDiff.contractor_uid == contractor_uid,
+                SurveyChangeDiff.entity_type.in_(self.parcel_diff_entity_types),
             )
         )
         data_batch_id = batch_id
@@ -2451,14 +3060,21 @@ class SurveyService:
                 ("cbfbm", "cbfbm"),
                 ("cbflx", "cbflx"),
                 ("cbfmc", "cbfmc"),
-                ("cbfzjlx", "璇佷欢绫诲瀷"),
-                ("cbfzjhm", "璇佷欢鍙风爜"),
-                ("cbfdz", "鎵垮寘鏂瑰湴鍧€"),
-                ("yzbm", "閭斂缂栫爜"),
-                ("lxdh", "鑱旂郴鐢佃瘽"),
+                ("cbfzjlx", "鐠囦椒娆㈢猾璇茬€?",),
+                ("cbfzjhm", "鐠囦椒娆㈤崣椋庣垳"),
+                ("cbfdz", "閹靛灝瀵橀弬鐟版勾閸р偓"),
+                ("yzbm", "闁喗鏂傜紓鏍垳"),
+                ("lxdh", "閼辨梻閮撮悽浣冪樈"),
                 ("cbfcysl", "cbfcysl"),
-                ("group_region_code", "鎵€灞炵粍浠ｇ爜"),
-                ("group_region_name", "鎵€灞炵粍鍚嶇О"),
+                ("cbfdcrq", "鎵垮寘鏂硅皟鏌ユ棩鏈?",),
+                ("cbfdcy", "鎵垮寘鏂硅皟鏌ュ憳"),
+                ("cbfdcjs", "鎵垮寘鏂硅皟鏌ヨ浜?",),
+                ("gsjs", "鍏ず璁颁簨"),
+                ("gsjsr", "鍏ず璁颁簨浜?",),
+                ("gsshrq", "鍏ず瀹℃牳鏃ユ湡"),
+                ("gsshr", "鍏ず瀹℃牳浜?",),
+                ("group_region_code", "閹碘偓鐏炵偟绮嶆禒锝囩垳"),
+                ("group_region_name", "閹碘偓鐏炵偟绮嶉崥宥囆?",),
             ]
             for field_name, field_label in contractor_fields:
                 before = getattr(base, field_name)
@@ -2484,15 +3100,15 @@ class SurveyService:
             issuer_fields = [
                 ("fbfbm", "fbfbm"),
                 ("fbfmc", "fbfmc"),
-                ("fbffzrxm", "鍙戝寘鏂硅礋璐ｄ汉"),
+                ("fbffzrxm", "閸欐垵瀵橀弬纭呯鐠愶絼姹?",),
                 ("fzrzjlx", "fzrzjlx"),
                 ("fzrzjhm", "fzrzjhm"),
-                ("lxdh", "鑱旂郴鐢佃瘽"),
-                ("fbfdz", "鍙戝寘鏂瑰湴鍧€"),
-                ("yzbm", "閭斂缂栫爜"),
+                ("lxdh", "閼辨梻閮撮悽浣冪樈"),
+                ("fbfdz", "閸欐垵瀵橀弬鐟版勾閸р偓"),
+                ("yzbm", "闁喗鏂傜紓鏍垳"),
                 ("fbfdcy", "fbfdcy"),
-                ("fbfdcrq", "璋冩煡鏃ユ湡"),
-                ("fbfdcjs", "璋冩煡璁颁簨"),
+                ("fbfdcrq", "鐠嬪啯鐓￠弮銉︽埂"),
+                ("fbfdcjs", "鐠嬪啯鐓＄拋棰佺皑"),
             ]
             for field_name, field_label in issuer_fields:
                 before = getattr(base_issuer, field_name)
@@ -2529,20 +3145,20 @@ class SurveyService:
             )
         ).all()
         member_fields = [
-            ("cyxm", "濮撳悕"),
-            ("cyzjlx", "璇佷欢绫诲瀷"),
-            ("cyzjhm", "璇佷欢鍙风爜"),
-            ("cyxb", "鎬у埆"),
+            ("cyxm", "婵挸鎮?",),
+            ("cyzjlx", "鐠囦椒娆㈢猾璇茬€?",),
+            ("cyzjhm", "鐠囦椒娆㈤崣椋庣垳"),
+            ("cyxb", "閹冨焼"),
             ("yhzgx", "yhzgx"),
-            ("cybz", "鎴愬憳澶囨敞浠ｇ爜"),
+            ("cybz", "閹存劕鎲虫径鍥ㄦ暈娴狅絿鐖?",),
             ("sfgyr", "sfgyr"),
-            ("cybzsm", "鎴愬憳澶囨敞璇存槑"),
+            ("cybzsm", "閹存劕鎲虫径鍥ㄦ暈鐠囧瓨妲?",),
             ("member_result_status", "member_result_status"),
-            ("is_urban_settled", "鏄惁杩涘煄钀芥埛"),
+            ("is_urban_settled", "閺勵垰鎯佹潻娑樼厔閽€鑺ュ煕"),
             ("is_married_out_woman", "is_married_out_woman"),
-            ("is_deceased", "鏄惁姝讳骸"),
-            ("is_five_guarantees", "鏄惁浜斾繚"),
-            ("rights_disposition", "鏉冪泭澶勭疆"),
+            ("is_deceased", "閺勵垰鎯佸璁抽"),
+            ("is_five_guarantees", "閺勵垰鎯佹禍鏂剧箽"),
+            ("rights_disposition", "閺夊啰娉径鍕枂"),
         ]
         for member in result_members:
             member_base = base_members.get(member.member_uid)
@@ -2556,7 +3172,7 @@ class SurveyService:
                         entity_uid=member.member_uid,
                         entity_name=member.cyxm,
                         field_name="member",
-                        field_label="鏂板鎴愬憳",
+                        field_label="閺傛澘顤冮幋鎰喅",
                         before_value=None,
                         after_value=f"{member.cyxm} / {member.cyzjhm}",
                         change_reason=member.change_reason,
@@ -2585,6 +3201,7 @@ class SurveyService:
         result_member_uids = {member.member_uid for member in result_members}
         for member_uid, member_base in base_members.items():
             if member_uid not in result_member_uids:
+                delete_reason = (deleted_member_reasons or {}).get(member_uid) or result.change_reason
                 db.add(
                     SurveyChangeDiff(
                         batch_id=batch_id,
@@ -2594,12 +3211,210 @@ class SurveyService:
                         entity_uid=member_uid,
                         entity_name=member_base.cyxm,
                         field_name="member",
-                        field_label="鍒犻櫎鎴愬憳",
+                        field_label="閸掔娀娅庨幋鎰喅",
                         before_value=f"{member_base.cyxm} / {member_base.cyzjhm}",
                         after_value=None,
-                        change_reason=result.change_reason,
+                        change_reason=delete_reason,
                     )
                 )
+        self._rebuild_parcel_diffs(
+            db,
+            batch_id,
+            contractor_uid,
+            result,
+            base,
+            change_id,
+        )
+
+    def _rebuild_parcel_diffs(
+        self,
+        db: Session,
+        batch_id: int,
+        contractor_uid: str,
+        result: SurveyCbfResult,
+        base: SurveyCbfBase | None,
+        change_id: int | None,
+    ) -> None:
+        base_cbfbm = base.cbfbm if base is not None else result.cbfbm
+        base_relations = db.scalars(
+            select(SurveyCbdkxxBase).where(
+                SurveyCbdkxxBase.batch_id == batch_id,
+                SurveyCbdkxxBase.cbfbm == base_cbfbm,
+            )
+        ).all()
+        active_result_relations = db.scalars(
+            select(SurveyCbdkxxResult).where(
+                SurveyCbdkxxResult.cbfbm == result.cbfbm,
+                SurveyCbdkxxResult.result_status != "removed",
+            )
+        ).all()
+        base_relations_by_uid = {item.parcel_info_uid: item for item in base_relations}
+        active_relations_by_uid = {item.parcel_info_uid: item for item in active_result_relations}
+
+        relation_fields = [
+            ("dkbm", "鍦板潡缂栫爜"),
+            ("fbfbm", "鍙戝寘鏂逛唬鐮?",),
+            ("cbfbm", "鎵垮寘鏂逛唬鐮?",),
+            ("cbjyqqdfs", "鎵垮寘缁忚惀鏉冨彇寰楁柟寮?",),
+            ("htmj", "鍚堝悓闈㈢Н"),
+            ("cbhtbm", "鎵垮寘鍚堝悓缂栫爜"),
+            ("lzhtbm", "娴佽浆鍚堝悓缂栫爜"),
+            ("cbjyqzbm", "鎵垮寘缁忚惀鏉冭瘉缂栫爜"),
+            ("yhtmj", "鍘熷悎鍚岄潰绉?",),
+            ("htmjm", "鍚堝悓闈㈢Н(浜?"),
+            ("yhtmjm", "鍘熷悎鍚岄潰绉?浜?"),
+            ("sfqqqg", "鏄惁纭潈纭偂"),
+        ]
+        relation_uids = set(base_relations_by_uid) | set(active_relations_by_uid)
+        for relation_uid in relation_uids:
+            base_relation = base_relations_by_uid.get(relation_uid)
+            result_relation = active_relations_by_uid.get(relation_uid)
+            if base_relation is None and result_relation is not None:
+                self._add_change_diff(
+                    db,
+                    batch_id=batch_id,
+                    contractor_uid=contractor_uid,
+                    change_id=change_id,
+                    entity_type="parcel_relation",
+                    entity_uid=relation_uid,
+                    entity_name=result_relation.dkbm,
+                    field_name="parcel_relation",
+                    field_label="鏂板鍦板潡鍏宠仈",
+                    before_value=None,
+                    after_value=f"{result_relation.dkbm} -> {result_relation.cbfbm}",
+                    change_reason=result_relation.change_reason or result.change_reason,
+                )
+                continue
+            if base_relation is not None and result_relation is None:
+                self._add_change_diff(
+                    db,
+                    batch_id=batch_id,
+                    contractor_uid=contractor_uid,
+                    change_id=change_id,
+                    entity_type="parcel_relation",
+                    entity_uid=relation_uid,
+                    entity_name=base_relation.dkbm,
+                    field_name="parcel_relation",
+                    field_label="绉婚櫎鍦板潡鍏宠仈",
+                    before_value=f"{base_relation.dkbm} -> {base_relation.cbfbm}",
+                    after_value=None,
+                    change_reason=result.change_reason,
+                )
+                continue
+            for field_name, field_label in relation_fields:
+                before = getattr(base_relation, field_name, None)
+                after = getattr(result_relation, field_name, None)
+                if self._diff_value(before) != self._diff_value(after):
+                    self._add_change_diff(
+                        db,
+                        batch_id=batch_id,
+                        contractor_uid=contractor_uid,
+                        change_id=change_id,
+                        entity_type="parcel_relation",
+                        entity_uid=relation_uid,
+                        entity_name=result_relation.dkbm,
+                        field_name=field_name,
+                        field_label=field_label,
+                        before_value=before,
+                        after_value=after,
+                        change_reason=result_relation.change_reason or result.change_reason,
+                    )
+
+        relation_dkbms = {item.dkbm for item in base_relations}
+        relation_dkbms.update(item.dkbm for item in active_result_relations)
+        if not relation_dkbms:
+            return
+
+        base_parcels = db.scalars(
+            select(SurveyDkBase).where(
+                SurveyDkBase.batch_id == batch_id,
+                SurveyDkBase.dkbm.in_(relation_dkbms),
+            )
+        ).all()
+        result_parcels = db.scalars(
+            select(SurveyDkResult).where(
+                SurveyDkResult.dkbm.in_(relation_dkbms),
+            ).order_by(SurveyDkResult.id.desc())
+        ).all()
+        base_parcels_by_dkbm = {item.dkbm: item for item in base_parcels}
+        result_parcels_by_dkbm = {}
+        for item in result_parcels:
+            result_parcels_by_dkbm.setdefault(item.dkbm, item)
+
+        parcel_fields = [
+            ("dkmc", "鍦板潡鍚嶇О"),
+            ("scmj", "瀹炴祴闈㈢Н"),
+            ("syqxz", "鎵€鏈夋潈鎬ц川"),
+            ("dklb", "鍦板潡绫诲埆"),
+            ("tdlylx", "鍦熷湴鍒╃敤绫诲瀷"),
+            ("dldj", "鍦扮被绛夌骇"),
+            ("tdyt", "鍦熷湴鐢ㄩ€?",),
+            ("sfjbnt", "鏄惁鍩烘湰鍐滅敯"),
+            ("dkdz", "鍦板潡涓滆嚦"),
+            ("dkxz", "鍦板潡瑗胯嚦"),
+            ("dknz", "鍦板潡鍗楄嚦"),
+            ("dkbz", "鍦板潡鍖楄嚦"),
+            ("dkbzxx", "鍦板潡澶囨敞淇℃伅"),
+        ]
+        candidate_result_dkbms = {
+            item.dkbm
+            for item in result_parcels_by_dkbm.values()
+            if item.is_changed or item.result_status != "normal"
+        }
+        parcel_dkbms = set(base_parcels_by_dkbm) | candidate_result_dkbms
+        for dkbm in parcel_dkbms:
+            base_parcel = base_parcels_by_dkbm.get(dkbm)
+            result_parcel = result_parcels_by_dkbm.get(dkbm)
+            if base_parcel is None and result_parcel is not None:
+                self._add_change_diff(
+                    db,
+                    batch_id=batch_id,
+                    contractor_uid=contractor_uid,
+                    change_id=change_id,
+                    entity_type="parcel",
+                    entity_uid=result_parcel.parcel_uid,
+                    entity_name=result_parcel.dkmc,
+                    field_name="parcel",
+                    field_label="鏂板鍦板潡",
+                    before_value=None,
+                    after_value=f"{result_parcel.dkbm} / {result_parcel.dkmc}",
+                    change_reason=result_parcel.change_reason or result.change_reason,
+                )
+                continue
+            if base_parcel is not None and result_parcel is None:
+                self._add_change_diff(
+                    db,
+                    batch_id=batch_id,
+                    contractor_uid=contractor_uid,
+                    change_id=change_id,
+                    entity_type="parcel",
+                    entity_uid=base_parcel.parcel_uid,
+                    entity_name=base_parcel.dkmc,
+                    field_name="parcel",
+                    field_label="绉婚櫎鍦板潡",
+                    before_value=f"{base_parcel.dkbm} / {base_parcel.dkmc}",
+                    after_value=None,
+                    change_reason=result.change_reason,
+                )
+                continue
+            for field_name, field_label in parcel_fields:
+                before = getattr(base_parcel, field_name, None)
+                after = getattr(result_parcel, field_name, None)
+                if self._diff_value(before) != self._diff_value(after):
+                    self._add_change_diff(
+                        db,
+                        batch_id=batch_id,
+                        contractor_uid=contractor_uid,
+                        change_id=change_id,
+                        entity_type="parcel",
+                        entity_uid=result_parcel.parcel_uid,
+                        entity_name=result_parcel.dkmc,
+                        field_name=field_name,
+                        field_label=field_label,
+                        before_value=before,
+                        after_value=after,
+                        change_reason=result_parcel.change_reason or result.change_reason,
+                    )
 
     def _diff_value(self, value) -> str | None:
         if value is None:
@@ -2608,7 +3423,124 @@ class SurveyService:
             return "yes" if value else "no"
         if isinstance(value, datetime):
             return value.date().isoformat()
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False, default=str)
         return str(value)
+
+    def _add_change_diff(
+        self,
+        db: Session,
+        *,
+        batch_id: int,
+        contractor_uid: str,
+        change_id: int | None,
+        entity_type: str,
+        entity_uid: str,
+        entity_name: str | None,
+        field_name: str,
+        field_label: str,
+        before_value=None,
+        after_value=None,
+        change_reason: str | None = None,
+    ) -> None:
+        db.add(
+            SurveyChangeDiff(
+                batch_id=batch_id,
+                contractor_uid=contractor_uid,
+                change_id=change_id,
+                entity_type=entity_type,
+                entity_uid=entity_uid,
+                entity_name=entity_name,
+                field_name=field_name,
+                field_label=field_label,
+                before_value=self._diff_value(before_value),
+                after_value=self._diff_value(after_value),
+                change_reason=change_reason,
+            )
+        )
+
+    def _apply_pending_operations(
+        self,
+        db: Session,
+        batch_id: int,
+        contractor_uid: str,
+        pending_operations: list[dict],
+        current_user: User,
+    ) -> None:
+        for operation in pending_operations or []:
+            op_type = operation.get("type")
+            payload = operation.get("payload") or {}
+            if op_type == "change_head":
+                self.change_household_head(
+                    db, batch_id, contractor_uid,
+                    payload.get("newHeadMemberUid"), payload.get("reason"),
+                    current_user, commit=False,
+                )
+            elif op_type == "maintain_members":
+                self.maintain_members(
+                    db, batch_id, contractor_uid,
+                    payload.get("membersToAdd") or [],
+                    payload.get("membersToUpdate") or [],
+                    payload.get("membersToDelete") or [],
+                    payload.get("reason"),
+                    current_user,
+                    commit=False,
+                )
+            elif op_type == "deregister":
+                self.deregister_contractor(
+                    db, batch_id, contractor_uid,
+                    payload.get("reason") or "",
+                    current_user,
+                    commit=False,
+                )
+            elif op_type == "add_parcel":
+                self.add_parcel(db, batch_id, contractor_uid, payload, current_user, commit=False)
+            elif op_type == "split_parcel":
+                self.split_parcel(db, batch_id, contractor_uid, payload, current_user, commit=False)
+            elif op_type == "rollback_split_parcel":
+                self.rollback_split_parcel(
+                    db,
+                    batch_id,
+                    contractor_uid,
+                    int(payload.get("changeId") or 0),
+                    payload,
+                    current_user,
+                    commit=False,
+                )
+            elif op_type == "swap_parcels":
+                self.swap_parcels(db, batch_id, contractor_uid, payload, current_user, commit=False)
+            elif op_type == "rollback_swap_parcels":
+                self.rollback_swap_parcels(
+                    db,
+                    batch_id,
+                    contractor_uid,
+                    int(payload.get("changeId") or 0),
+                    payload,
+                    current_user,
+                    commit=False,
+                )
+            elif op_type == "remove_parcel":
+                self.remove_parcel(db, batch_id, contractor_uid, payload, current_user, commit=False)
+            elif op_type == "split_household":
+                self.split_household(db, batch_id, contractor_uid, payload, current_user, commit=False)
+            elif op_type == "merge_household":
+                self.merge_household(db, batch_id, contractor_uid, payload, current_user, commit=False)
+            else:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"unsupported pending operation: {op_type}")
+
+    def _member_snapshot(self, member: SurveyCbfJtcyResult | SurveyCbfJtcyBase) -> dict:
+        return {
+            "memberUid": member.member_uid,
+            "name": member.cyxm,
+            "gender": member.cyxb,
+            "idType": member.cyzjlx,
+            "idNo": member.cyzjhm,
+            "relationToHead": member.yhzgx,
+            "noteCode": member.cybz,
+            "isCoOwner": member.sfgyr,
+            "note": member.cybzsm,
+            "isHouseholdHead": getattr(member, "is_household_head", False),
+        }
 
     def _has_text(self, value: str | None) -> bool:
         return bool(str(value or "").strip())
@@ -2626,7 +3558,7 @@ class SurveyService:
     def _bool_text(self, value: bool | None) -> str:
         return "yes" if value else "no"
 
-    def _build_tasks_csv(self, tasks: list[SurveyContractorTask]) -> bytes:
+    def _build_tasks_csv(self, tasks: list[SurveyCbfBase]) -> bytes:
         return self._csv_bytes(
             # repaired invalid string literal
             [
@@ -2648,31 +3580,31 @@ class SurveyService:
     def _build_contractor_results_csv(self, contractors: list[SurveyCbfResult]) -> bytes:
         return self._csv_bytes(
             [
-                "鎵规鍐呭敮涓€鏍囪瘑",
+                "閹佃顐奸崘鍛暜娑撯偓閺嶅洩鐦?",
                 "field",
                 "field",
                 "field",
-                "璇佷欢绫诲瀷",
-                "璇佷欢鍙风爜",
-                "鎵垮寘鏂瑰湴鍧€",
-                "閭斂缂栫爜",
-                "鑱旂郴鐢佃瘽",
+                "鐠囦椒娆㈢猾璇茬€?",
+                "鐠囦椒娆㈤崣椋庣垳",
+                "閹靛灝瀵橀弬鐟版勾閸р偓",
+                "闁喗鏂傜紓鏍垳",
+                "閼辨梻閮撮悽浣冪樈",
                 "field",
                 "field",
                 "field",
-                "鏄惁鍙樺寲",
-                "鍙樺寲绫诲瀷",
-                "鍙樺寲鍘熷洜",
-                "鏀跨瓥渚濇嵁",
-                "渚濇嵁鏉愭枡鎽樿",
+                "閺勵垰鎯侀崣妯哄",
+                "閸欐ê瀵茬猾璇茬€?",
+                "閸欐ê瀵查崢鐔锋礈",
+                "閺€璺ㄧ摜娓氭繃宓?",
+                "娓氭繃宓侀弶鎰灐閹芥顩?",
                 "field",
-                "璋冩煡鏃堕棿",
+                "鐠嬪啯鐓￠弮鍫曟？",
                 "field",
-                "纭鏃堕棿",
-                "鏉ユ簮瀵煎叆鎵规ID",
-                "鏉ユ簮瀵煎叆琛孖D",
-                "鏈€杩戝鍏ユ壒娆D",
-                "鏈€杩戝鍏ヨID",
+                "绾喛顓婚弮鍫曟？",
+                "閺夈儲绨€电厧鍙嗛幍瑙勵偧ID",
+                "閺夈儲绨€电厧鍙嗙悰瀛朌",
+                "閺堚偓鏉╂垵顕遍崗銉﹀濞嗩搹D",
+                "閺堚偓鏉╂垵顕遍崗銉攽ID",
             ],
             [
                 [
@@ -2709,23 +3641,23 @@ class SurveyService:
     def _build_issuer_results_csv(self, issuers: list[SurveyFbfResult]) -> bytes:
         return self._csv_bytes(
             [
-                "鍙戝寘鏂瑰敮涓€鏍囪瘑",
+                "閸欐垵瀵橀弬鐟版暜娑撯偓閺嶅洩鐦?",
                 "field",
                 "field",
                 "field",
                 "field",
                 "field",
-                "鑱旂郴鐢佃瘽",
-                "鍙戝寘鏂瑰湴鍧€",
-                "閭斂缂栫爜",
+                "閼辨梻閮撮悽浣冪樈",
+                "閸欐垵瀵橀弬鐟版勾閸р偓",
+                "闁喗鏂傜紓鏍垳",
                 "field",
-                "璋冩煡鏃ユ湡",
-                "璋冩煡璁颁簨",
+                "鐠嬪啯鐓￠弮銉︽埂",
+                "鐠嬪啯鐓＄拋棰佺皑",
                 "field",
-                "鏄惁鍙樺寲",
-                "鍙樺寲绫诲瀷",
-                "鍙樺寲鍘熷洜",
-                "鏀跨瓥渚濇嵁",
+                "閺勵垰鎯侀崣妯哄",
+                "閸欐ê瀵茬猾璇茬€?",
+                "閸欐ê瀵查崢鐔锋礈",
+                "閺€璺ㄧ摜娓氭繃宓?",
             ],
             [
                 [
@@ -2754,28 +3686,28 @@ class SurveyService:
     def _build_member_results_csv(self, members: list[SurveyCbfJtcyResult]) -> bytes:
         return self._csv_bytes(
             [
-                "鎵规鍐呮埛鍞竴鏍囪瘑",
-                "鎴愬憳鍞竴鏍囪瘑",
+                "閹佃顐奸崘鍛煕閸烆垯绔撮弽鍥槕",
+                "閹存劕鎲抽崬顖欑閺嶅洩鐦?",
                 "field",
-                "鎴愬憳濮撳悕",
-                "璇佷欢绫诲瀷",
-                "璇佷欢鍙风爜",
-                "鎬у埆",
+                "閹存劕鎲虫慨鎾虫倳",
+                "鐠囦椒娆㈢猾璇茬€?",
+                "鐠囦椒娆㈤崣椋庣垳",
+                "閹冨焼",
                 "field",
                 "field",
-                "鏄惁鍙樺寲",
-                "鏄惁鎴蜂富",
-                "鏄惁杩涘煄钀芥埛",
+                "閺勵垰鎯侀崣妯哄",
+                "閺勵垰鎯侀幋铚傚瘜",
+                "閺勵垰鎯佹潻娑樼厔閽€鑺ュ煕",
                 "field",
-                "鏄惁姝讳骸",
-                "鏄惁浜斾繚",
-                "鍙樺寲鍘熷洜",
-                "鏀跨瓥渚濇嵁",
-                "鏉冪泭澶勭疆",
-                "鏉ユ簮瀵煎叆鎵规ID",
-                "鏉ユ簮瀵煎叆琛孖D",
-                "鏈€杩戝鍏ユ壒娆D",
-                "鏈€杩戝鍏ヨID",
+                "閺勵垰鎯佸璁抽",
+                "閺勵垰鎯佹禍鏂剧箽",
+                "閸欐ê瀵查崢鐔锋礈",
+                "閺€璺ㄧ摜娓氭繃宓?",
+                "閺夊啰娉径鍕枂",
+                "閺夈儲绨€电厧鍙嗛幍瑙勵偧ID",
+                "閺夈儲绨€电厧鍙嗙悰瀛朌",
+                "閺堚偓鏉╂垵顕遍崗銉﹀濞嗩搹D",
+                "閺堚偓鏉╂垵顕遍崗銉攽ID",
             ],
             [
                 [
@@ -2831,6 +3763,7 @@ class SurveyService:
             .where(
                 SurveyCbdkxxResult.tenant_code == result.tenant_code,
                 SurveyCbdkxxResult.cbfbm == result.cbfbm,
+                SurveyCbdkxxResult.result_status != "removed",
             )
             .order_by(SurveyCbdkxxResult.id.asc())
             .execution_options(skip_tenant_scope=True)
@@ -2850,7 +3783,7 @@ class SurveyService:
             return None, None
         base = db.scalars(
             select(SurveyFbfBase)
-            .where(SurveyFbfBase.tenant_code == result.tenant_code, SurveyFbfBase.id == issuer.base_id)
+            .where(SurveyFbfBase.tenant_code == result.tenant_code, SurveyFbfBase.result_id == issuer.id)
             .execution_options(skip_tenant_scope=True)
         ).first()
         return issuer, base
@@ -2866,13 +3799,14 @@ class SurveyService:
             .execution_options(skip_tenant_scope=True)
         ).first()
         if issuer is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="鍙戝寘鏂硅皟鏌ユ垚鏋滀笉瀛樺湪")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="閸欐垵瀵橀弬纭呯殶閺屻儲鍨氶弸婊€绗夌€涙ê婀?")
         return issuer
 
     def _serialize_result(
         self,
         item: SurveyCbfResult,
         members: list[SurveyCbfJtcyResult],
+        batch_id: int = 0,
         base: SurveyCbfBase | None = None,
         base_members: list[SurveyCbfJtcyBase] | None = None,
         issuer: SurveyFbfResult | None = None,
@@ -2880,9 +3814,9 @@ class SurveyService:
     ) -> dict:
         return {
             "id": item.id,
-            "batchId": item.batch_id,
+            "batchId": batch_id,
             "contractorUid": item.contractor_uid,
-            "baseId": item.base_id,
+            "baseId": None,  # TODO: lookup from base
             "code": item.cbfbm,
             "typeCode": item.cbflx,
             "name": item.cbfmc,
@@ -2921,7 +3855,7 @@ class SurveyService:
         return {
             "id": item.id,
             "issuerUid": item.issuer_uid,
-            "baseId": item.base_id,
+            "baseId": None,  # TODO: lookup from base
             "code": item.fbfbm,
             "name": item.fbfmc,
             "responsibleName": item.fbffzrxm,
@@ -2996,7 +3930,7 @@ class SurveyService:
     def _serialize_member(self, item: SurveyCbfJtcyResult) -> dict:
         return {
             "memberUid": item.member_uid,
-            "baseId": item.base_id,
+            "baseId": None,  # TODO: lookup from base
             "name": item.cyxm,
             "gender": item.cyxb,
             "idType": item.cyzjlx,
@@ -3037,13 +3971,13 @@ class SurveyService:
                 pass
         return datetime.combine(date.fromisoformat(value), datetime.min.time())
 
-    # 鈹€鈹€ 璋冩煡鎿嶄綔 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    # 閳光偓閳光偓 鐠嬪啯鐓￠幙宥勭稊 閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓
 
     def change_household_head(
         self, db: Session, batch_id: int, contractor_uid: str,
         new_head_member_uid: str, reason: str | None, current_user: User,
+        commit: bool = True,
     ) -> dict:
-        # repaired docstring
         batch = self._ensure_batch(db, batch_id)
         if batch.status == "finished":
             raise HTTPException(400, "invalid operation")
@@ -3053,15 +3987,14 @@ class SurveyService:
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
         now = datetime.now(timezone.utc)
 
-        # 鏌ユ壘鏃ф埛涓?
         old_head = db.scalars(
             select(SurveyCbfJtcyResult).where(
                 SurveyCbfJtcyResult.contractor_uid == contractor_uid,
                 SurveyCbfJtcyResult.is_household_head.is_(True),
             )
         ).first()
+        old_name = old_head.cyxm if old_head else None
 
-        # 鏌ユ壘鏂版埛涓?
         new_head = db.scalars(
             select(SurveyCbfJtcyResult).where(
                 SurveyCbfJtcyResult.contractor_uid == contractor_uid,
@@ -3073,15 +4006,13 @@ class SurveyService:
         if new_head.is_deceased:
             raise HTTPException(400, "invalid operation")
 
-        # repaired invalid string literal
         if old_head:
             old_head.is_household_head = False
             old_head.is_changed = True
         new_head.is_household_head = True
         new_head.is_changed = True
-        new_head.yhzgx = "01"  # 璁句负鏈汉锛堟埛涓伙級
+        new_head.yhzgx = "01"
 
-        # 鍒涘缓鍙樺寲璁板綍
         record = self._create_change_record(
             db, batch_id, contractor_uid, result.cbfbm,
             change_type="change_head",
@@ -3092,22 +4023,6 @@ class SurveyService:
         )
         db.flush()
 
-        # 鍒涘缓 diff 璁板綍
-        db.add(SurveyChangeDiff(
-            batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
-            entity_type="member", entity_uid=new_head_member_uid, entity_name=new_head.cyxm,
-            field_name="is_household_head", field_label="鏄惁鎴蜂富",
-            before_value="no", after_value="yes", change_reason=reason,
-        ))
-        if old_head:
-            db.add(SurveyChangeDiff(
-                batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
-                entity_type="member", entity_uid=old_head.member_uid, entity_name=old_name,
-                field_name="is_household_head", field_label="鏄惁鎴蜂富",
-                before_value="yes", after_value="no", change_reason=reason,
-            ))
-
-        # 鏇存柊浠诲姟
         task = self._get_task(db, batch_id, contractor_uid)
         if task:
             task.has_change = True
@@ -3115,15 +4030,19 @@ class SurveyService:
             task.investigated_at = now
 
         result.investigated_at = now
+        if not commit:
+            db.flush()
+            return {"queued": True}
+        self._rebuild_contractor_diffs(db, batch_id, [contractor_uid], change_ids={contractor_uid: record.id})
         db.commit()
         return self.get_result(db, batch_id, contractor_uid, current_user)
 
     def maintain_members(
         self, db: Session, batch_id: int, contractor_uid: str,
         members_to_add: list[dict], members_to_update: list[dict],
-        members_to_delete: list[str], reason: str | None, current_user: User,
+        members_to_delete: list[str | dict], reason: str | None, current_user: User,
+        commit: bool = True,
     ) -> dict:
-        # repaired docstring
         batch = self._ensure_batch(db, batch_id)
         if batch.status == "finished":
             raise HTTPException(400, "invalid operation")
@@ -3134,9 +4053,22 @@ class SurveyService:
         now = datetime.now(timezone.utc)
 
         change_details = {"added": [], "updated": [], "deleted": []}
+        deleted_member_reasons = {}
 
-        # 鍒犻櫎
-        for member_uid in members_to_delete:
+        delete_requests = []
+        for item in members_to_delete:
+            if isinstance(item, str):
+                delete_requests.append({"memberUid": item, "changeReason": reason})
+            else:
+                delete_requests.append({
+                    "memberUid": item.get("memberUid"),
+                    "changeReason": item.get("changeReason") or reason,
+                })
+
+        for item in delete_requests:
+            member_uid = item.get("memberUid")
+            if not member_uid:
+                continue
             member = db.scalars(
                 select(SurveyCbfJtcyResult).where(
                     SurveyCbfJtcyResult.contractor_uid == contractor_uid,
@@ -3145,13 +4077,17 @@ class SurveyService:
             ).first()
             if member is None:
                 continue
+            item_reason = item.get("changeReason") or reason
+            deleted_member_reasons[member_uid] = item_reason
             change_details["deleted"].append({
-                "member_uid": member_uid, "name": member.cyxm,
-                "id_no": member.cyzjhm, "relation": member.yhzgx,
+                "member_uid": member_uid,
+                "name": member.cyxm,
+                "id_no": member.cyzjhm,
+                "relation": member.yhzgx,
+                "change_reason": item_reason,
             })
             db.delete(member)
 
-        # 鏇存柊
         for item in members_to_update:
             member_uid = item.get("memberUid")
             if not member_uid:
@@ -3164,41 +4100,73 @@ class SurveyService:
             ).first()
             if member is None:
                 continue
-            change_details["updated"].append(member_uid)
-            member.cyxm = item.get("name", member.cyxm)
-            member.cyxb = item.get("gender", member.cyxb)
-            member.cyzjlx = item.get("idType", member.cyzjlx)
-            member.cyzjhm = item.get("idNo", member.cyzjhm)
-            member.yhzgx = item.get("relationToHead", member.yhzgx)
-            member.cybz = item.get("noteCode", member.cybz)
-            member.sfgyr = item.get("isCoOwner", member.sfgyr)
-            member.cybzsm = item.get("note", member.cybzsm)
-            member.is_household_head = bool(item.get("isHouseholdHead", member.is_household_head))
-            member.is_changed = True
+            item_reason = item.get("changeReason") or reason
+            field_map = [
+                ("cyxm", "name"),
+                ("cyxb", "gender"),
+                ("cyzjlx", "idType"),
+                ("cyzjhm", "idNo"),
+                ("yhzgx", "relationToHead"),
+                ("cybz", "noteCode"),
+                ("sfgyr", "isCoOwner"),
+                ("cybzsm", "note"),
+                ("is_household_head", "isHouseholdHead"),
+            ]
+            changed_fields = []
+            for attr, key in field_map:
+                if key not in item:
+                    continue
+                before_value = getattr(member, attr)
+                after_value = bool(item.get(key)) if attr == "is_household_head" else item.get(key)
+                if self._diff_value(before_value) == self._diff_value(after_value):
+                    continue
+                setattr(member, attr, after_value)
+                changed_fields.append(attr)
+            if changed_fields:
+                change_details["updated"].append({
+                    "member_uid": member_uid,
+                    "name": member.cyxm,
+                    "fields": changed_fields,
+                    "change_reason": item_reason,
+                })
+                member.is_changed = True
+                member.change_reason = item_reason
+                member.investigator_id = current_user.id
+                member.investigator_name = current_user.real_name
+                member.investigated_at = now
 
-        # 鏂板
         for item in members_to_add:
             member_uid = item.get("memberUid") or str(uuid4())
+            item_reason = item.get("changeReason") or reason
             member = SurveyCbfJtcyResult(
                 contractor_uid=contractor_uid,
-                member_uid=member_uid, base_id=None,
+                member_uid=member_uid,
                 cbfbm=result.cbfbm,
-                cyxm=item["name"], cyxb=item.get("gender", "1"),
-                cyzjlx=item.get("idType", "1"), cyzjhm=item.get("idNo", ""),
+                cyxm=item["name"],
+                cyxb=item.get("gender", "1"),
+                cyzjlx=item.get("idType", "1"),
+                cyzjhm=item.get("idNo", ""),
                 yhzgx=item.get("relationToHead", "09"),
-                cybz=item.get("noteCode"), sfgyr=item.get("isCoOwner"),
+                cybz=item.get("noteCode"),
+                sfgyr=item.get("isCoOwner"),
                 cybzsm=item.get("note"),
-                member_result_status="added", survey_status="surveyed",
+                member_result_status="added",
+                survey_status="surveyed",
                 is_household_head=bool(item.get("isHouseholdHead")),
                 is_changed=True,
+                change_reason=item_reason,
                 initialized_at=now,
-                investigator_id=current_user.id, investigator_name=current_user.real_name,
+                investigator_id=current_user.id,
+                investigator_name=current_user.real_name,
                 investigated_at=now,
             )
             db.add(member)
-            change_details["added"].append({"member_uid": member_uid, "name": item["name"]})
+            change_details["added"].append({
+                "member_uid": member_uid,
+                "name": item["name"],
+                "change_reason": item_reason,
+            })
 
-        # 鏇存柊鎴愬憳鏁伴噺
         member_count = db.scalar(
             select(func.count(SurveyCbfJtcyResult.id)).where(
                 SurveyCbfJtcyResult.contractor_uid == contractor_uid,
@@ -3207,7 +4175,6 @@ class SurveyService:
         result.cbfcysl = member_count
         result.investigated_at = now
 
-        # 鍙樺寲璁板綍
         record = self._create_change_record(
             db, batch_id, contractor_uid, result.cbfbm,
             change_type="member_maintain",
@@ -3216,14 +4183,24 @@ class SurveyService:
             reason=reason,
             current_user=current_user, now=now,
         )
+        db.flush()
 
-        # 浠诲姟鏇存柊
         task = self._get_task(db, batch_id, contractor_uid)
         if task:
             task.has_change = True
-            task.change_count = (task.change_count or 0) + len(members_to_add) + len(members_to_update) + len(members_to_delete)
+            task.change_count = (task.change_count or 0) + sum(len(change_details[key]) for key in ["added", "updated", "deleted"])
             task.investigated_at = now
 
+        if not commit:
+            db.flush()
+            return {"queued": True}
+        self._rebuild_contractor_diffs(
+            db,
+            batch_id,
+            [contractor_uid],
+            change_ids={contractor_uid: record.id},
+            deleted_member_reasons={contractor_uid: deleted_member_reasons},
+        )
         db.commit()
         return self.get_result(db, batch_id, contractor_uid, current_user)
 
@@ -3262,6 +4239,7 @@ class SurveyService:
     def deregister_contractor(
         self, db: Session, batch_id: int, contractor_uid: str,
         reason: str, current_user: User,
+        commit: bool = True,
     ) -> dict:
         # repaired docstring
         batch = self._ensure_batch(db, batch_id)
@@ -3269,11 +4247,11 @@ class SurveyService:
             raise HTTPException(400, "invalid operation")
         result = self._get_result(db, batch_id, contractor_uid)
         if result.survey_status == "confirmed":
-            raise HTTPException(400, "璋冩煡鎴愭灉宸茬‘璁わ紝涓嶈兘娉ㄩ攢")
+            raise HTTPException(400, "鐠嬪啯鐓￠幋鎰亯瀹歌尙鈥樼拋銈忕礉娑撳秷鍏樺▔銊╂敘")
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
         now = datetime.now(timezone.utc)
 
-        # 鏀堕泦鍒犻櫎鍓嶅畬鏁村揩鐓?
+        # 閺€鍫曟肠閸掔娀娅庨崜宥呯暚閺佹潙鎻╅悡?
         members = db.scalars(
             select(SurveyCbfJtcyResult).where(
                 SurveyCbfJtcyResult.contractor_uid == contractor_uid,
@@ -3282,6 +4260,7 @@ class SurveyService:
         parcel_relations = db.scalars(
             select(SurveyCbdkxxResult).where(
                 SurveyCbdkxxResult.cbfbm == result.cbfbm,
+                SurveyCbdkxxResult.result_status != "removed",
             )
         ).all()
 
@@ -3315,7 +4294,7 @@ class SurveyService:
             ],
         }
 
-        # 鍒涘缓鍙樺寲璁板綍锛堝厛鍒涘缓锛屽洜涓洪渶瑕?change_id 缁?diff锛?
+        # 閸掓稑缂撻崣妯哄鐠佹澘缍嶉敍鍫濆帥閸掓稑缂撻敍灞芥礈娑撴椽娓剁憰?change_id 缂?diff閿?
         record = self._create_change_record(
             db, batch_id, contractor_uid, result.cbfbm,
             change_type="deregister",
@@ -3326,7 +4305,7 @@ class SurveyService:
         )
         db.flush()
 
-        # 鍒涘缓 diffs锛堥€愪釜瀹炰綋璁板綍鍒犻櫎锛?
+        # 閸掓稑缂?diffs閿涘牓鈧劒閲滅€圭偘缍嬬拋鏉跨秿閸掔娀娅庨敍?
         db.add(SurveyChangeDiff(
             batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
             entity_type="contractor", entity_uid=contractor_uid, entity_name=result.cbfmc,
@@ -3337,25 +4316,25 @@ class SurveyService:
             db.add(SurveyChangeDiff(
                 batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
                 entity_type="member", entity_uid=m.member_uid, entity_name=m.cyxm,
-                field_name="member", field_label="鍒犻櫎鎴愬憳",
+                field_name="member", field_label="閸掔娀娅庨幋鎰喅",
                 before_value=f"{m.cyxm} / {m.cyzjhm}", after_value=None, change_reason=reason,
             ))
         for p in parcel_relations:
             db.add(SurveyChangeDiff(
                 batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
                 entity_type="parcel_relation", entity_uid=p.parcel_info_uid, entity_name=p.dkbm,
-                field_name="parcel_relation", field_label="鍒犻櫎鍦板潡鍏宠仈",
-                before_value=f"{p.dkbm} (鍏宠仈 {result.cbfbm})", after_value=None, change_reason=reason,
+                field_name="parcel_relation", field_label="閸掔娀娅庨崷鏉挎健閸忓疇浠?",
+                before_value=f"{p.dkbm} (閸忓疇浠?{result.cbfbm})", after_value=None, change_reason=reason,
             ))
 
-        # 鐗╃悊鍒犻櫎
+        # 閻椻晝鎮婇崚鐘绘珟
         for m in members:
             db.delete(m)
         for p in parcel_relations:
             db.delete(p)
         db.delete(result)
 
-        # 鏇存柊浠诲姟鐘舵€?
+        # 閺囧瓨鏌婃禒璇插閻樿埖鈧?
         task = self._get_task(db, batch_id, contractor_uid)
         if task:
             task.task_status = "deregistered"
@@ -3363,12 +4342,16 @@ class SurveyService:
             task.change_count = (task.change_count or 0) + 1
             task.investigated_at = now
 
+        if not commit:
+            db.flush()
+            return {"queued": True}
         db.commit()
         return {"contractorUid": contractor_uid, "status": "deregistered", "changeNo": record.change_no}
 
     def add_parcel(
         self, db: Session, batch_id: int, contractor_uid: str,
         payload: dict, current_user: User,
+        commit: bool = True,
     ) -> dict:
         # repaired docstring
         batch = self._ensure_batch(db, batch_id)
@@ -3380,22 +4363,48 @@ class SurveyService:
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
         now = datetime.now(timezone.utc)
 
-        # 鏌ユ壘鍙戝寘鏂癸紙浠庡凡鏈夊湴鍧楀叧绯讳腑鑾峰彇锛屾垨浠庢壙鍖呮柟浠ｇ爜鎺ㄥ锛?
+        # 閺屻儲澹橀崣鎴濆瘶閺傜櫢绱欐禒搴″嚒閺堝婀撮崸妤€鍙х化璁宠厬閼惧嘲褰囬敍灞惧灗娴犲孩澹欓崠鍛煙娴狅絿鐖滈幒銊ヮ嚤閿?
         existing_parcel = db.scalars(
             select(SurveyCbdkxxResult.fbfbm).where(
                 SurveyCbdkxxResult.cbfbm == result.cbfbm,
+                SurveyCbdkxxResult.result_status != "removed",
             ).limit(1)
         ).first()
         fbfbm = existing_parcel or result.cbfbm[:14]
+        geometry = self._normalize_geojson_geometry(payload.get("geometry"))
+        geometry_source_srid = int(payload.get("geometrySourceSrid") or 4326)
+        duplicate_dkbm = db.scalar(
+            select(SurveyDkResult.id).where(
+                SurveyDkResult.dkbm == payload["dkbm"],
+                SurveyDkResult.result_status != "removed",
+            ).limit(1)
+        )
+        if duplicate_dkbm:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"parcel code already exists: {payload['dkbm']}")
+        if geometry is not None:
+            area_mu = self._measure_geojson_area_mu(db, geometry, geometry_source_srid)
+            if area_mu is None or area_mu <= 0:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="parcel geometry is invalid")
+            overlaps = self._find_database_geometry_conflicts(
+                db,
+                batch.tenant_code,
+                geometry,
+                geometry_source_srid,
+            )
+            if overlaps:
+                overlap_text = "、".join(item.get("dkbm") or "-" for item in overlaps[:3])
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"parcel geometry overlaps existing parcels: {overlap_text}",
+                )
 
         parcel_uid = str(uuid4())
         parcel_info_uid = str(uuid4())
         scmj = payload["scmj"]
 
-        # 鍒涘缓 SurveyDkResult
+        # 閸掓稑缂?SurveyDkResult
         dk_result = SurveyDkResult(
             parcel_uid=parcel_uid,
-            base_id=0,  # 鏂板鍦板潡鏃?base
             ysdm=result.cbfbm[:6] or "000000",
             dkbm=payload["dkbm"],
             dkmc=payload["dkmc"],
@@ -3420,11 +4429,12 @@ class SurveyService:
         )
         db.add(dk_result)
         db.flush()
+        if geometry is not None:
+            self._write_survey_dk_geometry(db, "survey_dk_result", dk_result.id, geometry, geometry_source_srid)
 
-        # 鍒涘缓 SurveyCbdkxxResult
+        # 閸掓稑缂?SurveyCbdkxxResult
         cbdkxx = SurveyCbdkxxResult(
             parcel_info_uid=parcel_info_uid,
-            base_id=0,
             dkbm=payload["dkbm"],
             fbfbm=fbfbm,
             cbfbm=result.cbfbm,
@@ -3446,7 +4456,7 @@ class SurveyService:
         )
         db.add(cbdkxx)
 
-        # 鍙樺寲璁板綍
+        # 閸欐ê瀵茬拋鏉跨秿
         record = self._create_change_record(
             db, batch_id, contractor_uid, result.cbfbm,
             change_type="add_parcel",
@@ -3461,16 +4471,7 @@ class SurveyService:
         )
         db.flush()
 
-        # diffs
-        db.add(SurveyChangeDiff(
-            batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
-            entity_type="parcel", entity_uid=parcel_uid, entity_name=payload["dkmc"],
-            field_name="parcel", field_label="鏂板鍦板潡",
-            before_value=None, after_value="changed",
-            change_reason=payload.get("reason"),
-        ))
-
-        # 鏇存柊浠诲姟
+        # 閺囧瓨鏌婃禒璇插
         task = self._get_task(db, batch_id, contractor_uid)
         if task:
             task.has_change = True
@@ -3478,12 +4479,168 @@ class SurveyService:
             task.investigated_at = now
 
         result.investigated_at = now
+        if not commit:
+            db.flush()
+            return {"queued": True}
+        self._rebuild_contractor_diffs(db, batch_id, [contractor_uid], change_ids={contractor_uid: None})
         db.commit()
         return self.get_result(db, batch_id, contractor_uid, current_user)
+
+    def _prepare_split_generated_parcels(
+        self,
+        db: Session,
+        batch_id: int,
+        contractor_uid: str,
+        result: SurveyCbfResult,
+        source_parcel: SurveyDkResult,
+        split_mode: str,
+        payload: dict,
+        parts: list[dict],
+        current_user: User,
+    ) -> list[dict]:
+        definitions = payload.get("generatedParcels") or []
+        part_count = len(parts)
+        if part_count < 2:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="split must generate at least two parcels")
+
+        if definitions and len(definitions) > part_count:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="generated parcel count does not match split result")
+
+        if not definitions:
+            first_code = str(payload.get("newDkbm") or "").strip()
+            first_name = str(payload.get("newDkmc") or "").strip()
+            if not first_code or not first_name:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="generated parcel info is required")
+            definitions = [{
+                "dkbm": first_code,
+                "dkmc": first_name,
+            }]
+
+        next_code_info = self.generate_next_parcel_code(db, batch_id, contractor_uid, current_user)
+        prefix = str(next_code_info.get("prefix") or "").strip()
+        sequence = int(next_code_info.get("sequence") or 1)
+        existing_codes = set(
+            db.scalars(
+                select(SurveyDkResult.dkbm).where(
+                    SurveyDkResult.tenant_code == result.tenant_code,
+                ).execution_options(skip_tenant_scope=True)
+            ).all()
+        )
+        used_codes: set[str] = set()
+
+        def next_auto_code() -> str:
+            nonlocal sequence
+            while True:
+                candidate = f"{prefix}{sequence:05d}" if prefix else str(sequence)
+                sequence += 1
+                if candidate not in existing_codes and candidate not in used_codes:
+                    return candidate
+
+        generated: list[dict] = []
+        base_name = str(definitions[0].get("dkmc") or source_parcel.dkmc or "切割地块").strip() or "切割地块"
+        for index, part in enumerate(parts):
+            if index < len(definitions):
+                item = definitions[index] or {}
+                dkbm = str(item.get("dkbm") or "").strip()
+                dkmc = str(item.get("dkmc") or "").strip()
+                if not dkbm or not dkmc:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="generated parcel code and name are required")
+            else:
+                dkbm = next_auto_code()
+                dkmc = f"{base_name}{index + 1}"
+            if dkbm in used_codes or dkbm in existing_codes:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"parcel code already exists: {dkbm}")
+            used_codes.add(dkbm)
+            generated.append({
+                "dkbm": dkbm,
+                "dkmc": dkmc,
+                "scmj": round(float(part["areaMu"]), 2),
+                "htmj": round(float(part["areaMu"]), 2),
+                "geometry": part["geometry"],
+            })
+
+        if split_mode == "area" and len(generated) < 2:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="direction split must generate two current parcels")
+        return generated
+
+    def preview_split_parcel(
+        self,
+        db: Session,
+        batch_id: int,
+        contractor_uid: str,
+        payload: dict,
+        current_user: User,
+    ) -> dict:
+        batch = self._ensure_batch(db, batch_id)
+        if batch.status == "finished":
+            raise HTTPException(400, "invalid operation")
+        result = self._get_result(db, batch_id, contractor_uid)
+        if result.survey_status == "confirmed":
+            raise HTTPException(400, "invalid operation")
+        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
+
+        dkbm = payload["dkbm"]
+        old_relation = db.scalars(
+            select(SurveyCbdkxxResult).where(
+                SurveyCbdkxxResult.dkbm == dkbm,
+                SurveyCbdkxxResult.cbfbm == result.cbfbm,
+                SurveyCbdkxxResult.result_status.notin_(("removed", "split_source")),
+            )
+        ).first()
+        if old_relation is None:
+            raise HTTPException(404, "parcel relation not found")
+
+        old_parcel = db.scalars(
+            select(SurveyDkResult)
+            .where(
+                SurveyDkResult.dkbm == old_relation.dkbm,
+                SurveyDkResult.result_status.notin_(("removed", "split_source")),
+            )
+            .order_by(SurveyDkResult.id.desc())
+        ).first()
+        if old_parcel is None:
+            raise HTTPException(404, "parcel not found")
+
+        split_mode = str(payload.get("splitMode") or "area").strip().lower()
+        if split_mode == "geometry":
+            split_result = self._split_row_geometry_by_shape(
+                db,
+                old_parcel.id,
+                payload.get("splitGeometry"),
+                int(payload.get("geometrySourceSrid") or 4326),
+            )
+        else:
+            new_scmj = float(payload.get("newScmj") or 0)
+            if new_scmj <= 0:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="split area is required")
+            split_result = self._split_row_geometry_by_direction(
+                db,
+                old_parcel.id,
+                payload.get("splitDirection"),
+                new_scmj,
+            )
+
+        generated_parcels = self._prepare_split_generated_parcels(
+            db,
+            batch_id,
+            contractor_uid,
+            result,
+            old_parcel,
+            split_mode,
+            payload,
+            split_result["parts"],
+            current_user,
+        )
+        return {
+            "sourceDkbm": old_parcel.dkbm,
+            "splitMode": split_mode,
+            "generatedParcels": generated_parcels,
+        }
 
     def split_parcel(
         self, db: Session, batch_id: int, contractor_uid: str,
         payload: dict, current_user: User,
+        commit: bool = True,
     ) -> dict:
         # repaired docstring
         batch = self._ensure_batch(db, batch_id)
@@ -3495,129 +4652,166 @@ class SurveyService:
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
         now = datetime.now(timezone.utc)
 
-        # 鏌ユ壘鍘熷湴鍧楀叧鑱?
+        # 閺屻儲澹橀崢鐔锋勾閸ф鍙ч懕?
         dkbm = payload["dkbm"]
         old_relation = db.scalars(
             select(SurveyCbdkxxResult).where(
                 SurveyCbdkxxResult.dkbm == dkbm,
                 SurveyCbdkxxResult.cbfbm == result.cbfbm,
+                SurveyCbdkxxResult.result_status.notin_(("removed", "split_source")),
             )
         ).first()
         if old_relation is None:
-            raise HTTPException(404, "鍘熷湴鍧楀叧鑱斾笉瀛樺湪")
+            raise HTTPException(404, "閸樼喎婀撮崸妤€鍙ч懕鏂剧瑝鐎涙ê婀?")
 
-        # 鏌ユ壘鍘熷湴鍧?
+        # 閺屻儲澹橀崢鐔锋勾閸?
         old_parcel = db.scalars(
-            select(SurveyDkResult).where(
+            select(SurveyDkResult)
+            .where(
                 SurveyDkResult.dkbm == old_relation.dkbm,
+                SurveyDkResult.result_status.notin_(("removed", "split_source")),
             )
+            .order_by(SurveyDkResult.id.desc())
         ).first()
         if old_parcel is None:
-            raise HTTPException(404, "鍘熷湴鍧椾笉瀛樺湪")
+            raise HTTPException(404, "閸樼喎婀撮崸妞剧瑝鐎涙ê婀?")
 
-        new_scmj = payload["newScmj"]
+        split_mode = str(payload.get("splitMode") or "area").strip().lower()
         old_area = float(old_parcel.scmj or 0)
-        if new_scmj >= old_area:
-            raise HTTPException(400, f"鍒囧壊闈㈢Н({new_scmj})涓嶈兘澶т簬绛変簬鍘熷湴鍧楅潰绉?{old_area})")
+        split_preview = None
+        if split_mode == "geometry":
+            split_preview = self._split_row_geometry_by_shape(
+                db,
+                old_parcel.id,
+                payload.get("splitGeometry"),
+                int(payload.get("geometrySourceSrid") or 4326),
+            )
+        else:
+            new_scmj = float(payload.get("newScmj") or 0)
+            if new_scmj <= 0:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="split area is required")
+            if payload.get("splitDirection"):
+                split_preview = self._split_row_geometry_by_direction(
+                    db,
+                    old_parcel.id,
+                    payload.get("splitDirection"),
+                    new_scmj,
+                )
+            else:
+                if new_scmj >= old_area:
+                    raise HTTPException(400, f"閸掑洤澹婇棃銏⑿?{new_scmj})娑撳秷鍏樻径褌绨粵澶夌艾閸樼喎婀撮崸妤呮桨缁?{old_area})")
+        split_parts = split_preview["parts"] if split_preview else []
+        generated_parcels = self._prepare_split_generated_parcels(
+            db,
+            batch_id,
+            contractor_uid,
+            result,
+            old_parcel,
+            split_mode,
+            payload,
+            split_parts,
+            current_user,
+        )
 
-        # 鍑忓皬鍘熷湴鍧楅潰绉?
-        remaining = round(old_area - new_scmj, 2)
-        old_parcel.scmj = remaining
+        # 閸戝繐鐨崢鐔锋勾閸ф娼扮粔?
         old_parcel.is_changed = True
+        old_parcel.result_status = "split_source"
         old_parcel.change_type = "split_parcel"
         old_parcel.change_reason = payload.get("reason")
 
-        # 鏇存柊鍘熷湴鍧楀叧鑱旂殑闈㈢Н
-        if old_relation.htmj and float(old_relation.htmj) > 0:
-            old_relation.htmj = remaining
+        # 閺囧瓨鏌婇崢鐔锋勾閸ф鍙ч懕鏃傛畱闂堛垻袧
+        old_relation.is_changed = True
+        old_relation.result_status = "split_source"
+        old_relation.change_type = "split_parcel"
+        old_relation.change_reason = payload.get("reason")
 
-        # 鍒涘缓鏂板湴鍧?
-        new_parcel_uid = str(uuid4())
-        new_parcel_info_uid = str(uuid4())
-        new_dkbm = payload["newDkbm"]
+        for item in generated_parcels:
+            new_parcel = SurveyDkResult(
+                parcel_uid=str(uuid4()),
+                ysdm=old_parcel.ysdm,
+                dkbm=item["dkbm"],
+                dkmc=item["dkmc"],
+                syqxz=old_parcel.syqxz,
+                dklb=old_parcel.dklb,
+                tdlylx=old_parcel.tdlylx,
+                dldj=old_parcel.dldj,
+                tdyt=old_parcel.tdyt,
+                sfjbnt=old_parcel.sfjbnt,
+                scmj=item["scmj"],
+                dkdz=old_parcel.dkdz,
+                dkxz=old_parcel.dkxz,
+                dknz=old_parcel.dknz,
+                dkbz=f"由 {old_parcel.dkbm} 切割生成",
+                survey_status="surveyed",
+                result_status="split_generated",
+                is_changed=True,
+                change_type="split_parcel",
+                change_reason=payload.get("reason"),
+                initialized_at=now,
+            )
+            db.add(new_parcel)
+            db.flush()
+            self._write_survey_dk_geometry(
+                db,
+                "survey_dk_result",
+                new_parcel.id,
+                item["geometry"],
+                4326,
+            )
 
-        new_parcel = SurveyDkResult(
-            parcel_uid=new_parcel_uid,
-            base_id=0,
-            ysdm=old_parcel.ysdm,
-            dkbm=new_dkbm,
-            dkmc=payload["newDkmc"],
-            syqxz=old_parcel.syqxz,
-            dklb=old_parcel.dklb,
-            tdlylx=old_parcel.tdlylx,
-            dldj=old_parcel.dldj,
-            tdyt=old_parcel.tdyt,
-            sfjbnt=old_parcel.sfjbnt,
-            scmj=new_scmj,
-            dkdz=old_parcel.dkdz,
-            dkxz=old_parcel.dkxz,
-            dknz=old_parcel.dknz,
-            dkbz=f"浠?{old_parcel.dkbm} 鍒囧壊",
-            survey_status="surveyed",
-            result_status="added",
-            is_changed=True,
-            change_type="split_parcel",
-            change_reason=payload.get("reason"),
-            initialized_at=now,
-        )
-        db.add(new_parcel)
-        db.flush()
+            new_relation = SurveyCbdkxxResult(
+                parcel_info_uid=str(uuid4()),
+                dkbm=item["dkbm"],
+                fbfbm=old_relation.fbfbm,
+                cbfbm=result.cbfbm,
+                cbjyqqdfs=old_relation.cbjyqqdfs,
+                htmj=item["htmj"],
+                cbhtbm=old_relation.cbhtbm,
+                lzhtbm=old_relation.lzhtbm,
+                cbjyqzbm=old_relation.cbjyqzbm,
+                sfqqqg=old_relation.sfqqqg,
+                survey_status="surveyed",
+                result_status="split_generated",
+                is_changed=True,
+                change_type="split_parcel",
+                change_reason=payload.get("reason"),
+                initialized_at=now,
+            )
+            db.add(new_relation)
 
-        # 鍒涘缓鏂板湴鍧楀叧鑱?
-        new_relation = SurveyCbdkxxResult(
-            parcel_info_uid=new_parcel_info_uid,
-            base_id=0,
-            dkbm=new_dkbm,
-            fbfbm=old_relation.fbfbm,
-            cbfbm=result.cbfbm,
-            cbjyqqdfs=old_relation.cbjyqqdfs,
-            htmj=new_scmj,
-            cbhtbm=old_relation.cbhtbm,
-            lzhtbm=old_relation.lzhtbm,
-            cbjyqzbm=old_relation.cbjyqzbm,
-            sfqqqg=old_relation.sfqqqg,
-            survey_status="surveyed",
-            result_status="added",
-            is_changed=True,
-            change_type="split_parcel",
-            change_reason=payload.get("reason"),
-            initialized_at=now,
-        )
-        db.add(new_relation)
-
-        # 鍙樺寲璁板綍
+        # 閸欐ê瀵茬拋鏉跨秿
         record = self._create_change_record(
             db, batch_id, contractor_uid, result.cbfbm,
             change_type="split_parcel",
             before_summary={
-                "dkbm": old_parcel.dkbm, "original_area": old_area,
+                "dkbm": old_parcel.dkbm,
+                "original_area": old_area,
+                "source_result_status": old_parcel.result_status,
+                "source_change_type": old_parcel.change_type,
+                "source_change_reason": old_parcel.change_reason,
+                "source_is_changed": old_parcel.is_changed,
             },
             after_summary={
                 "action": "split_parcel",
-                "original_dkbm": old_parcel.dkbm, "remaining_area": remaining,
-                "new_dkbm": new_dkbm, "new_area": new_scmj,
+                "split_mode": split_mode,
+                "split_direction": payload.get("splitDirection"),
+                "original_dkbm": old_parcel.dkbm,
+                "generated_count": len(generated_parcels),
+                "generated_parcels": [
+                    {
+                        "dkbm": item["dkbm"],
+                        "dkmc": item["dkmc"],
+                        "area": item["scmj"],
+                    }
+                    for item in generated_parcels
+                ],
             },
             reason=payload.get("reason"),
             current_user=current_user, now=now,
         )
         db.flush()
 
-        # diffs
-        db.add(SurveyChangeDiff(
-            batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
-            entity_type="parcel", entity_uid=old_parcel.parcel_uid, entity_name=old_parcel.dkmc,
-            field_name="scmj", field_label="瀹炴祴闈㈢Н",
-            before_value=str(old_area), after_value=str(remaining), change_reason=payload.get("reason"),
-        ))
-        db.add(SurveyChangeDiff(
-            batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
-            entity_type="parcel", entity_uid=new_parcel_uid, entity_name=new_parcel.dkmc,
-            field_name="field", field_label="field",
-            before_value=None, after_value="changed",
-            change_reason=payload.get("reason"),
-        ))
-
-        # 鏇存柊浠诲姟
+        # 閺囧瓨鏌婃禒璇插
         task = self._get_task(db, batch_id, contractor_uid)
         if task:
             task.has_change = True
@@ -3625,12 +4819,18 @@ class SurveyService:
             task.investigated_at = now
 
         result.investigated_at = now
+        if not commit:
+            db.flush()
+            return {"queued": True}
+        self._rebuild_contractor_diffs(db, batch_id, [contractor_uid], change_ids={contractor_uid: None})
         db.commit()
         return self.get_result(db, batch_id, contractor_uid, current_user)
 
     def swap_parcels(
         self, db: Session, batch_id: int, contractor_uid: str,
         payload: dict, current_user: User,
+        commit: bool = True,
+        change_type: str = "swap_parcels",
     ) -> dict:
         # repaired docstring
         batch = self._ensure_batch(db, batch_id)
@@ -3645,82 +4845,120 @@ class SurveyService:
         target_uid = payload["targetContractorUid"]
         target_result = self._get_result(db, batch_id, target_uid)
         if target_result.survey_status == "confirmed":
-            raise HTTPException(400, "鐩爣鎵垮寘鏂瑰凡纭")
+            raise HTTPException(400, "閻╊喗鐖ｉ幍鍨瘶閺傜懓鍑＄涵顔款吇")
         if target_uid == contractor_uid:
             raise HTTPException(400, "invalid operation")
+        data_access_service.ensure_code_in_scope(current_user, target_result.cbfbm, detail="out of scope")
+        source_group = result.group_region_code or (result.cbfbm[:14] if result.cbfbm else "")
+        target_group = target_result.group_region_code or (target_result.cbfbm[:14] if target_result.cbfbm else "")
+        if source_group and target_group and source_group != target_group:
+            raise HTTPException(400, "鐩爣鎵垮寘鏂瑰彧鑳介€夋嫨鏈粍鎵垮寘鏂?")
 
         source_dkbms = payload["sourceDkbms"]
         target_dkbms = payload["targetDkbms"]
+        reason = payload.get("reason")
+        if len(source_dkbms) != len(set(source_dkbms)) or len(target_dkbms) != len(set(target_dkbms)):
+            raise HTTPException(400, "浜掓崲鍦板潡涓嶈兘閲嶅閫夋嫨")
 
-        # 鎵ц浜掓崲
+        def load_active_relations(dkbms: list[str], cbfbm: str, side: str) -> list[SurveyCbdkxxResult]:
+            rows = db.scalars(
+                select(SurveyCbdkxxResult).where(
+                    SurveyCbdkxxResult.dkbm.in_(dkbms),
+                    SurveyCbdkxxResult.cbfbm == cbfbm,
+                    SurveyCbdkxxResult.result_status.notin_(("removed", "split_source")),
+                )
+            ).all()
+            by_code = {row.dkbm: row for row in rows}
+            missing = [dkbm for dkbm in dkbms if dkbm not in by_code]
+            if missing:
+                raise HTTPException(404, f"{side}鍦板潡 {missing[0]} 涓嶅睘浜庡搴旀壙鍖呮柟")
+            return [by_code[dkbm] for dkbm in dkbms]
+
+        source_relations = load_active_relations(source_dkbms, result.cbfbm, "鏈柟")
+        target_relations = load_active_relations(target_dkbms, target_result.cbfbm, "鐩爣鏂?")
+
+        relation_fields = (
+            ("cbfbm", "鎵垮寘鏂逛唬鐮?",),
+            ("fbfbm", "鍙戝寘鏂逛唬鐮?",),
+            ("cbjyqqdfs", "鎵垮寘缁忚惀鏉冨彇寰楁柟寮?",),
+            ("cbhtbm", "鎵垮寘鍚堝悓缂栫爜"),
+            ("lzhtbm", "娴佽浆鍚堝悓缂栫爜"),
+            ("cbjyqzbm", "鎵垮寘缁忚惀鏉冭瘉缂栫爜"),
+            ("sfqqqg", "鏄惁纭潈纭偂"),
+        )
+        source_contract = {
+            field_name: getattr(source_relations[0], field_name)
+            for field_name, _ in relation_fields
+        }
+        target_contract = {
+            field_name: getattr(target_relations[0], field_name)
+            for field_name, _ in relation_fields
+        }
+
+        def transfer_relation(
+            rel: SurveyCbdkxxResult,
+            recipient_cbfbm: str,
+            recipient_contract: dict,
+        ) -> list[dict]:
+            changes = []
+            for field_name, field_label in relation_fields:
+                before_value = getattr(rel, field_name)
+                after_value = (
+                    recipient_cbfbm
+                    if field_name == "cbfbm"
+                    else recipient_contract[field_name]
+                )
+                if before_value != after_value:
+                    changes.append({
+                        "field_name": field_name,
+                        "field_label": field_label,
+                        "before_value": before_value,
+                        "after_value": after_value,
+                    })
+                    setattr(rel, field_name, after_value)
+            rel.is_changed = True
+            rel.change_type = change_type
+            rel.change_reason = reason
+            return changes
+
+        # 閹笛嗩攽娴滄帗宕?
         swapped_source = []
         swapped_target = []
-        for dkbm in source_dkbms:
-            rel = db.scalars(
-                select(SurveyCbdkxxResult).where(
-                    SurveyCbdkxxResult.dkbm == dkbm,
-                    SurveyCbdkxxResult.cbfbm == result.cbfbm,
-                )
-            ).first()
-            if rel is None:
-                raise HTTPException(404, f"婧愬湴鍧?{dkbm} 涓嶅睘浜庡綋鍓嶆壙鍖呮柟")
-            swapped_source.append({"dkbm": dkbm, "from": result.cbfbm, "to": target_result.cbfbm})
-            rel.cbfbm = target_result.cbfbm
-            rel.is_changed = True
-            rel.change_type = "swap_parcels"
-            rel.change_reason = payload.get("reason")
+        for rel in source_relations:
+            swapped_source.append({
+                "dkbm": rel.dkbm,
+                "changes": transfer_relation(rel, target_result.cbfbm, target_contract),
+            })
 
-        for dkbm in target_dkbms:
-            rel = db.scalars(
-                select(SurveyCbdkxxResult).where(
-                    SurveyCbdkxxResult.dkbm == dkbm,
-                    SurveyCbdkxxResult.cbfbm == target_result.cbfbm,
-                )
-            ).first()
-            if rel is None:
-                raise HTTPException(404, f"鐩爣鍦板潡 {dkbm} 涓嶅睘浜庣洰鏍囨壙鍖呮柟")
-            swapped_target.append({"dkbm": dkbm, "from": target_result.cbfbm, "to": result.cbfbm})
-            rel.cbfbm = result.cbfbm
-            rel.is_changed = True
-            rel.change_type = "swap_parcels"
-            rel.change_reason = payload.get("reason")
+        for rel in target_relations:
+            swapped_target.append({
+                "dkbm": rel.dkbm,
+                "changes": transfer_relation(rel, result.cbfbm, source_contract),
+            })
 
-        # 鍙樺寲璁板綍锛堟簮鏂癸級
+        # 閸欐ê瀵茬拋鏉跨秿閿涘牊绨弬鐧哥礆
         record = self._create_change_record(
             db, batch_id, contractor_uid, result.cbfbm,
-            change_type="swap_parcels",
+            change_type=change_type,
             before_summary={"swapped_out": source_dkbms},
             after_summary={"swapped_in": target_dkbms, "counterparty": target_result.cbfbm},
-            reason=payload.get("reason"),
+            reason=reason,
             current_user=current_user, now=now,
         )
         db.flush()
-        for item in swapped_source:
-            db.add(SurveyChangeDiff(
-                batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
-                entity_type="parcel_relation", entity_uid=item["dkbm"], entity_name=item["dkbm"],
-                field_name="field", field_label="field",
-                before_value=item["from"], after_value=item["to"], change_reason=payload.get("reason"),
-            ))
-        for item in swapped_target:
-            db.add(SurveyChangeDiff(
-                batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
-                entity_type="parcel_relation", entity_uid=item["dkbm"], entity_name=item["dkbm"],
-                field_name="field", field_label="field",
-                before_value=item["from"], after_value=item["to"], change_reason=payload.get("reason"),
-            ))
 
-        # 鍙樺寲璁板綍锛堢洰鏍囨柟锛?
+        # 閸欐ê瀵茬拋鏉跨秿閿涘牏娲伴弽鍥ㄦ煙閿?
         target_record = self._create_change_record(
             db, batch_id, target_uid, target_result.cbfbm,
-            change_type="swap_parcels",
+            change_type=change_type,
             before_summary={"swapped_out": target_dkbms},
             after_summary={"swapped_in": source_dkbms, "counterparty": result.cbfbm},
-            reason=payload.get("reason"),
+            reason=reason,
             current_user=current_user, now=now,
         )
+        db.flush()
 
-        # 鏇存柊鍙屾柟浠诲姟
+        # 閺囧瓨鏌婇崣灞炬煙娴犺濮?
         for uid in [contractor_uid, target_uid]:
             task = self._get_task(db, batch_id, uid)
             if task:
@@ -3730,12 +4968,315 @@ class SurveyService:
 
         result.investigated_at = now
         target_result.investigated_at = now
+        if not commit:
+            db.flush()
+            return {"queued": True}
+        self._rebuild_contractor_diffs(
+            db,
+            batch_id,
+            [contractor_uid, target_uid],
+            change_ids={contractor_uid: None, target_uid: None},
+        )
+        db.commit()
+        return self.get_result(db, batch_id, contractor_uid, current_user)
+
+    def rollback_swap_parcels(
+        self,
+        db: Session,
+        batch_id: int,
+        contractor_uid: str,
+        change_id: int,
+        payload: dict,
+        current_user: User,
+        commit: bool = True,
+    ) -> dict:
+        batch = self._ensure_batch(db, batch_id)
+        result = self._get_result(db, batch_id, contractor_uid)
+        self._ensure_editable_batch_and_result(db, result)
+        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
+
+        change = db.scalars(
+            select(SurveyChangeRecord)
+            .where(
+                SurveyChangeRecord.tenant_code == batch.tenant_code,
+                SurveyChangeRecord.batch_id == batch_id,
+                SurveyChangeRecord.contractor_uid == contractor_uid,
+                SurveyChangeRecord.id == change_id,
+            )
+            .execution_options(skip_tenant_scope=True)
+        ).first()
+        if change is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="change record not found")
+        if change.change_type != "swap_parcels":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="only saved parcel swaps can be rolled back")
+        if change.change_status == "rolled_back":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="this parcel swap has already been rolled back")
+
+        before_summary = change.before_summary or {}
+        after_summary = change.after_summary or {}
+        source_dkbms = [str(item).strip() for item in (after_summary.get("swapped_in") or []) if str(item).strip()]
+        target_dkbms = [str(item).strip() for item in (before_summary.get("swapped_out") or []) if str(item).strip()]
+        if not source_dkbms or not target_dkbms:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="saved parcel swap data is incomplete and cannot be rolled back")
+
+        source_relations = db.scalars(
+            select(SurveyCbdkxxResult).where(
+                SurveyCbdkxxResult.dkbm.in_(source_dkbms),
+                SurveyCbdkxxResult.cbfbm == result.cbfbm,
+                SurveyCbdkxxResult.result_status.notin_(("removed", "split_source")),
+            )
+        ).all()
+        source_relation_by_code = {row.dkbm: row for row in source_relations}
+        missing_source = [dkbm for dkbm in source_dkbms if dkbm not in source_relation_by_code]
+        if missing_source:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="current parcel ownership has changed and this swap cannot be rolled back")
+
+        target_relations = db.scalars(
+            select(SurveyCbdkxxResult).where(
+                SurveyCbdkxxResult.dkbm.in_(target_dkbms),
+                SurveyCbdkxxResult.result_status.notin_(("removed", "split_source")),
+            )
+        ).all()
+        target_relation_by_code = {row.dkbm: row for row in target_relations}
+        missing_target = [dkbm for dkbm in target_dkbms if dkbm not in target_relation_by_code]
+        if missing_target:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="current parcel ownership has changed and this swap cannot be rolled back")
+
+        target_owner_codes = {target_relation_by_code[dkbm].cbfbm for dkbm in target_dkbms}
+        if len(target_owner_codes) != 1:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="the swapped parcels are no longer held by the same contractor")
+        target_cbfbm = next(iter(target_owner_codes))
+        if target_cbfbm == result.cbfbm:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="the parcel swap has already been restored")
+
+        target_task = db.scalars(
+            select(SurveyCbfBase)
+            .where(
+                SurveyCbfBase.tenant_code == batch.tenant_code,
+                SurveyCbfBase.batch_id == batch_id,
+                SurveyCbfBase.cbfbm == target_cbfbm,
+            )
+            .order_by(SurveyCbfBase.id.desc())
+            .execution_options(skip_tenant_scope=True)
+        ).first()
+        if target_task is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="the counterparty of this parcel swap could not be found")
+        target_result = self._get_result(db, batch_id, target_task.contractor_uid)
+
+        self._ensure_editable_batch_and_result(db, target_result)
+        data_access_service.ensure_code_in_scope(current_user, target_result.cbfbm, detail="out of scope")
+
+        rollback_reason = (payload.get("reason") or "").strip() or f"鎾ゅ洖浜掓崲 {change.change_no}"
+        self.swap_parcels(
+            db,
+            batch_id,
+            contractor_uid,
+            {
+                "targetContractorUid": target_result.contractor_uid,
+                "sourceDkbms": source_dkbms,
+                "targetDkbms": target_dkbms,
+                "reason": rollback_reason,
+            },
+            current_user,
+            commit=False,
+            change_type="rollback_swap_parcels",
+        )
+
+        change.change_status = "rolled_back"
+        counterpart_change = db.scalars(
+            select(SurveyChangeRecord)
+            .where(
+                SurveyChangeRecord.tenant_code == batch.tenant_code,
+                SurveyChangeRecord.batch_id == batch_id,
+                SurveyChangeRecord.contractor_uid == target_result.contractor_uid,
+                SurveyChangeRecord.change_type == "swap_parcels",
+                SurveyChangeRecord.change_status != "rolled_back",
+            )
+            .order_by(SurveyChangeRecord.id.desc())
+            .execution_options(skip_tenant_scope=True)
+        ).all()
+        for item in counterpart_change:
+            item_before = item.before_summary or {}
+            item_after = item.after_summary or {}
+            item_swapped_out = [str(code).strip() for code in (item_before.get("swapped_out") or []) if str(code).strip()]
+            item_swapped_in = [str(code).strip() for code in (item_after.get("swapped_in") or []) if str(code).strip()]
+            item_counterparty = str(item_after.get("counterparty") or "").strip()
+            if (
+                item_swapped_out == source_dkbms
+                and item_swapped_in == target_dkbms
+                and item_counterparty == result.cbfbm
+            ):
+                item.change_status = "rolled_back"
+                break
+
+        if not commit:
+            db.flush()
+            return {"queued": True}
+
+        self._rebuild_contractor_diffs(
+            db,
+            batch_id,
+            [contractor_uid, target_result.contractor_uid],
+            change_ids={contractor_uid: None, target_result.contractor_uid: None},
+        )
+        db.commit()
+        return self.get_result(db, batch_id, contractor_uid, current_user)
+
+    def rollback_split_parcel(
+        self,
+        db: Session,
+        batch_id: int,
+        contractor_uid: str,
+        change_id: int,
+        payload: dict,
+        current_user: User,
+        commit: bool = True,
+    ) -> dict:
+        batch = self._ensure_batch(db, batch_id)
+        result = self._get_result(db, batch_id, contractor_uid)
+        self._ensure_editable_batch_and_result(db, result)
+        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
+
+        change = db.scalars(
+            select(SurveyChangeRecord)
+            .where(
+                SurveyChangeRecord.tenant_code == batch.tenant_code,
+                SurveyChangeRecord.batch_id == batch_id,
+                SurveyChangeRecord.contractor_uid == contractor_uid,
+                SurveyChangeRecord.id == change_id,
+            )
+            .execution_options(skip_tenant_scope=True)
+        ).first()
+        if change is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="change record not found")
+        if change.change_type != "split_parcel":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="only saved parcel splits can be rolled back")
+        if change.change_status == "rolled_back":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="this parcel split has already been rolled back")
+
+        before_summary = change.before_summary or {}
+        after_summary = change.after_summary or {}
+        source_dkbm = str(before_summary.get("dkbm") or after_summary.get("original_dkbm") or "").strip()
+        generated_items = after_summary.get("generated_parcels") or []
+        generated_dkbms = [str(item.get("dkbm") or "").strip() for item in generated_items if str(item.get("dkbm") or "").strip()]
+        if not generated_dkbms:
+            legacy_dkbm = str(after_summary.get("new_dkbm") or "").strip()
+            if legacy_dkbm:
+                generated_dkbms = [legacy_dkbm]
+        if not source_dkbm or not generated_dkbms:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="saved parcel split data is incomplete and cannot be rolled back")
+
+        source_relation = db.scalars(
+            select(SurveyCbdkxxResult).where(
+                SurveyCbdkxxResult.dkbm == source_dkbm,
+                SurveyCbdkxxResult.cbfbm == result.cbfbm,
+                SurveyCbdkxxResult.result_status == "split_source",
+            )
+        ).first()
+        source_parcel = db.scalars(
+            select(SurveyDkResult).where(
+                SurveyDkResult.dkbm == source_dkbm,
+                SurveyDkResult.result_status == "split_source",
+            ).order_by(SurveyDkResult.id.desc())
+        ).first()
+        if source_relation is None or source_parcel is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="the source parcel is no longer in a rollbackable split state")
+
+        generated_relations = db.scalars(
+            select(SurveyCbdkxxResult).where(
+                SurveyCbdkxxResult.dkbm.in_(generated_dkbms),
+                SurveyCbdkxxResult.cbfbm == result.cbfbm,
+                SurveyCbdkxxResult.result_status.notin_(("removed", "split_source")),
+            )
+        ).all()
+        generated_relation_by_code = {item.dkbm: item for item in generated_relations}
+        missing_relations = [dkbm for dkbm in generated_dkbms if dkbm not in generated_relation_by_code]
+        if missing_relations:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="some generated parcels are no longer current and this split cannot be rolled back")
+
+        generated_parcels = db.scalars(
+            select(SurveyDkResult).where(
+                SurveyDkResult.dkbm.in_(generated_dkbms),
+                SurveyDkResult.result_status.notin_(("removed", "split_source")),
+            )
+        ).all()
+        generated_parcel_by_code = {item.dkbm: item for item in generated_parcels}
+        missing_parcels = [dkbm for dkbm in generated_dkbms if dkbm not in generated_parcel_by_code]
+        if missing_parcels:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="some generated parcel geometries are no longer current and this split cannot be rolled back")
+
+        rollback_reason = (payload.get("reason") or "").strip() or f"撤回切割 {change.change_no}"
+        previous_result_status = str(before_summary.get("source_result_status") or "normal").strip() or "normal"
+        previous_change_type = str(before_summary.get("source_change_type") or "none").strip() or "none"
+        previous_change_reason = before_summary.get("source_change_reason")
+        previous_is_changed = bool(before_summary.get("source_is_changed"))
+
+        source_relation.result_status = previous_result_status
+        source_relation.is_changed = previous_is_changed
+        source_relation.change_type = previous_change_type
+        source_relation.change_reason = previous_change_reason
+
+        source_parcel.result_status = previous_result_status
+        source_parcel.is_changed = previous_is_changed
+        source_parcel.change_type = previous_change_type
+        source_parcel.change_reason = previous_change_reason
+
+        for dkbm in generated_dkbms:
+            relation = generated_relation_by_code[dkbm]
+            relation.result_status = "removed"
+            relation.is_changed = True
+            relation.change_type = "rollback_split_parcel"
+            relation.change_reason = rollback_reason
+
+            parcel = generated_parcel_by_code[dkbm]
+            parcel.result_status = "removed"
+            parcel.is_changed = True
+            parcel.change_type = "rollback_split_parcel"
+            parcel.change_reason = rollback_reason
+
+        rollback_record = self._create_change_record(
+            db,
+            batch_id,
+            contractor_uid,
+            result.cbfbm,
+            change_type="rollback_split_parcel",
+            before_summary={
+                "original_change_id": change.id,
+                "source_dkbm": source_dkbm,
+                "generated_dkbms": generated_dkbms,
+            },
+            after_summary={
+                "action": "rollback_split_parcel",
+                "source_dkbm": source_dkbm,
+                "generated_dkbms": generated_dkbms,
+            },
+            reason=rollback_reason,
+            current_user=current_user,
+            now=datetime.now(timezone.utc),
+        )
+        db.add(rollback_record)
+
+        change.change_status = "rolled_back"
+
+        task = self._get_task(db, batch_id, contractor_uid)
+        if task:
+            task.has_change = True
+            task.change_count = (task.change_count or 0) + 1
+            task.investigated_at = datetime.now(timezone.utc)
+        result.investigated_at = datetime.now(timezone.utc)
+
+        if not commit:
+            db.flush()
+            return {"queued": True}
+
+        self._rebuild_contractor_diffs(db, batch_id, [contractor_uid], change_ids={contractor_uid: None})
         db.commit()
         return self.get_result(db, batch_id, contractor_uid, current_user)
 
     def remove_parcel(
         self, db: Session, batch_id: int, contractor_uid: str,
         payload: dict, current_user: User,
+        commit: bool = True,
     ) -> dict:
         # repaired docstring
         batch = self._ensure_batch(db, batch_id)
@@ -3749,17 +5290,18 @@ class SurveyService:
 
         dkbm = payload["dkbm"]
 
-        # 鏌ユ壘鍦板潡鍏宠仈
+        # 閺屻儲澹橀崷鏉挎健閸忓疇浠?
         relation = db.scalars(
             select(SurveyCbdkxxResult).where(
                 SurveyCbdkxxResult.dkbm == dkbm,
                 SurveyCbdkxxResult.cbfbm == result.cbfbm,
+                SurveyCbdkxxResult.result_status.notin_(("removed", "split_source")),
             )
         ).first()
         if relation is None:
-            raise HTTPException(404, "鍦板潡鍏宠仈涓嶅瓨鍦ㄦ垨涓嶅睘浜庡綋鍓嶆壙鍖呮柟")
+            raise HTTPException(404, "閸︽澘娼￠崗瀹犱粓娑撳秴鐡ㄩ崷銊﹀灗娑撳秴鐫樻禍搴＄秼閸撳秵澹欓崠鍛煙")
 
-        # 鏌ユ壘鍦板潡璁板綍
+        # 閺屻儲澹橀崷鏉挎健鐠佹澘缍?
         parcel = db.scalars(
             select(SurveyDkResult).where(
                 SurveyDkResult.dkbm == dkbm,
@@ -3769,22 +5311,24 @@ class SurveyService:
         before_parcels_count = db.scalar(
             select(func.count(SurveyCbdkxxResult.id)).where(
                 SurveyCbdkxxResult.cbfbm == result.cbfbm,
+                SurveyCbdkxxResult.result_status.notin_(("removed", "split_source")),
             )
         ) or 0
 
-        # 杞垹闄わ細鏍囪鍏宠仈鍏崇郴涓哄凡绉婚櫎
-        relation.result_status = "removed"
-        relation.is_changed = True
-        relation.change_type = "remove_parcel"
-        relation.change_reason = payload.get("reason")
-
+        # 鏉烆垰鍨归梽銈忕窗閺嶅洩顔囬崗瀹犱粓閸忓磭閮存稉鍝勫嚒缁夊娅?
+        db.delete(relation)
         if parcel:
-            parcel.result_status = "removed"
-            parcel.is_changed = True
-            parcel.change_type = "remove_parcel"
-            parcel.change_reason = payload.get("reason")
+            remaining_relation = db.scalar(
+                select(func.count(SurveyCbdkxxResult.id)).where(
+                    SurveyCbdkxxResult.dkbm == dkbm,
+                    SurveyCbdkxxResult.id != relation.id,
+                    SurveyCbdkxxResult.result_status.notin_(("removed", "split_source")),
+                )
+            ) or 0
+            if remaining_relation == 0:
+                db.delete(parcel)
 
-        # 鍙樺寲璁板綍
+        # 閸欐ê瀵茬拋鏉跨秿
         record = self._create_change_record(
             db, batch_id, contractor_uid, result.cbfbm,
             change_type="remove_parcel",
@@ -3799,17 +5343,7 @@ class SurveyService:
         )
         db.flush()
 
-        # diffs
-        db.add(SurveyChangeDiff(
-            batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
-            entity_type="parcel", entity_uid=dkbm, entity_name=dkbm,
-            field_name="parcel", field_label="绉婚櫎鍦板潡",
-            before_value=f"褰掑睘 {result.cbfbm} {result.cbfmc}",
-            after_value=None,
-            change_reason=payload.get("reason"),
-        ))
-
-        # 鏇存柊浠诲姟
+        # 閺囧瓨鏌婃禒璇插
         task = self._get_task(db, batch_id, contractor_uid)
         if task:
             task.has_change = True
@@ -3817,14 +5351,18 @@ class SurveyService:
             task.investigated_at = now
 
         result.investigated_at = now
+        if not commit:
+            db.flush()
+            return {"queued": True}
+        self._rebuild_contractor_diffs(db, batch_id, [contractor_uid], change_ids={contractor_uid: None})
         db.commit()
         return self.get_result(db, batch_id, contractor_uid, current_user)
 
     def split_household(
         self, db: Session, batch_id: int, contractor_uid: str,
         payload: dict, current_user: User,
+        commit: bool = True,
     ) -> dict:
-        # repaired docstring
         batch = self._ensure_batch(db, batch_id)
         if batch.status == "finished":
             raise HTTPException(400, "invalid operation")
@@ -3839,7 +5377,6 @@ class SurveyService:
         new_cbfbm = payload["newCbfbm"]
         new_cbfmc = payload["newCbfmc"]
 
-        # 鑾峰彇鎵€鏈夊綋鍓嶆垚鍛?
         all_members = db.scalars(
             select(SurveyCbfJtcyResult).where(
                 SurveyCbfJtcyResult.contractor_uid == contractor_uid,
@@ -3854,16 +5391,14 @@ class SurveyService:
         if not move_members:
             raise HTTPException(400, "invalid operation")
 
-        # 鍒涘缓鏂版埛
         new_contractor_uid = str(uuid5(NAMESPACE_URL, f"survey:{batch_id}:cbf:{new_cbfbm}"))
         new_result = SurveyCbfResult(
             contractor_uid=new_contractor_uid,
-            base_id=0,  # 鏂版埛鏃?base
             cbfbm=new_cbfbm,
             cbflx=result.cbflx,
             cbfmc=new_cbfmc,
             cbfzjlx=result.cbfzjlx,
-            cbfzjhm="",  # 鏂版埛鐢辨埛涓昏瘉浠跺彿濉厖
+            cbfzjhm="",
             cbfdz=result.cbfdz,
             yzbm=result.yzbm,
             lxdh=result.lxdh,
@@ -3878,15 +5413,13 @@ class SurveyService:
             investigator_id=current_user.id,
             investigator_name=current_user.real_name,
             investigated_at=now,
-            initialized_from_base_id=0,
             initialized_at=now,
-            remark=f"鐢?{result.cbfbm} {result.cbfmc} 鍒嗘埛浜х敓",
+            remark=f"split from {result.cbfbm} {result.cbfmc}",
         )
         db.add(new_result)
         db.flush()
 
-        # 鍒涘缓鏂版埛浠诲姟
-        db.add(SurveyContractorTask(
+        db.add(SurveyCbfBase(
             batch_id=batch_id,
             contractor_uid=new_contractor_uid,
             cbfbm=new_cbfbm,
@@ -3895,35 +5428,29 @@ class SurveyService:
             has_change=True,
             change_count=1,
             investigated_at=now,
-            remark=f"鐢?{result.cbfbm} 鍒嗘埛浜х敓",
+            remark=f"split from {result.cbfbm}",
         ))
 
-        # 杩佺Щ鎴愬憳
         moved_member_names = []
         for member in move_members:
             moved_member_names.append(member.cyxm)
             member.contractor_uid = new_contractor_uid
             member.cbfbm = new_cbfbm
             member.is_changed = True
-        # 鏂版埛鐨勬埛涓昏涓虹涓€涓縼鍏ユ垚鍛?
+
         if move_members:
-            # 鍙栨秷鍘熸埛涓绘爣璁?
-            for m in stay_members:
-                if m.is_household_head:
-                    # 濡傛灉鎴蜂富琚縼鍑猴紝鍦ㄧ暀涓嬬殑鎴愬憳涓€変竴涓涓烘埛涓?
-                    pass
             if not any(m.is_household_head for m in stay_members):
                 stay_members[0].is_household_head = True
             if not any(m.is_household_head for m in move_members):
                 move_members[0].is_household_head = True
 
-        # 杩佺Щ鍦板潡
         moved_parcel_dkbms = []
         for dkbm in parcel_dkbms:
             rel = db.scalars(
                 select(SurveyCbdkxxResult).where(
                     SurveyCbdkxxResult.dkbm == dkbm,
                     SurveyCbdkxxResult.cbfbm == result.cbfbm,
+                    SurveyCbdkxxResult.result_status.notin_(("removed", "split_source")),
                 )
             ).first()
             if rel is None:
@@ -3934,13 +5461,11 @@ class SurveyService:
             rel.change_type = "split_household"
             rel.change_reason = payload.get("reason")
 
-        # 鏇存柊鍘熸埛鎴愬憳鏁伴噺
         result.cbfcysl = len(stay_members)
         result.is_changed = True
         result.change_type = "split_household"
         result.investigated_at = now
 
-        # 鍘熸埛鍙樺寲璁板綍
         record = self._create_change_record(
             db, batch_id, contractor_uid, result.cbfbm,
             change_type="split_household",
@@ -3955,15 +5480,7 @@ class SurveyService:
             current_user=current_user, now=now,
         )
         db.flush()
-        for m in move_members:
-            db.add(SurveyChangeDiff(
-                batch_id=batch_id, contractor_uid=contractor_uid, change_id=record.id,
-                entity_type="member", entity_uid=m.member_uid, entity_name=m.cyxm,
-                field_name="contractor", field_label="鎵€灞炴壙鍖呮柟",
-                before_value=result.cbfbm, after_value=new_cbfbm, change_reason=payload.get("reason"),
-            ))
 
-        # 鏂版埛鍙樺寲璁板綍
         new_record = self._create_change_record(
             db, batch_id, new_contractor_uid, new_cbfbm,
             change_type="split_household",
@@ -3977,8 +5494,8 @@ class SurveyService:
             reason=payload.get("reason"),
             current_user=current_user, now=now,
         )
+        db.flush()
 
-        # 鏇存柊鍘熸埛浠诲姟
         task = self._get_task(db, batch_id, contractor_uid)
         if task:
             task.has_change = True
@@ -3986,14 +5503,23 @@ class SurveyService:
             task.investigated_at = now
             task.cbfmc = result.cbfmc
 
+        if not commit:
+            db.flush()
+            return {"queued": True}
+        self._rebuild_contractor_diffs(
+            db,
+            batch_id,
+            [contractor_uid, new_contractor_uid],
+            change_ids={contractor_uid: record.id, new_contractor_uid: new_record.id},
+        )
         db.commit()
         return self.get_result(db, batch_id, contractor_uid, current_user)
 
     def merge_household(
         self, db: Session, batch_id: int, source_contractor_uid: str,
         payload: dict, current_user: User,
+        commit: bool = True,
     ) -> dict:
-        # repaired docstring
         batch = self._ensure_batch(db, batch_id)
         if batch.status == "finished":
             raise HTTPException(400, "invalid operation")
@@ -4007,35 +5533,31 @@ class SurveyService:
         if target_contractor_uid == source_contractor_uid:
             raise HTTPException(400, "invalid operation")
 
-        # 鑾峰彇鐩爣鎴?
         target_result = db.scalars(
             select(SurveyCbfResult).where(
                 SurveyCbfResult.contractor_uid == target_contractor_uid,
             ).order_by(SurveyCbfResult.id.desc())
         ).first()
         if not target_result:
-            raise HTTPException(400, "鐩爣鎵垮寘鏂逛笉瀛樺湪")
+            raise HTTPException(400, "target household not found")
         if target_result.survey_status == "confirmed":
-            raise HTTPException(400, "鐩爣鎴疯皟鏌ユ垚鏋滃凡纭")
+            raise HTTPException(400, "target household already confirmed")
 
-        # 鑾峰彇婧愭埛鍏ㄩ儴鎴愬憳
         source_members = db.scalars(
             select(SurveyCbfJtcyResult).where(
                 SurveyCbfJtcyResult.contractor_uid == source_contractor_uid,
             )
         ).all()
-        # 鑾峰彇婧愭埛鍏ㄩ儴鍦板潡鍏宠仈
         source_parcels = db.scalars(
             select(SurveyCbdkxxResult).where(
                 SurveyCbdkxxResult.cbfbm == source_result.cbfbm,
+                SurveyCbdkxxResult.result_status.notin_(("removed", "split_source")),
             )
         ).all()
 
-        # 鏀堕泦杩佺Щ鏄庣粏
         moved_member_names = [m.cyxm for m in source_members]
         moved_parcel_dkbms = [p.dkbm for p in source_parcels]
 
-        # 鍒涘缓婧愭埛鍙樺寲璁板綍锛堟敞閿€锛?
         source_record = self._create_change_record(
             db, batch_id, source_contractor_uid, source_result.cbfbm,
             change_type="merge_household",
@@ -4055,7 +5577,6 @@ class SurveyService:
         )
         db.flush()
 
-        # 婧愭埛 diffs
         db.add(SurveyChangeDiff(
             batch_id=batch_id, contractor_uid=source_contractor_uid, change_id=source_record.id,
             entity_type="contractor", entity_uid=source_contractor_uid, entity_name=source_result.cbfmc,
@@ -4066,7 +5587,7 @@ class SurveyService:
             db.add(SurveyChangeDiff(
                 batch_id=batch_id, contractor_uid=source_contractor_uid, change_id=source_record.id,
                 entity_type="member", entity_uid=m.member_uid, entity_name=m.cyxm,
-                field_name="contractor", field_label="鎵€灞炴壙鍖呮柟",
+                field_name="contractor", field_label="merged_target",
                 before_value=source_result.cbfbm, after_value=target_result.cbfbm, change_reason=payload.get("reason"),
             ))
         for p in source_parcels:
@@ -4077,7 +5598,6 @@ class SurveyService:
                 before_value=source_result.cbfbm, after_value=target_result.cbfbm, change_reason=payload.get("reason"),
             ))
 
-        # 鍒涘缓鐩爣鎴峰彉鍖栬褰曪紙鎺ユ敹鏂癸級
         target_record = self._create_change_record(
             db, batch_id, target_contractor_uid, target_result.cbfbm,
             change_type="merge_household",
@@ -4095,54 +5615,58 @@ class SurveyService:
             reason=payload.get("reason"),
             current_user=current_user, now=now,
         )
+        db.flush()
 
-        # 杩佺Щ鎴愬憳锛氭洿鏂?contractor_uid 鍜?cbfbm锛屽彇娑堟埛涓绘爣璁?
         for member in source_members:
             member.contractor_uid = target_contractor_uid
             member.cbfbm = target_result.cbfbm
-            member.is_household_head = False  # 杩佸叆鍚庝笉鍐嶆槸鎴蜂富
+            member.is_household_head = False
             member.is_changed = True
 
-        # 杩佺Щ鍦板潡鍏宠仈
         for parcel in source_parcels:
             parcel.cbfbm = target_result.cbfbm
             parcel.is_changed = True
             parcel.change_type = "merge_household"
             parcel.change_reason = payload.get("reason")
 
-        # 鏇存柊鐩爣鎴锋垚鍛樻暟閲?
         target_result.cbfcysl = (target_result.cbfcysl or 0) + len(source_members)
         target_result.is_changed = True
         target_result.change_type = "merge_household"
         target_result.investigated_at = now
 
-        # 鍒犻櫎婧愭埛 result锛堟敞閿€锛?
         db.delete(source_result)
 
-        # 鏇存柊婧愭埛浠诲姟涓哄凡娉ㄩ攢
         source_task = self._get_task(db, batch_id, source_contractor_uid)
         if source_task:
             source_task.task_status = "deregistered"
             source_task.has_change = True
             source_task.change_count = (source_task.change_count or 0) + 1
             source_task.investigated_at = now
-            source_task.remark = f"鍚堝叆 {target_result.cbfbm} {target_result.cbfmc}"
+            source_task.remark = f"merged into {target_result.cbfbm} {target_result.cbfmc}"
 
-        # 鏇存柊鐩爣鎴蜂换鍔?
         target_task = self._get_task(db, batch_id, target_contractor_uid)
         if target_task:
             target_task.has_change = True
             target_task.change_count = (target_task.change_count or 0) + 1
             target_task.investigated_at = now
 
+        self._rebuild_contractor_diffs(
+            db,
+            batch_id,
+            [target_contractor_uid],
+            change_ids={target_contractor_uid: target_record.id},
+        )
+        if not commit:
+            db.flush()
+            return {"queued": True}
         db.commit()
         return self.get_result(db, batch_id, target_contractor_uid, current_user)
 
-    def _get_task(self, db: Session, batch_id: int, contractor_uid: str) -> SurveyContractorTask | None:
+    def _get_task(self, db: Session, batch_id: int, contractor_uid: str) -> SurveyCbfBase | None:
         return db.scalars(
-            select(SurveyContractorTask).where(
-                SurveyContractorTask.batch_id == batch_id,
-                SurveyContractorTask.contractor_uid == contractor_uid,
+            select(SurveyCbfBase).where(
+                SurveyCbfBase.batch_id == batch_id,
+                SurveyCbfBase.contractor_uid == contractor_uid,
             )
         ).first()
 

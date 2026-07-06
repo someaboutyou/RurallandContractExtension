@@ -132,7 +132,6 @@
 <script setup>
 import { computed, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
-import { splitSurveyHousehold } from "../../api/survey";
 
 const emit = defineEmits(["done"]);
 
@@ -252,18 +251,18 @@ async function handleSubmit() {
   }
   submitting.value = true;
   try {
-    await splitSurveyHousehold(batchId.value, contractorUid.value, {
+    const payload = {
       newCbfbm: form.newCbfbm.trim(),
       newCbfmc: form.newCbfmc.trim(),
       memberUids: [...memberUidsToMove.value],
       parcelDkbms: [...parcelDkbmsToMove.value],
       reason: form.reason || undefined,
-    });
-    ElMessage.success("分户完成");
+    };
+    ElMessage.success("分户已加入待保存");
     visible.value = false;
-    emit("done");
+    emit("done", { type: "split_household", payload });
   } catch (e) {
-    ElMessage.error(e?.response?.data?.detail || "分户失败");
+    ElMessage.error(e?.message || "分户失败");
   } finally {
     submitting.value = false;
   }

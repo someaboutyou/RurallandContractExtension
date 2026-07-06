@@ -317,9 +317,9 @@
   {% set highlight_items = plot_items %}
 {% endif %}
 {% set highlighted = highlighted_geometry | default(None, true) %}
-{% set audit_text = auditor | default("审核者：" ~ (village_name | default("和谐村前王集一组", true)) ~ "　" ~ (audit_date | default("2026年02月09日", true)), true) %}
-{% set mapper_text = mapper | default("制图者：" ~ (village_name | default("和谐村前王集一组", true)) ~ "　" ~ (map_date | default("2026年02月09日", true)), true) %}
-{% set publisher_text = publisher | default("编制单位：" ~ (compile_unit | default("四川凯普顿信息技术股份有限公司", true)), true) %}
+{% set audit_text = auditor if auditor is defined and auditor else ("审核者：" ~ village_name ~ "　" ~ audit_date) if village_name is defined and village_name and audit_date is defined and audit_date else "" %}
+{% set mapper_text = mapper if mapper is defined and mapper else ("制图者：" ~ village_name ~ "　" ~ map_date) if village_name is defined and village_name and map_date is defined and map_date else "" %}
+{% set publisher_text = publisher if publisher is defined and publisher else ("编制单位：" ~ compile_unit) if compile_unit is defined and compile_unit else "" %}
 
 {% macro draw_plot_cell(plot) -%}
   <div class="plot-cell">

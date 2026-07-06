@@ -243,28 +243,28 @@
 
 <section class="page cover">
   <div class="cover-codes">
-    <div>鉴证编号: <span class="line mid">{{ authentication_no or "" }}</span></div>
-    <div>合同编号: <span class="line mid">{{ cbhtbm }}</span></div>
+    <div>鉴证编号: <span class="line mid">唐寨NO.000104</span></div>
+    <div>合同编号: <span class="line mid">341321103201010028J</span></div>
   </div>
   <div class="cover-title">农村土地（耕地）承包合同（家庭承包方式）</div>
   <div class="cover-org">中华人民共和国农业农村部&nbsp;&nbsp;制定</div>
 </section>
 
 <section class="page">
-  <div class="info-row"><span class="label">发包方：</span><span class="line long">{{ fbfmc }}</span></div>
-  <div class="info-row"><span class="label">社会信用代码：</span><span class="line mid">{{ fbf_social_credit_code or fbfbm }}</span></div>
+  <div class="info-row"><span class="label">发包方：</span><span class="line long">砀山县唐寨镇和谐村股份经济合作社</span></div>
+  <div class="info-row"><span class="label">社会信用代码：</span><span class="line mid">N2341321MF0196829D</span></div>
   <div class="info-row">
-    <span class="label">发包方负责人：</span><span class="line short">{{ fbf_fzr }}</span>
-    <span style="margin-left: 18mm;" class="label">身份证号：</span><span class="line mid">{{ fbf_fzr_zjhm }}</span>
+    <span class="label">发包方负责人：</span><span class="line short">杨立方</span>
+    <span style="margin-left: 18mm;" class="label">身份证号：</span><span class="line mid">342221196709104238</span>
   </div>
-  <div class="info-row"><span class="label">联系电话：</span><span class="line short">{{ fbf_lxdh }}</span></div>
+  <div class="info-row"><span class="label">联系电话：</span><span class="line short">13705578699</span></div>
 
   <div class="info-row gap">
-    <span class="label">承包方代表：</span><span class="line short">{{ cbfmc }}</span>
-    <span style="margin-left: 20mm;" class="label">身份证号：</span><span class="line mid">{{ cbfzjhm }}</span>
+    <span class="label">承包方代表：</span><span class="line short">王传德</span>
+    <span style="margin-left: 20mm;" class="label">身份证号：</span><span class="line mid">342221194803064018</span>
   </div>
-  <div class="info-row"><span class="label">联系电话：</span><span class="line short">{{ lxdh }}</span></div>
-  <div class="info-row"><span class="label">承包方地址：</span><span class="line long">{{ cbfdz }}</span></div>
+  <div class="info-row"><span class="label">联系电话：</span><span class="line short">15385766993</span></div>
+  <div class="info-row"><span class="label">承包方地址：</span><span class="line long">安徽省宿州市砀山县唐寨镇和谐村前王集一组</span></div>
 
   <p class="intro">为巩固和完善以家庭承包经营为基础、统分结合的双层经营体制，保持农村土地承包关系稳定并长久不变，维护承包双方当事人的合法权益，根据《中华人民共和国民法典》《中华人民共和国农村土地承包法》等法律法规和本集体依法通过的承包方案，订立本合同。</p>
 
@@ -287,19 +287,43 @@
       </tr>
     </thead>
     <tbody>
-      {% for dk in parcels %}
+      
       <tr>
-        <td>{{ dk.dkmc }}</td>
-        <td><span class="parcel-code">{{ dk.dkbm_prefix }}</span><span class="parcel-code">{{ dk.dkbm_suffix }}</span></td>
-        <td>{{ dk.dkdz }}</td>
-        <td>{{ dk.dkxz }}</td>
-        <td>{{ dk.dknz }}</td>
-        <td>{{ dk.dkbz }}</td>
-        <td>{{ dk.scmj_mu }}</td>
-        <td>{{ dk.dldj_text }}</td>
+        <td>大梨园东西路南</td>
+        <td><span class="parcel-code">34132110320101</span><span class="parcel-code">00287</span></td>
+        <td>杨师傅</td>
+        <td>王传远</td>
+        <td>汪文远、王成新</td>
+        <td>王传明、王传奇等</td>
+        <td>0.68</td>
+        <td>三等地</td>
         <td></td>
       </tr>
-      {% endfor %}
+      
+      <tr>
+        <td>富士地（东）南段</td>
+        <td><span class="parcel-code">34132110320101</span><span class="parcel-code">00072</span></td>
+        <td>王传印、孙凡启</td>
+        <td>王传远</td>
+        <td>王集居民地</td>
+        <td>机耕路</td>
+        <td>0.95</td>
+        <td>三等地</td>
+        <td></td>
+      </tr>
+      
+      <tr>
+        <td>东北河湾地</td>
+        <td><span class="parcel-code">34132110320101</span><span class="parcel-code">00014</span></td>
+        <td>汪文彬</td>
+        <td>王传远</td>
+        <td>机耕路</td>
+        <td>王集居民地</td>
+        <td>1.20</td>
+        <td>三等地</td>
+        <td></td>
+      </tr>
+      
       <tr>
         <td>总计</td>
         <td>-</td>
@@ -307,7 +331,7 @@
         <td>-</td>
         <td>-</td>
         <td>-</td>
-        <td>{{ htzmjm }}</td>
+        <td>2.83</td>
         <td>-</td>
         <td>-</td>
       </tr>
@@ -326,18 +350,25 @@
       </tr>
     </thead>
     <tbody>
-      {% for member in family_members %}
+      
       <tr>
-        <td>{{ member.cyxm }}</td>
-        <td>{{ member.relation_text }}</td>
-        <td>{{ member.cyzjhm }}</td>
-        <td>{{ member.remark }}</td>
+        <td>王传德</td>
+        <td>户主</td>
+        <td>342221194803064018</td>
+        <td></td>
       </tr>
-      {% endfor %}
+      
+      <tr>
+        <td>吴全英</td>
+        <td>配偶</td>
+        <td>342221194808014060</td>
+        <td></td>
+      </tr>
+      
     </tbody>
   </table>
 
-  <p class="clause" style="margin-top: 12mm;">三、承包期限：<span class="line short">{{ contract_years }}</span> 年，自 <span class="line short">{{ cbqxq_iso }}</span> 起至 <span class="line short">{{ cbqxz_iso }}</span> 止。</p>
+  <p class="clause" style="margin-top: 12mm;">三、承包期限：<span class="line short">30</span> 年，自 <span class="line short">2028-12-31</span> 起至 <span class="line short">2058-12-30</span> 止。</p>
   <p class="clause">四、承包土地的用途：<span class="line short">农业生产</span></p>
   <p class="clause">五、发包方的权利与义务</p>
   <p class="clause">（一）发包方享有下列权利</p>
@@ -396,8 +427,8 @@
       <div><strong>负责人（签章）：</strong></div>
       <div></div>
     </div>
-    <div class="sign-date"><strong>签订日期：</strong><span class="line mid">{{ qdsj_cn }}</span></div>
-    <div class="sign-date"><strong>签订地点：</strong><span class="line long">{{ fbfmc }}</span></div>
+    <div class="sign-date"><strong>签订日期：</strong><span class="line mid">2026年2月9日</span></div>
+    <div class="sign-date"><strong>签订地点：</strong><span class="line long">砀山县唐寨镇和谐村股份经济合作社</span></div>
   </div>
   <p style="margin: 11mm 0 0 11mm;">附件：承包地地块示意图</p>
 </section>
@@ -405,25 +436,41 @@
 <section class="page landscape">
   <div class="attachment-title">承包地块示意图</div>
   <div class="sketch-list">
-    {% for dk in parcels %}
+    
     <div class="sketch-card">
-      <div class="north">{{ dk.dkbz }}</div>
-      <div class="west">{{ dk.dkxz }}</div>
-      <div class="east">{{ dk.dkdz }}</div>
-      <div class="south">{{ dk.dknz }}</div>
-      <strong>{{ dk.dkbm_suffix or dk.dkbm }}: {{ dk.scmj_mu }}亩</strong>
+      <div class="north">王传明、王传奇等</div>
+      <div class="west">王传远</div>
+      <div class="east">杨师傅</div>
+      <div class="south">汪文远、王成新</div>
+      <strong>00287: 0.68亩</strong>
     </div>
-    {% endfor %}
+    
+    <div class="sketch-card">
+      <div class="north">机耕路</div>
+      <div class="west">王传远</div>
+      <div class="east">王传印、孙凡启</div>
+      <div class="south">王集居民地</div>
+      <strong>00072: 0.95亩</strong>
+    </div>
+    
+    <div class="sketch-card">
+      <div class="north">王集居民地</div>
+      <div class="west">王传远</div>
+      <div class="east">汪文彬</div>
+      <div class="south">机耕路</div>
+      <strong>00014: 1.20亩</strong>
+    </div>
+    
   </div>
   <div class="sketch-meta">
-    <div>承包方代表姓名 <span>{{ cbfmc }}</span></div>
-    <div>承包方编码 <span>{{ cbfbm }}</span></div>
-    <div>承包地块总数 <span>{{ cbdkzs }}</span> 块</div>
-    <div>承包地块总面积 <span>{{ htzmjm }}</span> 亩</div>
+    <div>承包方代表姓名 <span>王传德</span></div>
+    <div>承包方编码 <span></span></div>
+    <div>承包地块总数 <span>3</span> 块</div>
+    <div>承包地块总面积 <span>2.83</span> 亩</div>
   </div>
   <div class="sketch-footer">
-    <div>审核者：{{ group_region_name or "" }}&nbsp;&nbsp;{{ qdsj_cn }}</div>
-    <div>制图者：{{ group_region_name or "" }}&nbsp;&nbsp;{{ qdsj_cn }}</div>
+    <div>审核者：和谐村前王集一组&nbsp;&nbsp;2026年2月9日</div>
+    <div>制图者：和谐村前王集一组&nbsp;&nbsp;2026年2月9日</div>
     <div>编制单位：四川凯普顿信息技术股份有限公司</div>
     <div>1-1</div>
   </div>

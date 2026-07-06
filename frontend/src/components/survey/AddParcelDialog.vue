@@ -1,13 +1,13 @@
 <template>
   <el-dialog
     v-model="visible"
-    title="新增地块"
-    width="640px"
+    title="新增地块属性信息"
+    width="720px"
     destroy-on-close
-    @closed="resetForm"
+    @closed="handleClosed"
   >
     <el-alert
-      title="新增地块将直接写入调查结果，不关联 base 快照。请确认信息准确。"
+      title="请补充新增地块的属性信息，保存调查结果时会与已核验通过的图形一起提交。"
       type="info"
       :closable="false"
       show-icon
@@ -17,10 +17,14 @@
     <el-form :model="form" label-position="top" class="parcel-form">
       <div class="form-row">
         <el-form-item label="地块编码" required class="form-half">
-          <el-input v-model="form.dkbm" placeholder="19位地块编码" maxlength="19" />
+          <el-input v-model="form.dkbm" placeholder="19位地块编码" maxlength="19">
+            <template #append>
+              <el-button :loading="generatingCode" @click="handleGenerateCode">自动生成</el-button>
+            </template>
+          </el-input>
         </el-form-item>
         <el-form-item label="地块名称" required class="form-half">
-          <el-input v-model="form.dkmc" placeholder="例如：村东水田" maxlength="50" />
+          <el-input v-model="form.dkmc" placeholder="例如：东沟南地" maxlength="50" />
         </el-form-item>
       </div>
 
@@ -37,9 +41,9 @@
         <el-form-item label="地块类别" required class="form-third">
           <el-select v-model="form.dklb" style="width: 100%">
             <el-option label="耕地" value="01" />
-            <el-option label="林地" value="02" />
-            <el-option label="草地" value="03" />
-            <el-option label="水域" value="04" />
+            <el-option label="园地" value="02" />
+            <el-option label="林地" value="03" />
+            <el-option label="草地" value="04" />
             <el-option label="其他" value="99" />
           </el-select>
         </el-form-item>
@@ -49,7 +53,7 @@
             <el-option label="林业" value="2" />
             <el-option label="畜牧业" value="3" />
             <el-option label="渔业" value="4" />
-            <el-option label="其他" value="9" />
+            <el-option label="其他" value="5" />
           </el-select>
         </el-form-item>
         <el-form-item label="是否基本农田" required class="form-third">
@@ -62,13 +66,19 @@
 
       <div class="form-row">
         <el-form-item label="地类等级" required class="form-third">
-          <el-input v-model="form.dldj" placeholder="2位代码" maxlength="2" />
+          <el-select v-model="form.dldj" :loading="landGradeLoading" filterable style="width: 100%">
+            <el-option v-for="item in landGradeOptions" :key="item.value" :label="item.label" :value="item.value" />
+          </el-select>
         </el-form-item>
         <el-form-item label="所有权性质" class="form-third">
-          <el-input v-model="form.syqxz" placeholder="2位代码" maxlength="2" />
+          <el-select v-model="form.syqxz" :loading="ownershipLoading" filterable clearable style="width: 100%">
+            <el-option v-for="item in ownershipOptions" :key="item.value" :label="item.label" :value="item.value" />
+          </el-select>
         </el-form-item>
-        <el-form-item label="土地来源类型" class="form-third">
-          <el-input v-model="form.tdlylx" placeholder="3位代码" maxlength="3" />
+        <el-form-item label="土地利用类型" class="form-third">
+          <el-select v-model="form.tdlylx" filterable clearable style="width: 100%">
+            <el-option v-for="item in tdlylxOptions" :key="item.value" :label="item.label" :value="item.value" />
+          </el-select>
         </el-form-item>
       </div>
 
@@ -89,7 +99,7 @@
 
       <div class="form-row">
         <el-form-item label="合同编码" class="form-half">
-          <el-input v-model="form.cbhtbm" placeholder="关联合同编码" maxlength="19" />
+          <el-input v-model="form.cbhtbm" placeholder="关联承包合同编码" maxlength="19" />
         </el-form-item>
         <el-form-item label="权证编码" class="form-half">
           <el-input v-model="form.cbjyqzbm" placeholder="经营权证编码" maxlength="19" />
@@ -97,16 +107,25 @@
       </div>
 
       <div class="form-row">
-        <el-form-item label="地块地址" class="form-half">
+        <el-form-item label="地块东至" class="form-half">
           <el-input v-model="form.dkdz" maxlength="50" />
         </el-form-item>
-        <el-form-item label="四至" class="form-half">
-          <el-input v-model="form.dkxz" placeholder="东至/西至/南至/北至" maxlength="50" />
+        <el-form-item label="地块西至" class="form-half">
+          <el-input v-model="form.dkxz" maxlength="50" />
+        </el-form-item>
+      </div>
+
+      <div class="form-row">
+        <el-form-item label="地块南至" class="form-half">
+          <el-input v-model="form.dknz" maxlength="50" />
+        </el-form-item>
+        <el-form-item label="地块北至" class="form-half">
+          <el-input v-model="form.dkbz" maxlength="50" />
         </el-form-item>
       </div>
 
       <el-form-item label="备注">
-        <el-input v-model="form.dkbz" maxlength="50" />
+        <el-input v-model="form.dkbzxx" maxlength="300" />
       </el-form-item>
 
       <el-form-item label="变更原因">
@@ -138,58 +157,169 @@
 <script setup>
 import { computed, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
-import { addSurveyParcel } from "../../api/survey";
 
-const emit = defineEmits(["done"]);
+import { generateNextSurveyParcelCode } from "../../api/survey";
+import { useDictionary } from "../../composables/useDictionary";
+
+const props = defineProps({
+  batchId: { type: Number, default: null },
+  contractorUid: { type: String, default: "" },
+  existingParcelCodes: { type: Array, default: () => [] },
+});
+
+const emit = defineEmits(["done", "closed"]);
 
 const visible = ref(false);
 const submitting = ref(false);
-const batchId = ref(null);
-const contractorUid = ref("");
+const submittedThisRound = ref(false);
+const geometryPayload = ref(null);
+const generatingCode = ref(false);
+
+const { options: landGradeOptions, loading: landGradeLoading } = useDictionary("nyt2539_c08_land_grade");
+const { options: ownershipOptions, loading: ownershipLoading } = useDictionary("nyt2539_c06_ownership_property");
+const { options: tdlylxDictionaryOptions } = useDictionary("survey_tdlylx_land_use_type");
+
+const tdlylxFallbackOptions = [
+  { value: "011", label: "水田" },
+  { value: "012", label: "水浇地" },
+  { value: "013", label: "旱地" },
+  { value: "021", label: "果园" },
+  { value: "022", label: "茶园" },
+  { value: "023", label: "其他园地" },
+  { value: "031", label: "有林地" },
+  { value: "032", label: "灌木林地" },
+  { value: "033", label: "其他林地" },
+  { value: "041", label: "天然牧草地" },
+  { value: "042", label: "人工牧草地" },
+];
+
+const tdlylxOptions = computed(() =>
+  tdlylxDictionaryOptions.value?.length ? tdlylxDictionaryOptions.value : tdlylxFallbackOptions
+);
 
 function defaultForm() {
   return {
-    dkbm: "", dkmc: "", scmj: 0, htmj: null, dklb: "01", tdyt: "1",
-    sfjbnt: "1", dldj: "01", syqxz: "10", tdlylx: "001",
-    cbjyqqdfs: "001", sfqqqg: null, cbhtbm: "", cbjyqzbm: "",
-    dkdz: "", dkxz: "", dkbz: "", reason: "",
+    dkbm: "",
+    dkmc: "",
+    scmj: 0,
+    htmj: null,
+    dklb: "01",
+    tdyt: "1",
+    sfjbnt: "1",
+    dldj: "01",
+    syqxz: "10",
+    tdlylx: "011",
+    cbjyqqdfs: "001",
+    sfqqqg: null,
+    cbhtbm: "",
+    cbjyqzbm: "",
+    dkdz: "",
+    dkxz: "",
+    dknz: "",
+    dkbz: "",
+    dkbzxx: "",
+    reason: "",
   };
 }
+
 const form = reactive(defaultForm());
 
 const canSubmit = computed(() =>
-  form.dkbm.trim() && form.dkmc.trim() && form.scmj > 0 &&
-  form.dklb && form.tdyt && form.sfjbnt && form.dldj.trim()
+  form.dkbm.trim() &&
+  form.dkmc.trim() &&
+  Number(form.scmj) > 0 &&
+  form.dklb &&
+  form.tdyt &&
+  form.sfjbnt &&
+  form.dldj &&
+  geometryPayload.value?.geometry
 );
 
-function open(bid, cuid) {
-  batchId.value = bid;
-  contractorUid.value = cuid;
-  Object.assign(form, defaultForm());
+function buildExistingCodeSet() {
+  return new Set(
+    (props.existingParcelCodes || [])
+      .map((item) => String(item || "").trim())
+      .filter(Boolean),
+  );
+}
+
+function ensureLocalUniqueParcelCode(prefix, sequence, candidate) {
+  const existingCodes = buildExistingCodeSet();
+  let nextSequence = Number(sequence) || 1;
+  let nextCode = String(candidate || "").trim();
+  if (!prefix) {
+    return nextCode;
+  }
+  while (existingCodes.has(nextCode)) {
+    nextSequence += 1;
+    nextCode = `${prefix}${String(nextSequence).padStart(5, "0")}`;
+  }
+  return nextCode;
+}
+
+async function handleGenerateCode() {
+  if (!props.batchId || !props.contractorUid) {
+    ElMessage.warning("当前承包方信息不完整，无法生成地块编码");
+    return;
+  }
+  generatingCode.value = true;
+  try {
+    const { data } = await generateNextSurveyParcelCode(props.batchId, props.contractorUid);
+    const payload = data.data || {};
+    form.dkbm = ensureLocalUniqueParcelCode(payload.prefix, payload.sequence, payload.dkbm);
+    ElMessage.success("已生成地块编码");
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || "生成地块编码失败");
+  } finally {
+    generatingCode.value = false;
+  }
+}
+
+function open(initialPayload = {}) {
+  submittedThisRound.value = false;
+  geometryPayload.value = {
+    geometry: initialPayload.geometry || null,
+    geometrySourceSrid: initialPayload.geometrySourceSrid || 4326,
+  };
+  Object.assign(form, defaultForm(), {
+    scmj: initialPayload.scmj != null ? Number(initialPayload.scmj) : 0,
+    htmj: initialPayload.htmj != null ? Number(initialPayload.htmj) : initialPayload.scmj != null ? Number(initialPayload.scmj) : null,
+  });
   visible.value = true;
 }
 
-function resetForm() {
+function handleClosed() {
   Object.assign(form, defaultForm());
+  geometryPayload.value = null;
+  emit("closed", { submitted: submittedThisRound.value });
+  submittedThisRound.value = false;
 }
 
 async function handleSubmit() {
   if (!canSubmit.value) {
-    ElMessage.warning("请填写必填项");
+    ElMessage.warning("请补充完整属性信息");
     return;
   }
   submitting.value = true;
   try {
-    await addSurveyParcel(batchId.value, contractorUid.value, {
-      ...form,
-      scmj: Number(form.scmj),
-      htmj: form.htmj != null ? Number(form.htmj) : undefined,
+    submittedThisRound.value = true;
+    emit("done", {
+      type: "add_parcel",
+      payload: {
+        ...form,
+        dkbm: form.dkbm.trim(),
+        dkmc: form.dkmc.trim(),
+        scmj: Number(form.scmj),
+        htmj: form.htmj != null ? Number(form.htmj) : undefined,
+        geometry: geometryPayload.value?.geometry || null,
+        geometrySourceSrid: geometryPayload.value?.geometrySourceSrid || 4326,
+      },
     });
-    ElMessage.success("地块已新增");
+    ElMessage.success("新增地块已加入待保存");
     visible.value = false;
-    emit("done");
-  } catch (e) {
-    ElMessage.error(e?.response?.data?.detail || "新增地块失败");
+  } catch (error) {
+    submittedThisRound.value = false;
+    ElMessage.error(error?.message || "新增地块失败");
   } finally {
     submitting.value = false;
   }
@@ -199,9 +329,22 @@ defineExpose({ open });
 </script>
 
 <style scoped>
-.dialog-alert { margin-bottom: 16px; }
-.parcel-form { margin-top: 8px; }
-.form-row { display: flex; gap: 12px; }
-.form-half { flex: 1; min-width: 0; }
-.form-third { flex: 1; min-width: 0; }
+.dialog-alert {
+  margin-bottom: 16px;
+}
+
+.parcel-form {
+  margin-top: 8px;
+}
+
+.form-row {
+  display: flex;
+  gap: 12px;
+}
+
+.form-half,
+.form-third {
+  flex: 1;
+  min-width: 0;
+}
 </style>

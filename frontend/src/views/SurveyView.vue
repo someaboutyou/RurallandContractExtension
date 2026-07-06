@@ -194,9 +194,12 @@
           v-model="batchForm.regionId"
           clearable
           filterable
+          lazy
           check-strictly
-          :data="regionTree"
-          :props="regionTreeProps"
+          :data="batchRegionTree"
+          :props="batchRegionTreeProps"
+          :load="loadBatchRegionNode"
+          :filter-method="handleBatchRegionFilter"
           node-key="id"
           placeholder="请选择调查区域；为空则按权限范围初始化"
           @change="handleBatchRegionChange"
@@ -221,6 +224,33 @@
       <span v-if="!canManage || isResultLocked" class="toolbar-lock-hint">（当前为只读模式）</span>
     </div>
 
+    <el-alert
+      v-if="pendingOperations.length"
+      type="warning"
+      :closable="false"
+      show-icon
+      class="pending-operation-alert"
+      :title="`当前有 ${pendingOperations.length} 项操作尚未保存，请点击“保存调查结果”统一提交。`"
+    />
+    <div v-if="pendingOperations.length" class="pending-operation-list">
+      <div
+        v-for="(operation, index) in pendingOperations"
+        :key="`${operation.type}-${index}`"
+        class="pending-operation-item"
+      >
+        <span class="pending-operation-text">{{ pendingOperationLabelPreview(operation) }}</span>
+        <el-button
+          v-if="canUndoPendingOperation(operation)"
+          link
+          type="danger"
+          size="small"
+          @click="handleUndoPendingOperationPreview(index)"
+        >
+          撤销
+        </el-button>
+      </div>
+    </div>
+
     <!-- 4 个信息 Tab -->
     <el-tabs v-model="activeTab">
       <el-tab-pane :label="`承包方及其家庭成员（${resultForm.familyMembers.length}人）`" name="contractor">
@@ -243,10 +273,16 @@
           :parcels-loading="parcelsLoading"
           :can-manage="canManage"
           :is-result-locked="isResultLocked"
+          :saved-swap-records="savedSwapRecords"
+          :saved-split-records="savedSplitRecords"
+          :can-rollback-saved-parcel-change="canRollbackSavedParcelChange"
+          :rollback-change-loading-id="rollbackingSavedChangeId"
           @swap-parcels="handleOpSwapParcels"
-          @add-parcel="handleOpAddParcel"
-          @split-parcel="handleOpSplitParcel"
+          @add-parcel="handlePendingOperation"
+          @split-parcel="handlePendingOperation"
           @remove-parcel="handleOpRemoveParcel"
+          @rollback-saved-swap="handleRollbackSavedSwap"
+          @rollback-saved-split="handleRollbackSavedSplit"
         />
       </el-tab-pane>
 
@@ -346,7 +382,7 @@
     <el-form ref="issuerSurveyFormRef" :model="issuerSurveyForm" :rules="issuerSurveyRules" label-position="top" status-icon class="survey-dialog-form">
       <div class="form-grid-3">
         <el-form-item label="发包方编码" prop="code">
-          <el-input :model-value="issuerSurveyForm.code" maxlength="14" @input="handleIssuerCodeInput">
+          <el-input :model-value="issuerSurveyForm.code" maxlength="14" readonly @input="handleIssuerCodeInput">
             <template v-if="isCreatingIssuerSurvey" #append>
               <el-button @click="generateIssuerCode">生成</el-button>
             </template>
@@ -407,13 +443,11 @@
   </el-dialog>
 
   <!-- 操作对话框 -->
-  <DeregisterDialog ref="deregisterDialog" @done="handleDeregisterDone" />
-  <AddParcelDialog ref="addParcelDialog" @done="reloadSurveyResult" />
-  <SplitParcelDialog ref="splitParcelDialog" @done="reloadSurveyResult" />
-  <SwapParcelsDialog ref="swapParcelsDialog" @done="reloadSurveyResult" />
-  <SplitHouseholdDialog ref="splitHouseholdDialog" @done="reloadSurveyResult" />
-  <MergeHouseholdDialog ref="mergeHouseholdDialog" @done="handleMergeDone" />
-  <RemoveParcelDialog ref="removeParcelDialog" @done="reloadSurveyResult" />
+  <DeregisterDialog ref="deregisterDialog" @done="handlePendingOperation" />
+  <SwapParcelsDialog ref="swapParcelsDialog" @done="handlePendingOperation" />
+  <SplitHouseholdDialog ref="splitHouseholdDialog" @done="handlePendingOperation" />
+  <MergeHouseholdDialog ref="mergeHouseholdDialog" @done="handlePendingOperation" />
+  <RemoveParcelDialog ref="removeParcelDialog" @done="handlePendingOperation" />
   </div>
 </template>
 
@@ -427,8 +461,6 @@ import ParcelInfoPanel from "../components/survey/ParcelInfoPanel.vue";
 import PlotSketchMapPanel from "../components/survey/PlotSketchMapPanel.vue";
 import ContractInfoPanel from "../components/survey/ContractInfoPanel.vue";
 import DeregisterDialog from "../components/survey/DeregisterDialog.vue";
-import AddParcelDialog from "../components/survey/AddParcelDialog.vue";
-import SplitParcelDialog from "../components/survey/SplitParcelDialog.vue";
 import SwapParcelsDialog from "../components/survey/SwapParcelsDialog.vue";
 import SplitHouseholdDialog from "../components/survey/SplitHouseholdDialog.vue";
 import MergeHouseholdDialog from "../components/survey/MergeHouseholdDialog.vue";
@@ -450,6 +482,7 @@ import {
   downloadSurveyAuthorizationTemplate,
   exportSurveyResults,
   fetchSurveyBatches,
+  fetchSurveyChanges,
   fetchSurveyDiffs,
   fetchSurveyIssuer,
   fetchSurveyIssuers,
@@ -467,7 +500,7 @@ import {
   uploadSurveyAttachment,
   uploadSurveyAuthorizationFile,
 } from "../api/survey";
-import { fetchRegionTree } from "../api/region";
+import { fetchRegionChildren, fetchRegionTree, searchRegions } from "../api/region";
 import { useAuthStore } from "../stores/auth";
 import { useDialogMap } from "../composables/useDialogMap";
 import { useDictionary } from "../composables/useDictionary";
@@ -488,8 +521,11 @@ const batches = ref([]);
 const tasks = ref([]);
 const issuerRows = ref([]);
 const diffRows = ref([]);
+const savedSwapChanges = ref([]);
+const savedSplitChanges = ref([]);
 const phase2Loading = ref(false);
 const issuerLoading = ref(false);
+const savedParcelChangeLoading = ref(false);
 const phase2 = reactive({ tags: [], restructures: [], authorizations: [], attachments: [] });
 const activeBatch = ref(null);
 const activeTask = ref(null);
@@ -511,6 +547,10 @@ const activeTab = ref("contractor");
 const plotSketchRefreshKey = ref(0);
 const regionTree = ref([]);
 const regionTreeProps = { label: "fullName", children: "children" };
+const batchRegionTree = ref([]);
+const batchRegionTreeProps = { label: "fullName", children: "children", isLeaf: "leaf" };
+const rememberedBatchRegions = new Map();
+let batchRegionSearchTimer = null;
 const batchForm = reactive({ batchName: "", regionId: undefined, regionCode: "", regionName: "", remark: "" });
 const creatingContractor = ref(false);
 const creatingIssuer = ref(false);
@@ -530,13 +570,15 @@ const authorizationUploadTarget = ref(null);
 const contractorMemberPanel = ref(null);
 const issuerSurveyFormRef = ref(null);
 const deregisterDialog = ref(null);
-const addParcelDialog = ref(null);
-const splitParcelDialog = ref(null);
 const swapParcelsDialog = ref(null);
 const splitHouseholdDialog = ref(null);
 const mergeHouseholdDialog = ref(null);
 const removeParcelDialog = ref(null);
+const pendingOperations = ref([]);
+const rollbackingSavedChangeId = ref(null);
 const isResultLocked = computed(() => activeBatch.value?.status === "finished" || (!isCreatingContractorResult.value && resultForm.surveyStatus === "confirmed"));
+const hasPendingOperations = computed(() => pendingOperations.value.length > 0);
+const canRollbackSavedParcelChange = computed(() => canManage.value && !isResultLocked.value && !hasPendingOperations.value);
 
 const filteredIssuerRows = computed(() => {
   const keyword = issuerKeyword.value.trim().toLowerCase();
@@ -555,6 +597,45 @@ const filteredBatches = computed(() => {
   }
   return batches.value.filter((batch) => batchSurveyStatusValue(batch) === batchSurveyStatus.value);
 });
+
+const savedSwapRecords = computed(() =>
+  savedSwapChanges.value.map((item) => {
+    const beforeSummary = item.beforeSummary || {};
+    const afterSummary = item.afterSummary || {};
+    const swappedOut = Array.isArray(beforeSummary.swapped_out) ? beforeSummary.swapped_out.filter(Boolean) : [];
+    const swappedIn = Array.isArray(afterSummary.swapped_in) ? afterSummary.swapped_in.filter(Boolean) : [];
+    return {
+      ...item,
+      swappedOut,
+      swappedIn,
+      swappedOutText: swappedOut.length ? swappedOut.join("、") : "-",
+      swappedInText: swappedIn.length ? swappedIn.join("、") : "-",
+      counterpartyLabel: afterSummary.counterparty || "-",
+    };
+  }),
+);
+
+const savedSplitRecords = computed(() =>
+  savedSplitChanges.value.map((item) => {
+    const beforeSummary = item.beforeSummary || {};
+    const afterSummary = item.afterSummary || {};
+    const generatedParcels = Array.isArray(afterSummary.generated_parcels)
+      ? afterSummary.generated_parcels.filter((parcel) => parcel?.dkbm)
+      : (afterSummary.new_dkbm ? [{ dkbm: afterSummary.new_dkbm, area: afterSummary.new_area }] : []);
+    const generatedDkbms = generatedParcels.map((parcel) => String(parcel.dkbm || "").trim()).filter(Boolean);
+    return {
+      ...item,
+      originalDkbm: String(beforeSummary.dkbm || afterSummary.original_dkbm || "").trim(),
+      sourceResultStatus: beforeSummary.source_result_status || "normal",
+      sourceChangeType: beforeSummary.source_change_type || "none",
+      sourceChangeReason: beforeSummary.source_change_reason || "",
+      sourceIsChanged: Boolean(beforeSummary.source_is_changed),
+      generatedParcels,
+      generatedDkbms,
+      generatedText: generatedDkbms.length ? generatedDkbms.join("、") : "-",
+    };
+  }),
+);
 
 const resultDialogTitle = computed(() => {
   const name = resultForm.name ? ` - ${resultForm.name}` : "";
@@ -636,6 +717,8 @@ const computedChangedFields = computed(() => {
     { f: "address", b: "address" }, { f: "postcode", b: "postcode" },
     { f: "memberCount", b: "memberCount" }, { f: "surveyorName", b: "surveyorName" },
     { f: "surveyDate", b: "surveyDate" }, { f: "surveyNote", b: "surveyNote" },
+    { f: "publicNoticeNote", b: "publicNoticeNote" }, { f: "publicNoticeRecorder", b: "publicNoticeRecorder" },
+    { f: "publicNoticeReviewDate", b: "publicNoticeReviewDate" }, { f: "publicNoticeReviewer", b: "publicNoticeReviewer" },
     { f: "groupRegionCode", b: "groupRegionCode" }, { f: "groupRegionName", b: "groupRegionName" },
   ];
   for (const { f, b } of keyMap) {
@@ -685,19 +768,7 @@ function handleOpSwapParcels() {
     activeTask.value.contractorUid,
     tasks.value,
     parcels.value,
-  );
-}
-function handleOpAddParcel() {
-  addParcelDialog.value.open(
-    activeBatch.value.id,
-    activeTask.value.contractorUid,
-  );
-}
-function handleOpSplitParcel() {
-  splitParcelDialog.value.open(
-    activeBatch.value.id,
-    activeTask.value.contractorUid,
-    parcels.value,
+    resultForm,
   );
 }
 function handleOpRemoveParcel() {
@@ -707,6 +778,258 @@ function handleOpRemoveParcel() {
     parcels.value,
   );
 }
+
+function cloneParcel(parcel) {
+  return JSON.parse(JSON.stringify(parcel || {}));
+}
+
+function markParcelRemoved(dkbm, changeType, reason) {
+  const index = parcels.value.findIndex((item) => item.dkbm === dkbm);
+  if (index === -1) return;
+  parcels.value[index] = {
+    ...parcels.value[index],
+    resultStatus: "removed",
+    isChanged: true,
+    changeType,
+    changeReason: reason,
+    _pending: true,
+  };
+}
+
+function applyPendingParcelPreview(operation) {
+  const payload = operation.payload || {};
+  if (operation.type === "add_parcel") {
+    parcels.value = [
+      ...parcels.value,
+      {
+        ...payload,
+        cbfbm: resultForm.code,
+        cbfmc: resultForm.name,
+        htmj: payload.htmj ?? payload.scmj,
+        resultStatus: "added",
+        isChanged: true,
+        changeType: "add_parcel",
+        changeReason: payload.reason,
+        _pending: true,
+      },
+    ];
+    return;
+  }
+  if (operation.type === "remove_parcel") {
+    markParcelRemoved(payload.dkbm, "remove_parcel", payload.reason);
+    return;
+  }
+  if (operation.type === "split_parcel") {
+    const index = parcels.value.findIndex((item) => item.dkbm === payload.dkbm);
+    if (index === -1) return;
+    const source = cloneParcel(parcels.value[index]);
+    const updatedSource = {
+      ...source,
+      resultStatus: "split_source",
+      isChanged: true,
+      changeType: "split_parcel",
+      changeReason: payload.reason,
+      _pending: true,
+    };
+    parcels.value[index] = updatedSource;
+    const generatedParcels = Array.isArray(payload.generatedParcels) && payload.generatedParcels.length
+      ? payload.generatedParcels
+      : [{
+        dkbm: payload.newDkbm,
+        dkmc: payload.newDkmc,
+        scmj: payload.newScmj || payload.estimatedNewScmj || null,
+        htmj: payload.newScmj || payload.estimatedNewScmj || null,
+        geometry: payload.newGeometry || null,
+      }];
+    parcels.value = [
+      ...parcels.value,
+      ...generatedParcels.map((item) => ({
+        ...source,
+        dkbm: item.dkbm,
+        dkmc: item.dkmc,
+        scmj: item.scmj ?? null,
+        htmj: item.htmj ?? item.scmj ?? null,
+        geometry: item.geometry || null,
+        resultStatus: "split_generated",
+        isChanged: true,
+        changeType: "split_parcel",
+        changeReason: payload.reason,
+        _pending: true,
+      })),
+    ];
+    return;
+  }
+  if (operation.type === "swap_parcels") {
+    for (const dkbm of payload.sourceDkbms || []) {
+      markParcelRemoved(dkbm, "swap_parcels", payload.reason);
+    }
+    const incoming = (payload.targetParcels || []).map((item) => ({
+      ...cloneParcel(item),
+      cbfbm: resultForm.code,
+      cbfmc: resultForm.name,
+      isChanged: true,
+      changeType: "swap_parcels",
+      changeReason: payload.reason,
+      _pending: true,
+    }));
+    if (incoming.length) {
+      const existing = new Set(parcels.value.map((item) => item.dkbm));
+      parcels.value = [
+        ...parcels.value,
+        ...incoming.filter((item) => !existing.has(item.dkbm)),
+      ];
+    }
+    return;
+  }
+  if (operation.type === "rollback_swap_parcels") {
+    for (const dkbm of payload.returnDkbms || []) {
+      markParcelRemoved(dkbm, "rollback_swap_parcels", payload.reason);
+    }
+    for (const parcel of payload.restoreParcels || []) {
+      const restored = {
+        ...cloneParcel(parcel),
+        cbfbm: resultForm.code,
+        cbfmc: resultForm.name,
+        resultStatus: "normal",
+        isChanged: true,
+        changeType: "rollback_swap_parcels",
+        changeReason: payload.reason,
+        _pending: true,
+      };
+      const index = parcels.value.findIndex((item) => item.dkbm === restored.dkbm && item.resultStatus === "removed");
+      if (index >= 0) {
+        parcels.value[index] = restored;
+      } else if (!parcels.value.some((item) => item.dkbm === restored.dkbm && !["removed", "split_source"].includes(item.resultStatus))) {
+        parcels.value = [...parcels.value, restored];
+      }
+    }
+    return;
+  }
+  if (operation.type === "rollback_split_parcel") {
+    const sourceIndex = parcels.value.findIndex((item) => item.dkbm === payload.sourceDkbm);
+    if (sourceIndex >= 0) {
+      const source = cloneParcel(parcels.value[sourceIndex]);
+      parcels.value[sourceIndex] = {
+        ...source,
+        resultStatus: payload.sourceResultStatus || "normal",
+        isChanged: Boolean(payload.sourceIsChanged),
+        changeType: payload.sourceChangeType || "none",
+        changeReason: payload.sourceChangeReason || "",
+        _pending: true,
+      };
+    }
+    const generatedSet = new Set(payload.generatedDkbms || []);
+    parcels.value = parcels.value.filter((item) => !generatedSet.has(item.dkbm));
+  }
+}
+
+function handlePendingOperation(operation) {
+  if (!operation?.type) return;
+  pendingOperations.value.push(operation);
+  applyPendingParcelPreview(operation);
+  if (operation.type === "deregister") {
+    resultForm.resultStatus = "cancelled";
+    resultForm.changeType = "deregister";
+    resultForm.changeReason = operation.payload?.reason || resultForm.changeReason;
+  }
+  if (operation.type === "merge_household") {
+    resultForm.resultStatus = "cancelled";
+    resultForm.changeType = "merge_household";
+    resultForm.changeReason = operation.payload?.reason || resultForm.changeReason;
+  }
+}
+
+const parcelOperationTypes = new Set(["add_parcel", "remove_parcel", "split_parcel", "rollback_split_parcel", "swap_parcels", "rollback_swap_parcels"]);
+
+function canUndoPendingOperation(operation) {
+  return parcelOperationTypes.has(operation?.type);
+}
+
+function pendingOperationLabelPreview(operation) {
+  const payload = operation?.payload || {};
+  if (operation?.type === "swap_parcels") {
+    const sourceCount = (payload.sourceDkbms || []).length;
+    const targetCount = (payload.targetDkbms || []).length;
+    return `地块互换：本方 ${sourceCount} 块，对方 ${targetCount} 块`;
+  }
+  if (operation?.type === "add_parcel") {
+    return `新增地块：${payload.dkbm || payload.dkmc || "未命名地块"}`;
+  }
+  if (operation?.type === "remove_parcel") {
+    return `移除地块：${payload.dkbm || "-"}`;
+  }
+  if (operation?.type === "split_parcel") {
+    const generatedCount = Array.isArray(payload.generatedParcels) && payload.generatedParcels.length
+      ? payload.generatedParcels.length
+      : 1;
+    return `切割地块：${payload.dkbm || "-"} -> ${generatedCount} 块`;
+  }
+  if (operation?.type === "rollback_split_parcel") {
+    return `撤回切割：${payload.sourceDkbm || "-"}`;
+  }
+  return operation?.type || "未命名操作";
+}
+
+async function reloadParcelPreviewFromPendingOperations() {
+  await loadSurveyParcels();
+  for (const operation of pendingOperations.value) {
+    applyPendingParcelPreview(operation);
+  }
+}
+
+async function handleUndoPendingOperationPreview(index) {
+  const operation = pendingOperations.value[index];
+  if (!canUndoPendingOperation(operation)) {
+    return;
+  }
+  pendingOperations.value.splice(index, 1);
+  await reloadParcelPreviewFromPendingOperations();
+  ElMessage.success("待保存地块操作已撤销");
+}
+
+function pendingOperationLabel(operation) {
+  const payload = operation?.payload || {};
+  if (operation?.type === "swap_parcels") {
+    const sourceCount = (payload.sourceDkbms || []).length;
+    const targetCount = (payload.targetDkbms || []).length;
+    return `地块互换：本方 ${sourceCount} 块，对方 ${targetCount} 块`;
+  }
+  if (operation?.type === "rollback_swap_parcels") {
+    const returnCount = (payload.returnDkbms || []).length;
+    const restoreCount = (payload.restoreDkbms || []).length;
+    return `撤回互换：退回 ${returnCount} 块，恢复 ${restoreCount} 块`;
+  }
+  if (operation?.type === "add_parcel") {
+    return `新增地块：${payload.dkbm || payload.dkmc || "未命名地块"}`;
+  }
+  if (operation?.type === "remove_parcel") {
+    return `移除地块：${payload.dkbm || "-"}`;
+  }
+  if (operation?.type === "split_parcel") {
+    const generatedCount = Array.isArray(payload.generatedParcels) && payload.generatedParcels.length
+      ? payload.generatedParcels.length
+      : 1;
+    return `切分地块：${payload.dkbm || "-"} -> ${generatedCount} 块`;
+  }
+  if (operation?.type === "rollback_split_parcel") {
+    return `撤回切割：${payload.sourceDkbm || "-"}`;
+  }
+  return operation?.type || "未命名操作";
+}
+
+async function handleUndoPendingOperation(index) {
+  const operation = pendingOperations.value[index];
+  if (!canUndoPendingOperation(operation)) {
+    return;
+  }
+  pendingOperations.value.splice(index, 1);
+  await reloadParcelPreviewFromPendingOperations();
+  if (["rollback_swap_parcels", "rollback_split_parcel"].includes(operation?.type)) {
+    await loadSavedParcelChanges();
+  }
+  ElMessage.success("待保存地块操作已撤销");
+}
+
 const taskPanelTitle = computed(() => {
   if (!activeBatch.value) {
     return "调查任务";
@@ -834,6 +1157,7 @@ function createEmptyResult() {
     address: "",
     postcode: "000000",
     mobile: "",
+    memberCount: 0,
     groupRegionCode: "",
     groupRegionName: "",
     surveyDate: "",
@@ -1225,9 +1549,9 @@ function handleBatchSelect(row) {
 }
 
 function openCreateBatch() {
-  const selectedRegion = flattenRegions(regionTree.value).find((item) => item.code === activeRegionCode.value);
+  const selectedRegion = [...rememberedBatchRegions.values()].find((item) => item.code === activeRegionCode.value);
   Object.assign(batchForm, {
-    batchName: "",
+    batchName: selectedRegion ? (selectedRegion.name || "") + "调查批次" : "",
     regionId: selectedRegion?.id,
     regionCode: selectedRegion?.code || "",
     regionName: selectedRegion?.fullName || "",
@@ -1268,6 +1592,11 @@ function openCreateContractor() {
   selectedParcel.value = null;
   parcels.value = [];
   diffRows.value = [];
+  savedSwapChanges.value = [];
+  savedSplitChanges.value = [];
+  savedParcelChangeLoading.value = false;
+  pendingOperations.value = [];
+  rollbackingSavedChangeId.value = null;
   Object.assign(resultForm, createEmptyResult(), {
     code: activeBatch.value?.regionCode || activeRegionCode.value || "",
     groupRegionCode: activeBatch.value?.regionCode || activeRegionCode.value || "",
@@ -1357,16 +1686,54 @@ function flattenRegions(nodes, result = []) {
   return result;
 }
 
+function rememberBatchRegions(nodes) {
+  for (const node of nodes || []) {
+    rememberedBatchRegions.set(node.id, node);
+    rememberBatchRegions(node.children);
+  }
+}
+
+async function loadBatchRegionNode(node, resolve) {
+  if (node.level === 0) {
+    resolve(batchRegionTree.value);
+    return;
+  }
+  const { data } = await fetchRegionChildren({ parentId: node.data.id, includeGroups: true });
+  rememberBatchRegions(data.data);
+  resolve(data.data);
+}
+
+function handleBatchRegionFilter(keyword) {
+  window.clearTimeout(batchRegionSearchTimer);
+  batchRegionSearchTimer = window.setTimeout(async () => {
+    if (!keyword) {
+      const { data } = await fetchRegionChildren({ includeGroups: true });
+      batchRegionTree.value = data.data;
+      rememberBatchRegions(batchRegionTree.value);
+      return;
+    }
+    const { data } = await searchRegions({ keyword, includeGroups: true, limit: 100 });
+    batchRegionTree.value = data.data;
+    rememberBatchRegions(batchRegionTree.value);
+  }, 250);
+}
+
 function handleBatchRegionChange(value) {
-  const selected = flattenRegions(regionTree.value).find((item) => item.id === value);
+  const selected = rememberedBatchRegions.get(value);
   batchForm.regionCode = selected?.code || "";
   batchForm.regionName = selected?.fullName || "";
+  if (selected) {
+    batchForm.batchName = (selected.name || "") + "调查批次";
+  }
 }
 
 async function loadRegionTree() {
   const { data } = await fetchRegionTree();
   regionTree.value = data.data;
   applyDefaultRegionFilter();
+  const { data: batchData } = await fetchRegionChildren({ includeGroups: true });
+  batchRegionTree.value = batchData.data;
+  rememberBatchRegions(batchRegionTree.value);
 }
 
 async function loadInitialData() {
@@ -1413,6 +1780,11 @@ async function openResult(row) {
   activeTask.value = row;
   selectedParcel.value = null;
   mapClearSelection();
+  pendingOperations.value = [];
+  savedSwapChanges.value = [];
+  savedSplitChanges.value = [];
+  savedParcelChangeLoading.value = false;
+  rollbackingSavedChangeId.value = null;
   const { data } = await fetchSurveyResult(row.batchId, row.contractorUid);
   Object.assign(resultForm, createEmptyResult(), data.data, {
     familyMembers: (data.data.familyMembers || []).map((item) => ({ ...item })),
@@ -1421,6 +1793,7 @@ async function openResult(row) {
   activeTab.value = "contractor";
   resultVisible.value = true;
   await loadDiffs();
+  await loadSavedParcelChanges();
   await loadPhase2();
   loadSurveyParcels();
 }
@@ -1428,6 +1801,11 @@ async function openResult(row) {
 function closeResultDialog() {
   resultVisible.value = false;
   isCreatingContractorResult.value = false;
+  pendingOperations.value = [];
+  savedSwapChanges.value = [];
+  savedSplitChanges.value = [];
+  savedParcelChangeLoading.value = false;
+  rollbackingSavedChangeId.value = null;
 }
 
 async function loadDiffs() {
@@ -1441,6 +1819,187 @@ async function loadDiffs() {
     diffRows.value = data.data.items;
   } finally {
     diffLoading.value = false;
+  }
+}
+
+async function loadSavedParcelChanges() {
+  if (!activeBatch.value || !activeTask.value) {
+    savedSwapChanges.value = [];
+    savedSplitChanges.value = [];
+    return;
+  }
+  savedParcelChangeLoading.value = true;
+  try {
+    const { data } = await fetchSurveyChanges(activeBatch.value.id, {
+      contractorUid: activeTask.value.contractorUid,
+      page: 1,
+      page_size: 200,
+    });
+    const items = data.data.items || [];
+    savedSwapChanges.value = items.filter(
+      (item) => item.changeType === "swap_parcels" && item.changeStatus !== "rolled_back",
+    );
+    savedSplitChanges.value = items.filter(
+      (item) => item.changeType === "split_parcel" && item.changeStatus !== "rolled_back",
+    );
+  } catch {
+    savedSwapChanges.value = [];
+    savedSplitChanges.value = [];
+  } finally {
+    savedParcelChangeLoading.value = false;
+  }
+}
+
+async function handleRollbackSavedSwapPending(change) {
+  return handleRollbackSavedSwap(change);
+  if (!activeBatch.value || !activeTask.value || !change?.id) {
+    return;
+  }
+  if (hasPendingOperations.value) {
+    ElMessage.warning("请先处理顶部未保存操作，再撤回已保存互换");
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定撤回这次已保存的地块互换吗？\n换出：${change.swappedOutText}\n换入：${change.swappedInText}`,
+      "撤回已保存互换",
+      {
+        type: "warning",
+        confirmButtonText: "撤回互换",
+        cancelButtonText: "取消",
+      },
+    );
+    rollbackingSavedChangeId.value = change.id;
+    await handleRollbackSavedSwap(
+      activeBatch.value.id,
+      activeTask.value.contractorUid,
+      change.id,
+      {},
+    );
+    ElMessage.success("已撤回已保存的地块互换");
+    await reloadSurveyResult();
+  } catch (error) {
+    if (error !== "cancel" && error !== "close") {
+      ElMessage.error(error.response?.data?.detail || "撤回已保存互换失败");
+    }
+  } finally {
+    rollbackingSavedChangeId.value = null;
+  }
+}
+
+async function handleRollbackSavedSwap(change) {
+  if (!activeBatch.value || !activeTask.value || !change?.id) {
+    return;
+  }
+  if (hasPendingOperations.value) {
+    ElMessage.warning("请先处理顶部未保存操作，再撤回已保存互换");
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定撤回这次已保存的地块互换吗？\n换出：${change.swappedOutText}\n换入：${change.swappedInText}`,
+      "撤回已保存互换",
+      {
+        type: "warning",
+        confirmButtonText: "加入待保存",
+        cancelButtonText: "取消",
+      },
+    );
+    rollbackingSavedChangeId.value = change.id;
+    const counterpartyCode = String(change.counterpartyLabel || "").trim();
+    const counterpartyTask = tasks.value.find((item) => item.cbfbm === counterpartyCode);
+    if (!counterpartyTask?.contractorUid) {
+      ElMessage.warning("鏈壘鍒板鏂规壙鍖呮柟锛岃鍏堝埛鏂版壙鍖呮柟鍒楄〃鍚庡啀璇?");
+      return;
+    }
+    const { data: counterpartyData } = await fetchSurveyParcels(
+      activeBatch.value.id,
+      counterpartyTask.contractorUid,
+    );
+    const restoreParcels = (counterpartyData.data || [])
+      .filter((item) => (change.swappedOut || []).includes(item.dkbm))
+      .map((item) => cloneParcel(item));
+    const returnParcels = parcels.value
+      .filter((item) => (change.swappedIn || []).includes(item.dkbm) && !["removed", "split_source"].includes(item.resultStatus));
+    if (restoreParcels.length !== (change.swappedOut || []).length || returnParcels.length !== (change.swappedIn || []).length) {
+      ElMessage.warning("当前页面地块状态已变化，请先重新打开调查录入后再试");
+      return;
+    }
+    handlePendingOperation({
+      type: "rollback_swap_parcels",
+      payload: {
+        changeId: change.id,
+        changeNo: change.changeNo,
+        returnDkbms: [...(change.swappedIn || [])],
+        restoreDkbms: [...(change.swappedOut || [])],
+        restoreParcels,
+        reason: `撤回互换 ${change.changeNo}`,
+      },
+    });
+    savedSwapChanges.value = savedSwapChanges.value.filter((item) => item.id !== change.id);
+    ElMessage.success("已加入待保存，保存调查结果后才会正式落库");
+  } catch (error) {
+    if (error !== "cancel" && error !== "close") {
+      ElMessage.error(error.response?.data?.detail || "撤回已保存互换失败");
+    }
+  } finally {
+    rollbackingSavedChangeId.value = null;
+  }
+}
+
+async function handleRollbackSavedSplit(change) {
+  if (!activeBatch.value || !activeTask.value || !change?.id) {
+    return;
+  }
+  if (hasPendingOperations.value) {
+    ElMessage.warning("请先处理顶部未保存操作，再撤回已保存切割");
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定撤回这次已保存的地块切割吗？\n源地块：${change.originalDkbm || "-"}\n生成地块：${change.generatedText || "-"}`,
+      "撤回已保存切割",
+      {
+        type: "warning",
+        confirmButtonText: "加入待保存",
+        cancelButtonText: "取消",
+      },
+    );
+    rollbackingSavedChangeId.value = change.id;
+    const sourceParcel = parcels.value.find((item) => item.dkbm === change.originalDkbm && item.resultStatus === "split_source");
+    if (!sourceParcel) {
+      ElMessage.warning("当前页面地块状态已变化，请重新打开调查录入后再试");
+      return;
+    }
+    const generatedParcels = parcels.value.filter(
+      (item) => (change.generatedDkbms || []).includes(item.dkbm) && !["removed", "split_source"].includes(item.resultStatus),
+    );
+    if (generatedParcels.length !== (change.generatedDkbms || []).length) {
+      ElMessage.warning("当前页面地块状态已变化，请重新打开调查录入后再试");
+      return;
+    }
+    handlePendingOperation({
+      type: "rollback_split_parcel",
+      payload: {
+        changeId: change.id,
+        changeNo: change.changeNo,
+        sourceDkbm: change.originalDkbm,
+        sourceResultStatus: change.sourceResultStatus,
+        sourceChangeType: change.sourceChangeType,
+        sourceChangeReason: change.sourceChangeReason,
+        sourceIsChanged: change.sourceIsChanged,
+        generatedDkbms: [...(change.generatedDkbms || [])],
+        reason: `撤回切割 ${change.changeNo}`,
+      },
+    });
+    savedSplitChanges.value = savedSplitChanges.value.filter((item) => item.id !== change.id);
+    ElMessage.success("已加入待保存，保存调查结果后才会正式落库");
+  } catch (error) {
+    if (error !== "cancel" && error !== "close") {
+      ElMessage.error(error.response?.data?.detail || "撤回已保存切割失败");
+    }
+  } finally {
+    rollbackingSavedChangeId.value = null;
   }
 }
 
@@ -1672,8 +2231,15 @@ async function handleSaveResult() {
   savingResult.value = true;
   creatingContractor.value = isCreatingContractorResult.value;
   try {
-    const validMembers = (resultForm.familyMembers || []).filter((m) => !m._deleted);
+    const allMembers = resultForm.familyMembers || [];
+    const validMembers = allMembers.filter((m) => !m._deleted);
     const cleanMembers = validMembers.map(({ _deleted, _isNew, ...rest }) => rest);
+    const deletedMembers = allMembers
+      .filter((m) => m._deleted && m.memberUid)
+      .map((m) => ({
+        memberUid: m.memberUid,
+        changeReason: m.changeReason || resultForm.changeReason || "去世",
+      }));
     const { issuer, baseIssuer, ...contractorPayload } = resultForm;
     let contractorUid = activeTask.value?.contractorUid;
     if (isCreatingContractorResult.value) {
@@ -1698,8 +2264,11 @@ async function handleSaveResult() {
       ...contractorPayload,
       contractorUid,
       familyMembers: cleanMembers,
+      deletedMembers,
+      pendingOperations: pendingOperations.value,
     });
     ElMessage.success(isCreatingContractorResult.value ? "承包方调查数据已新增" : "调查结果已保存");
+    pendingOperations.value = [];
     closeResultDialog();
     await loadTasks();
     await loadBatches();
@@ -1769,6 +2338,7 @@ async function reloadSurveyResult() {
       familyMembers: (data.data.familyMembers || []).map((item) => ({ ...item })),
     });
     await loadDiffs();
+    await loadSavedParcelChanges();
     await loadTasks();
     await loadBatches();
     await loadSurveyParcels();
@@ -2280,5 +2850,32 @@ loadInitialData();
   justify-content: center;
   width: 290px;
   flex-shrink: 0;
+}
+
+.pending-operation-alert {
+  margin-bottom: 12px;
+}
+
+.pending-operation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: -4px 0 12px;
+}
+
+.pending-operation-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid #f3d19e;
+  border-radius: 8px;
+  background: #fdf6ec;
+}
+
+.pending-operation-text {
+  color: #8a5a12;
+  font-size: 13px;
 }
 </style>

@@ -56,6 +56,7 @@ def _first_parcel_code_by_code(
         select(SurveyCbdkxxResult.dkbm)
         .where(
             column == code,
+            SurveyCbdkxxResult.result_status != "removed",
             *data_access_service.build_code_scope_filters(SurveyCbdkxxResult.dkbm, current_user),
         )
         .order_by(SurveyCbdkxxResult.dkbm.asc())
@@ -189,6 +190,7 @@ def gis_parcel_detail(
         select(SurveyCbdkxxResult)
         .where(
             SurveyCbdkxxResult.dkbm == dkbm,
+            SurveyCbdkxxResult.result_status != "removed",
             *data_access_service.build_code_scope_filters(SurveyCbdkxxResult.dkbm, current_user),
         )
         .order_by(SurveyCbdkxxResult.id.desc())

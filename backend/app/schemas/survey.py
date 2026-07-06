@@ -35,6 +35,8 @@ class SurveyTaskRead(BaseModel):
     cbfbm: str
     cbfmc: str
     regionCode: str | None = None
+    groupRegionCode: str | None = None
+    groupRegionName: str | None = None
     taskStatus: str
     hasChange: bool
     changeCount: int
@@ -102,6 +104,8 @@ class SurveyChangeRecordRead(BaseModel):
     generatedRequestNo: str | None = None
     investigatorName: str | None = None
     investigatedAt: datetime | None = None
+    beforeSummary: dict | None = None
+    afterSummary: dict | None = None
     createdAt: datetime
 
 
@@ -241,15 +245,66 @@ class SurveyAddParcelRequest(BaseModel):
     htmjm: float | None = None
     yhtmjm: float | None = None
     sfqqqg: str | None = Field(default=None, max_length=1)
+    geometry: dict | None = None
+    geometrySourceSrid: int = Field(default=4326, ge=1, le=999999)
     reason: str | None = Field(default=None, max_length=500)
+
+
+class SurveyParcelGeometryLocalParcel(BaseModel):
+    dkbm: str | None = Field(default=None, max_length=19)
+    dkmc: str | None = Field(default=None, max_length=50)
+    cbfbm: str | None = Field(default=None, max_length=18)
+    cbfmc: str | None = Field(default=None, max_length=50)
+    resultStatus: str | None = Field(default=None, max_length=32)
+    geometry: dict | None = None
+
+
+class SurveyParcelGeometryValidateRequest(BaseModel):
+    geometry: dict
+    geometrySourceSrid: int = Field(default=4326, ge=1, le=999999)
+    localParcels: list[SurveyParcelGeometryLocalParcel] = []
+
+
+class SurveyParcelGeometryOverlapRead(BaseModel):
+    source: str = Field(default="database", max_length=32)
+    dkbm: str | None = None
+    dkmc: str | None = None
+    cbfbm: str | None = None
+    cbfmc: str | None = None
+    overlapAreaMu: float | None = None
+
+
+class SurveyParcelGeometryValidateRead(BaseModel):
+    valid: bool = True
+    areaMu: float | None = None
+    overlaps: list[SurveyParcelGeometryOverlapRead] = []
 
 
 class SurveySplitParcelRequest(BaseModel):
     dkbm: str = Field(min_length=1, max_length=19)
     newDkbm: str = Field(min_length=1, max_length=19)
     newDkmc: str = Field(min_length=1, max_length=50)
-    newScmj: float = Field(gt=0)
+    splitMode: str | None = Field(default="area", max_length=32)
+    newScmj: float | None = Field(default=None, gt=0)
+    splitDirection: str | None = Field(default=None, max_length=16)
+    splitGeometry: dict | None = None
+    geometrySourceSrid: int = Field(default=4326, ge=1, le=999999)
     reason: str | None = Field(default=None, max_length=500)
+    generatedParcels: list["SurveySplitGeneratedParcel"] = []
+
+
+class SurveySplitGeneratedParcel(BaseModel):
+    dkbm: str = Field(min_length=1, max_length=19)
+    dkmc: str = Field(min_length=1, max_length=50)
+    scmj: float | None = Field(default=None, gt=0)
+    htmj: float | None = Field(default=None, gt=0)
+    geometry: dict | None = None
+
+
+class SurveySplitParcelPreviewRead(BaseModel):
+    sourceDkbm: str
+    splitMode: str
+    generatedParcels: list[SurveySplitGeneratedParcel] = []
 
 
 class SurveyRemoveParcelRequest(BaseModel):
@@ -261,6 +316,10 @@ class SurveySwapParcelsRequest(BaseModel):
     targetContractorUid: str = Field(min_length=1, max_length=36)
     sourceDkbms: list[str] = Field(min_length=1)
     targetDkbms: list[str] = Field(min_length=1)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class SurveyRollbackSwapParcelsRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
 
 
@@ -288,12 +347,18 @@ class SurveyMemberEntry(BaseModel):
     isCoOwner: str | None = Field(default=None, max_length=1)
     note: str | None = Field(default=None, max_length=254)
     isHouseholdHead: bool = False
+    changeReason: str | None = Field(default=None, max_length=500)
+
+
+class SurveyMemberDeleteEntry(BaseModel):
+    memberUid: str = Field(min_length=1, max_length=36)
+    changeReason: str | None = Field(default=None, max_length=500)
 
 
 class SurveyMaintainMembersRequest(BaseModel):
     membersToAdd: list[SurveyMemberEntry] = []
     membersToUpdate: list[SurveyMemberEntry] = []
-    membersToDelete: list[str] = []  # member_uids
+    membersToDelete: list[str | SurveyMemberDeleteEntry] = []  # keep string UID compatibility
     reason: str | None = Field(default=None, max_length=500)
 
 
@@ -360,6 +425,11 @@ class SurveyIssuerUpdate(BaseModel):
     remark: str | None = None
 
 
+class SurveyPendingOperation(BaseModel):
+    type: str = Field(min_length=1, max_length=64)
+    payload: dict = {}
+
+
 class SurveyContractorUpdate(BaseModel):
     code: str = Field(min_length=1, max_length=18)
     typeCode: str = Field(min_length=1, max_length=1)
@@ -387,6 +457,8 @@ class SurveyContractorUpdate(BaseModel):
     remark: str | None = None
     issuer: SurveyIssuerUpdate | None = None
     familyMembers: list[SurveyMemberUpdate] = []
+    deletedMembers: list[SurveyMemberDeleteEntry] = []
+    pendingOperations: list[SurveyPendingOperation] = []
 
 
 class SurveyMemberRead(SurveyMemberUpdate):
@@ -453,7 +525,7 @@ class SurveyContractorRead(BaseModel):
     id: int
     batchId: int
     contractorUid: str
-    baseId: int
+    baseId: int | None = None
     code: str
     typeCode: str
     name: str

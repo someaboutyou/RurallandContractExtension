@@ -1,7 +1,8 @@
+import logging
 from pathlib import Path
 from datetime import date
 
-from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy import select as sa_select
 from sqlalchemy.orm import Session
@@ -33,7 +34,9 @@ from app.schemas.survey import (
     SurveyDeregisterRequest,
     SurveyAddParcelRequest,
     SurveyRemoveParcelRequest,
+    SurveyRollbackSwapParcelsRequest,
     SurveySplitParcelRequest,
+    SurveySplitParcelPreviewRead,
     SurveySwapParcelsRequest,
     SurveySplitHouseholdRequest,
     SurveyMergeHouseholdRequest,
@@ -44,12 +47,15 @@ from app.schemas.survey import (
     SurveyTagDisable,
     SurveyTaskSkip,
     SurveyTaskRead,
+    SurveyParcelGeometryValidateRead,
+    SurveyParcelGeometryValidateRequest,
 )
 from app.services.contract_template_service import contract_template_service
 from app.services.land_parcel_service import land_parcel_service
 from app.services.survey_service import survey_service
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/batches", response_model=ApiResponse[PageResponse[SurveyBatchRead]])
@@ -183,6 +189,68 @@ def get_survey_parcels(
     result = survey_service.get_result(db, batch_id, contractor_uid, current_user)
     cbfbm = result.get("code", "")
     return {"data": land_parcel_service.get_survey_parcels(db, result.get("batchId") or batch_id, cbfbm, current_user)}
+
+
+@router.post("/batches/{batch_id}/results/{contractor_uid}/parcels/validate-geometry", response_model=ApiResponse[SurveyParcelGeometryValidateRead])
+def validate_survey_parcel_geometry(
+    batch_id: int,
+    contractor_uid: str,
+    payload: SurveyParcelGeometryValidateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    logger.info(
+        "survey.validate_geometry endpoint called batch_id=%s contractor_uid=%s geometry_type=%s local_parcel_count=%s",
+        batch_id,
+        contractor_uid,
+        payload.geometry.get("type") if isinstance(payload.geometry, dict) else None,
+        len(payload.localParcels or []),
+    )
+    return {
+        "data": survey_service.validate_parcel_geometry(
+            db,
+            batch_id,
+            contractor_uid,
+            payload.model_dump(),
+            current_user,
+        )
+    }
+
+
+@router.post("/batches/{batch_id}/results/{contractor_uid}/parcels/preview-split", response_model=ApiResponse[SurveySplitParcelPreviewRead])
+def preview_survey_split_parcel(
+    batch_id: int,
+    contractor_uid: str,
+    payload: SurveySplitParcelRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    return {
+        "data": survey_service.preview_split_parcel(
+            db,
+            batch_id,
+            contractor_uid,
+            payload.model_dump(),
+            current_user,
+        )
+    }
+
+
+@router.get("/batches/{batch_id}/results/{contractor_uid}/parcels/next-code", response_model=ApiResponse[dict])
+def generate_next_survey_parcel_code(
+    batch_id: int,
+    contractor_uid: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    return {
+        "data": survey_service.generate_next_parcel_code(
+            db,
+            batch_id,
+            contractor_uid,
+            current_user,
+        )
+    }
 
 
 @router.get("/batches/{batch_id}/results/{contractor_uid}/phase2", response_model=ApiResponse[dict])
@@ -425,7 +493,7 @@ def list_survey_diffs(
     }
 
 
-@router.put("/batches/{batch_id}/results/{contractor_uid}", response_model=ApiResponse[SurveyContractorRead])
+@router.put("/batches/{batch_id}/results/{contractor_uid}", response_model=ApiResponse[dict])
 def update_survey_result(
     batch_id: int,
     contractor_uid: str,
@@ -463,7 +531,10 @@ def _get_cbhtbm_for_contractor(db: Session, cbfbm: str, batch_id: int) -> str | 
     """Find a contract code for a contractor."""
     cbhtbm = db.scalar(
         sa_select(SurveyCbdkxxResult.cbhtbm)
-        .where(SurveyCbdkxxResult.cbfbm == cbfbm)
+        .where(
+            SurveyCbdkxxResult.cbfbm == cbfbm,
+            SurveyCbdkxxResult.result_status != "removed",
+        )
         .limit(1)
     )
     if not cbhtbm:
@@ -481,6 +552,7 @@ def _get_survey_contract_summary(db: Session, cbfbm: str, cbhtbm: str, batch_id:
         sa_select(SurveyCbdkxxResult).where(
             SurveyCbdkxxResult.cbfbm == cbfbm,
             SurveyCbdkxxResult.cbhtbm == cbhtbm,
+            SurveyCbdkxxResult.result_status != "removed",
         )
     ).all()
     if not relations:
@@ -603,6 +675,10 @@ def get_survey_plot_sketch_map(
     parcels = land_parcel_service.get_survey_parcels(db, data_batch_id, cbfbm, current_user)
     nearby_parcels = land_parcel_service.get_nearby_survey_parcels(db, data_batch_id, cbfbm, current_user)
     today_text = _fmt_date_cn(date.today())
+    notice_reviewer = result.get("publicNoticeReviewer") or ""
+    notice_review_date_raw = result.get("publicNoticeReviewDate")
+    survey_date_raw = result.get("surveyDate")
+    review_date_cn = _fmt_date_cn(date.fromisoformat(notice_review_date_raw)) if notice_review_date_raw else ( _fmt_date_cn(date.fromisoformat(survey_date_raw)) if survey_date_raw else "" )
 
     sketch_plots = []
     for parcel in parcels:
@@ -627,8 +703,12 @@ def get_survey_plot_sketch_map(
         sketch_plots=sketch_plots,
         overview_plots=nearby_parcels,
         highlight_plots=sketch_plots,
-        audit_date=today_text,
-        map_date=today_text,
+        village_name=result.get("groupRegionName") or "",
+        auditor=f"审核者：{notice_reviewer}　{review_date_cn}" if notice_reviewer and review_date_cn else "",
+        mapper=f"制图者：{notice_reviewer}　{review_date_cn}" if notice_reviewer and review_date_cn else "",
+        publisher="",
+        audit_date=review_date_cn or today_text,
+        map_date=review_date_cn or today_text,
     )
     return {
         "data": {
@@ -694,7 +774,9 @@ def maintain_survey_members(
             db, batch_id, contractor_uid,
             [m.model_dump() for m in payload.membersToAdd],
             [m.model_dump() for m in payload.membersToUpdate],
-            payload.membersToDelete, payload.reason, current_user,
+            [m if isinstance(m, str) else m.model_dump() for m in payload.membersToDelete],
+            payload.reason,
+            current_user,
         )
     }
 
@@ -761,6 +843,21 @@ def swap_survey_parcels(
             db, batch_id, contractor_uid, payload.model_dump(), current_user,
         )
     }
+
+
+@router.post("/batches/{batch_id}/results/{contractor_uid}/swap-parcels/{change_id}/rollback", response_model=ApiResponse[dict])
+def rollback_survey_swap_parcels(
+    batch_id: int,
+    contractor_uid: str,
+    change_id: int,
+    payload: SurveyRollbackSwapParcelsRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="已禁用即时撤回互换，请在调查录入页面加入待保存后统一保存",
+    )
 
 
 @router.post("/batches/{batch_id}/results/{contractor_uid}/remove-parcel", response_model=ApiResponse[dict])

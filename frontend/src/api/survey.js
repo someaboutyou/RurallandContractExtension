@@ -132,8 +132,20 @@ export function deleteSurveyAttachment(id) {
   return http.delete(`/surveys/attachments/${id}`);
 }
 
-export function fetchSurveyParcels(batchId, contractorUid) {
-  return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/parcels`);
+export function fetchSurveyParcels(batchId, contractorUid, params) {
+  return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/parcels`, { params });
+}
+
+export function validateSurveyParcelGeometry(batchId, contractorUid, payload) {
+  return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/parcels/validate-geometry`, payload);
+}
+
+export function previewSplitSurveyParcel(batchId, contractorUid, payload) {
+  return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/parcels/preview-split`, payload);
+}
+
+export function generateNextSurveyParcelCode(batchId, contractorUid) {
+  return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/parcels/next-code`);
 }
 
 export function generateSurveyRequest(batchId, contractorUid, payload) {

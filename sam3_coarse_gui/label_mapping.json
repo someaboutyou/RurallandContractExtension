@@ -1,0 +1,74 @@
+[
+  {
+    "一级类": "水域",
+    "items": [
+      {"业务标签": "河流水面", "模型标签": "river_water", "sam_prompt": "river"},
+      {"业务标签": "沟渠", "模型标签": "ditch", "sam_prompt": "ditch"},
+      {"业务标签": "坑塘水面", "模型标签": "pond", "sam_prompt": "pond"},
+      {"业务标签": "水工建筑用地", "模型标签": "hydraulic_structure", "sam_prompt": "water facility"}
+    ]
+  },
+  {
+    "一级类": "耕地",
+    "items": [
+      {"业务标签": "水田", "模型标签": "paddy_field", "sam_prompt": "paddy field"},
+      {"业务标签": "已耕 粮食", "模型标签": "farmland_plot", "sam_prompt": "farmland"},
+      {"业务标签": "已耕 非粮食", "模型标签": "farmland_plot", "sam_prompt": "farmland"},
+      {"业务标签": "未耕", "模型标签": "fallow_field", "sam_prompt": "fallow field"},
+      {"业务标签": "大棚", "模型标签": "greenhouse", "sam_prompt": "greenhouse"},
+      {"业务标签": "光伏", "模型标签": "solar_panel", "sam_prompt": "solar panel"}
+    ]
+  },
+  {
+    "一级类": "树类",
+    "items": [
+      {"业务标签": "树/乔木林", "模型标签": "tree_cluster", "sam_prompt": "tree"},
+      {"业务标签": "竹林", "模型标签": "bamboo", "sam_prompt": "bamboo"},
+      {"业务标签": "其他林", "模型标签": "forest", "sam_prompt": "forest"},
+      {"业务标签": "果园", "模型标签": "orchard", "sam_prompt": "orchard"},
+      {"业务标签": "茶园", "模型标签": "tea_garden", "sam_prompt": "tea garden"},
+      {"业务标签": "其他园地", "模型标签": "garden", "sam_prompt": "garden"},
+      {"业务标签": "灌木林", "模型标签": "shrub", "sam_prompt": "shrub"}
+    ]
+  },
+  {
+    "一级类": "道路",
+    "items": [
+      {"业务标签": "公路用地", "模型标签": "road", "sam_prompt": "road"},
+      {"业务标签": "硬化地面", "模型标签": "paved_ground", "sam_prompt": "paved ground"},
+      {"业务标签": "农村道路", "模型标签": "rural_road", "sam_prompt": "rural road"}
+    ]
+  },
+  {
+    "一级类": "草地",
+    "items": [
+      {"业务标签": "草地：荒草地", "模型标签": "grassland", "sam_prompt": "grassland"},
+      {"业务标签": "草地：草坪", "模型标签": "lawn", "sam_prompt": "lawn"}
+    ]
+  },
+  {
+    "一级类": "建设用地",
+    "items": [
+      {"业务标签": "城镇住宅", "模型标签": "residential_building", "sam_prompt": "residential building"},
+      {"业务标签": "农村宅基地", "模型标签": "rural_house", "sam_prompt": "rural house"},
+      {"业务标签": "公共设施", "模型标签": "public_building", "sam_prompt": "public building"},
+      {"业务标签": "体育设施用地", "模型标签": "sports_facility", "sam_prompt": "sports field"},
+      {"业务标签": "其他构筑物/高架桥梁", "模型标签": "bridge_or_structure", "sam_prompt": "bridge"},
+      {"业务标签": "设施大棚", "模型标签": "facility_greenhouse", "sam_prompt": "greenhouse"},
+      {"业务标签": "在建建筑物", "模型标签": "construction_building", "sam_prompt": "construction building"},
+      {"业务标签": "城镇大楼/大厂", "模型标签": "industrial_building", "sam_prompt": "factory building"},
+      {"业务标签": "临时建筑物", "模型标签": "temporary_structure", "sam_prompt": "temporary building"},
+      {"业务标签": "宗教寺庙", "模型标签": "temple", "sam_prompt": "temple"},
+      {"业务标签": "殡葬用地", "模型标签": "cemetery", "sam_prompt": "cemetery"},
+      {"业务标签": "畜禽动物栏舍", "模型标签": "livestock_shed", "sam_prompt": "animal shed"},
+      {"业务标签": "畜禽养殖动物", "模型标签": "livestock", "sam_prompt": "livestock"}
+    ]
+  },
+  {
+    "一级类": "推堆土",
+    "items": [
+      {"业务标签": "临时推土", "模型标签": "earthpile", "sam_prompt": "dirt pile"},
+      {"业务标签": "留自用地", "模型标签": "bare_soil", "sam_prompt": "bare soil"}
+    ]
+  }
+]

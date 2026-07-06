@@ -12,7 +12,7 @@ export const basemapConfigs = [
     serviceConfigs: [
       {
         serviceType: "XYZ",
-        serviceUrl: "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        serviceUrl: "https://t6.tianditu.gov.cn/DataServer?T=img_w&x={x}&y={y}&l={z}&tk=d9d9f17f6979a9b6cc681e5b1589f750",
         projection: "EPSG:3857",
         minZoom: 0,
         maxZoom: 19,
