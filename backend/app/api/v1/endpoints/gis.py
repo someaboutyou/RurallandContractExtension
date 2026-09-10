@@ -1,7 +1,7 @@
 import json
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
@@ -29,6 +29,7 @@ def _count_parcels_by_code(
         db.scalar(
             select(func.count(func.distinct(SurveyCbdkxxResult.dkbm))).where(
                 column == code,
+                SurveyCbdkxxResult.result_status != "removed",
                 *data_access_service.build_code_scope_filters(SurveyCbdkxxResult.dkbm, current_user),
             )
         )
@@ -52,11 +53,26 @@ def _first_parcel_code_by_code(
 ) -> str | None:
     if not code:
         return None
+    latest_subq = (
+        select(
+            SurveyCbdkxxResult.dkbm,
+            func.max(SurveyCbdkxxResult.id).label("max_id"),
+        )
+        .where(SurveyCbdkxxResult.result_status != "removed")
+        .group_by(SurveyCbdkxxResult.dkbm)
+        .subquery()
+    )
     return db.scalar(
         select(SurveyCbdkxxResult.dkbm)
+        .join(
+            latest_subq,
+            and_(
+                SurveyCbdkxxResult.dkbm == latest_subq.c.dkbm,
+                SurveyCbdkxxResult.id == latest_subq.c.max_id,
+            ),
+        )
         .where(
             column == code,
-            SurveyCbdkxxResult.result_status != "removed",
             *data_access_service.build_code_scope_filters(SurveyCbdkxxResult.dkbm, current_user),
         )
         .order_by(SurveyCbdkxxResult.dkbm.asc())
@@ -372,3 +388,68 @@ def gis_parcel_detail(
             "geometry": geometry,
         }
     }
+
+@router.get("/contractors/{cbfbm}/parcels", response_model=ApiResponse[list[dict]])
+def gis_contractor_parcels(
+    cbfbm: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    data_access_service.ensure_code_in_scope(current_user, cbfbm, detail="承包方不在当前数据权限范围内")
+
+    cbdkxx_rows = db.scalars(
+        select(SurveyCbdkxxResult)
+        .where(
+            SurveyCbdkxxResult.cbfbm == cbfbm,
+            SurveyCbdkxxResult.result_status != "removed",
+            *data_access_service.build_code_scope_filters(SurveyCbdkxxResult.dkbm, current_user),
+        )
+        .order_by(SurveyCbdkxxResult.dkbm.asc())
+    ).all()
+
+    if not cbdkxx_rows:
+        return {"data": []}
+
+    dkbm_list = [row.dkbm for row in cbdkxx_rows]
+
+    dk_rows = db.scalars(
+        select(SurveyDkResult)
+        .where(
+            SurveyDkResult.dkbm.in_(dkbm_list),
+            *data_access_service.build_code_scope_filters(SurveyDkResult.dkbm, current_user),
+        )
+        .order_by(SurveyDkResult.dkbm.asc(), SurveyDkResult.id.desc())
+    ).all()
+    dk_map = {}
+    for row in dk_rows:
+        dk_map.setdefault(row.dkbm, row)
+
+    geometry_rows = land_parcel_repository.get_dk_by_codes(db, dkbm_list)
+    geometry_map = {}
+    for row in geometry_rows:
+        geom = None
+        if row.get("geometry"):
+            try:
+                geom = json.loads(row["geometry"])
+            except (TypeError, json.JSONDecodeError):
+                pass
+        geometry_map[row["dkbm"]] = geom
+
+    result = []
+    for cbdkxx in cbdkxx_rows:
+        dk = dk_map.get(cbdkxx.dkbm)
+        result.append({
+            "dkbm": cbdkxx.dkbm,
+            "dkmc": dk.dkmc if dk else None,
+            "htmj": str(cbdkxx.htmj) if cbdkxx.htmj is not None else None,
+            "scmj": str(dk.scmj) if dk and dk.scmj is not None else None,
+            "cbhtbm": cbdkxx.cbhtbm,
+            "cbjyqqdfs": cbdkxx.cbjyqqdfs,
+            "dklb": dk.dklb if dk else None,
+            "tdlylx": dk.tdlylx if dk else None,
+            "dldj": dk.dldj if dk else None,
+            "sfjbnt": dk.sfjbnt if dk else None,
+            "geometry": geometry_map.get(cbdkxx.dkbm),
+        })
+
+    return {"data": result}

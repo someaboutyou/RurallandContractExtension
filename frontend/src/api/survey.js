@@ -20,6 +20,10 @@ export function fetchSurveyTasks(batchId, params) {
   return http.get(`/surveys/batches/${batchId}/tasks`, { params });
 }
 
+export function fetchDeregisteredSurveyContractors(batchId, params) {
+  return http.get(`/surveys/batches/${batchId}/deregistered-contractors`, { params });
+}
+
 export function createSurveyContractor(batchId, payload) {
   return http.post(`/surveys/batches/${batchId}/tasks`, payload);
 }
@@ -159,7 +163,11 @@ export function fetchSurveyContract(batchId, contractorUid) {
 }
 
 export function fetchSurveyPlotSketchMap(batchId, contractorUid) {
-  return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/plot-sketch-map`);
+  return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/plot-sketch-map`, {
+    // Rendering includes parcel geometry and nearby-parcel lookup, which can
+    // legitimately take longer than the shared 10-second request timeout.
+    timeout: 30000,
+  });
 }
 
 export function printSurveyContract(batchId, contractorUid) {
@@ -184,6 +192,10 @@ export function deregisterContractor(batchId, contractorUid, payload) {
   return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/deregister`, payload);
 }
 
+export function rollbackDeregisteredContractor(batchId, contractorUid) {
+  return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/rollback-deregister`);
+}
+
 export function addSurveyParcel(batchId, contractorUid, payload) {
   return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/add-parcel`, payload);
 }
@@ -202,6 +214,14 @@ export function removeSurveyParcel(batchId, contractorUid, payload) {
 
 export function splitSurveyHousehold(batchId, contractorUid, payload) {
   return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/split-household`, payload);
+}
+
+export function rollbackSplitSurveyHousehold(batchId, contractorUid) {
+  return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/split-household/rollback`);
+}
+
+export function rollbackMergeSurveyHousehold(batchId, contractorUid) {
+  return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/merge-household/rollback`);
 }
 
 export function mergeSurveyHousehold(batchId, contractorUid, payload) {

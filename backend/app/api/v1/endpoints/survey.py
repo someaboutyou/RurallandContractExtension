@@ -23,6 +23,7 @@ from app.schemas.survey import (
     SurveyChangeHeadRequest,
     SurveyChangeRecordRead,
     SurveyContractorCreate,
+    SurveyDeregisteredContractorRead,
     SurveyContractorRead,
     SurveyContractorUpdate,
     SurveyContractRead,
@@ -99,6 +100,29 @@ def list_survey_tasks(
             page_size=page_size,
             keyword=keyword,
             task_status=task_status,
+            region_code=region_code,
+            current_user=current_user,
+        )
+    }
+
+
+@router.get("/batches/{batch_id}/deregistered-contractors", response_model=ApiResponse[PageResponse[SurveyDeregisteredContractorRead]])
+def list_deregistered_contractors(
+    batch_id: int,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    keyword: str | None = Query(default=None),
+    region_code: str | None = Query(default=None, alias="regionCode"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    return {
+        "data": survey_service.list_deregistered_contractors(
+            db,
+            batch_id=batch_id,
+            page=page,
+            page_size=page_size,
+            keyword=keyword,
             region_code=region_code,
             current_user=current_user,
         )
@@ -797,6 +821,23 @@ def deregister_contractor(
     }
 
 
+@router.post("/batches/{batch_id}/results/{contractor_uid}/rollback-deregister", response_model=ApiResponse[SurveyContractorRead])
+def rollback_deregister_contractor(
+    batch_id: int,
+    contractor_uid: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    return {
+        "data": survey_service.rollback_deregistered_contractor(
+            db,
+            batch_id,
+            contractor_uid,
+            current_user,
+        )
+    }
+
+
 @router.post("/batches/{batch_id}/results/{contractor_uid}/add-parcel", response_model=ApiResponse[dict])
 def add_parcel(
     batch_id: int,
@@ -892,6 +933,16 @@ def split_household(
     }
 
 
+@router.post("/batches/{batch_id}/results/{contractor_uid}/split-household/rollback", response_model=ApiResponse[dict])
+def rollback_split_household(
+    batch_id: int,
+    contractor_uid: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    return {"data": survey_service.rollback_split_household(db, batch_id, contractor_uid, current_user)}
+
+
 @router.post("/batches/{batch_id}/results/{contractor_uid}/merge-household", response_model=ApiResponse[dict])
 def merge_household(
     batch_id: int,
@@ -900,12 +951,22 @@ def merge_household(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contractors.manage")),
 ):
-    # Merge one contractor into another contractor.
+    # Merge two or more existing contractors into a newly created contractor.
     return {
         "data": survey_service.merge_household(
             db, batch_id, contractor_uid, payload.model_dump(), current_user,
         )
     }
+
+
+@router.post("/batches/{batch_id}/results/{contractor_uid}/merge-household/rollback", response_model=ApiResponse[dict])
+def rollback_merge_household(
+    batch_id: int,
+    contractor_uid: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    return {"data": survey_service.rollback_merge_household(db, batch_id, contractor_uid, current_user)}
 
 
 @router.post("/batches/{batch_id}/finish", response_model=ApiResponse[SurveyBatchRead])

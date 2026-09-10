@@ -1,5 +1,11 @@
 <template>
   <div class="login-shell">
+    <div class="login-light-lines" aria-hidden="true">
+      <span class="login-light-line login-light-line--one"></span>
+      <span class="login-light-line login-light-line--two"></span>
+      <span class="login-light-line login-light-line--three"></span>
+      <span class="login-light-line login-light-line--four"></span>
+    </div>
     <section class="login-hero">
       <div class="eyebrow">农村承包经营权一体化平台</div>
       <h1>从权限、业务流到一张图的统一工作台</h1>

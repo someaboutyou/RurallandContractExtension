@@ -11,3 +11,7 @@ export function fetchGisParcel(dkbm) {
 export function validateMapLayerService(params) {
   return http.get("/map-layers/validate", { params });
 }
+
+export function fetchContractorParcels(cbfbm) {
+  return http.get(`/gis/contractors/${encodeURIComponent(cbfbm)}/parcels`);
+}

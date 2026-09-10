@@ -27,6 +27,7 @@ def upgrade_schema(engine: Engine) -> None:
     _upgrade_spatial_tables(engine)
     _upgrade_survey_base_result_refactor(engine)
     _upgrade_survey_cbf_base_task_columns(engine)
+    _upgrade_survey_parcel_uniqueness(engine)
 
 
 def _upgrade_data_import_operations(engine: Engine) -> None:
@@ -1551,3 +1552,23 @@ def _upgrade_survey_cbf_base_task_columns(engine: Engine) -> None:
             connection.exec_driver_sql('ALTER TABLE survey_cbf_base ADD COLUMN investigated_at TIMESTAMPTZ')
         if 'remark' not in columns:
             connection.exec_driver_sql('ALTER TABLE survey_cbf_base ADD COLUMN remark TEXT')
+
+
+def _upgrade_survey_parcel_uniqueness(engine: Engine) -> None:
+    """Enforce the business keys used by current-result and batch-snapshot tables."""
+    inspector = inspect(engine)
+    specs = (
+        ("survey_dk_result", "uq_survey_dk_result_tenant_dkbm", "tenant_code, dkbm"),
+        ("survey_dk_result", "uq_survey_dk_result_tenant_parcel_uid", "tenant_code, parcel_uid"),
+        ("survey_dk_base", "uq_survey_dk_base_tenant_batch_dkbm", "tenant_code, batch_id, dkbm"),
+        ("survey_dk_base", "uq_survey_dk_base_tenant_batch_parcel_uid", "tenant_code, batch_id, parcel_uid"),
+        ("survey_cbdkxx_base", "uq_survey_cbdkxx_base_tenant_batch_relation", "tenant_code, batch_id, dkbm, cbfbm"),
+        ("survey_cbdkxx_base", "uq_survey_cbdkxx_base_tenant_batch_info_uid", "tenant_code, batch_id, parcel_info_uid"),
+        ("survey_cbdkxx_result", "uq_survey_cbdkxx_result_tenant_relation", "tenant_code, dkbm, cbfbm"),
+    )
+    with engine.begin() as connection:
+        for table_name, index_name, columns in specs:
+            if inspector.has_table(table_name):
+                connection.exec_driver_sql(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} ON {table_name} ({columns})"
+                )

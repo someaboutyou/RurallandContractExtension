@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import datetime
 
 from pydantic import BaseModel, Field
 
@@ -34,6 +34,9 @@ class SurveyTaskRead(BaseModel):
     contractorUid: str
     cbfbm: str
     cbfmc: str
+    cbfdz: str | None = None
+    cbfcysl: int = 0
+    lxdh: str | None = None
     regionCode: str | None = None
     groupRegionCode: str | None = None
     groupRegionName: str | None = None
@@ -42,6 +45,23 @@ class SurveyTaskRead(BaseModel):
     changeCount: int
     investigatedAt: datetime | None = None
     remark: str | None = None
+
+
+class SurveyDeregisteredContractorRead(BaseModel):
+    id: int
+    batchId: int
+    contractorUid: str
+    cbfbm: str
+    cbfmc: str
+    cbfdz: str | None = None
+    cbfcysl: int = 0
+    lxdh: str | None = None
+    groupRegionCode: str | None = None
+    groupRegionName: str | None = None
+    deregisterReason: str | None = None
+    deregisteredAt: datetime | None = None
+    changeNo: str | None = None
+    canRollback: bool = True
 
 
 class SurveyIssuerRowRead(BaseModel):
@@ -282,8 +302,8 @@ class SurveyParcelGeometryValidateRead(BaseModel):
 
 class SurveySplitParcelRequest(BaseModel):
     dkbm: str = Field(min_length=1, max_length=19)
-    newDkbm: str = Field(min_length=1, max_length=19)
-    newDkmc: str = Field(min_length=1, max_length=50)
+    newDkbm: str | None = Field(default=None, max_length=19)
+    newDkmc: str | None = Field(default=None, max_length=50)
     splitMode: str | None = Field(default="area", max_length=32)
     newScmj: float | None = Field(default=None, gt=0)
     splitDirection: str | None = Field(default=None, max_length=16)
@@ -323,16 +343,25 @@ class SurveyRollbackSwapParcelsRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
 
 
-class SurveySplitHouseholdRequest(BaseModel):
+class SurveySplitHouseholdTarget(BaseModel):
     newCbfbm: str = Field(min_length=1, max_length=18)
     newCbfmc: str = Field(min_length=1, max_length=50)
     memberUids: list[str] = Field(min_length=1)
-    parcelDkbms: list[str] = []
+    parcelDkbms: list[str] = Field(min_length=1)
+    householdHeadMemberUid: str = Field(min_length=1, max_length=36)
+
+
+class SurveySplitHouseholdRequest(BaseModel):
+    newHouseholds: list[SurveySplitHouseholdTarget] = Field(min_length=2)
     reason: str | None = Field(default=None, max_length=500)
 
 
 class SurveyMergeHouseholdRequest(BaseModel):
-    targetContractorUid: str = Field(min_length=1, max_length=36)
+    sourceContractorUids: list[str] = Field(min_length=2)
+    newCbfbm: str = Field(min_length=18, max_length=18)
+    newCbfmc: str = Field(min_length=1, max_length=50)
+    householdHeadMemberUid: str = Field(min_length=1, max_length=36)
+    newAddress: str = Field(min_length=1, max_length=100)
     reason: str | None = Field(default=None, max_length=500)
 
 

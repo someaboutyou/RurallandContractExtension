@@ -112,7 +112,7 @@ if (-not (Test-Path $frontendDist)) {
     Write-Host "The backend will serve API and docs, but no frontend UI."
 }
 
-$env:BACKEND_DIST = "1"
+# $env:BACKEND_DIST = "1"  # Disabled: use dev mode since dist is not built
 $backendProcess = Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "`"$backendScript`"" -WorkingDirectory $projectRoot -PassThru
 Set-Content -Path (Join-Path $stateDir "backend.pid") -Value $backendProcess.Id -Encoding ASCII
 

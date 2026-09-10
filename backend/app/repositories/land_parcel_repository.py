@@ -95,16 +95,11 @@ class LandParcelRepository:
         }
         stmt = text(
             f"""
-            WITH current_dk AS (
-                SELECT DISTINCT ON (dkbm) *
-                FROM public.survey_dk_result
-                WHERE result_status NOT IN ('removed', 'split_source')
-                ORDER BY dkbm, id DESC
-            ),
-            selected AS (
+            WITH selected AS (
                 SELECT ST_Collect(geom) AS geom
-                FROM current_dk
+                FROM public.survey_dk_result
                 WHERE dkbm IN ({placeholders})
+                  AND result_status NOT IN ('removed', 'split_source')
                   AND geom IS NOT NULL
             ),
             extent AS (
@@ -114,30 +109,17 @@ class LandParcelRepository:
             ),
             spatial_candidates AS (
                 SELECT dk.dkbm, dk.dkmc, dk.geom
-                FROM current_dk AS dk, selected, extent
+                FROM public.survey_dk_result AS dk, selected, extent
                 WHERE dk.geom IS NOT NULL
-                  AND (
-                    ST_Intersects(dk.geom, extent.geom)
-                    OR ST_DWithin(dk.geom, selected.geom, :buffer_meters)
-                  )
-            ),
-            nearest_candidates AS (
-                SELECT dk.dkbm, dk.dkmc, dk.geom
-                FROM current_dk AS dk, selected
-                WHERE dk.geom IS NOT NULL
-                ORDER BY dk.geom <-> selected.geom
-                LIMIT 200
-            ),
-            candidates AS (
-                SELECT * FROM spatial_candidates
-                UNION
-                SELECT * FROM nearest_candidates
+                  AND dk.result_status NOT IN ('removed', 'split_source')
+                  AND dk.geom && extent.geom
+                  AND ST_DWithin(dk.geom, selected.geom, :buffer_meters)
             )
             SELECT
                 candidates.dkbm,
                 candidates.dkmc,
                 ST_AsGeoJSON(ST_Transform(candidates.geom, 4326)) AS geometry
-            FROM candidates
+            FROM spatial_candidates AS candidates
             ORDER BY
               CASE WHEN candidates.dkbm IN ({placeholders}) THEN 0 ELSE 1 END,
               candidates.dkbm

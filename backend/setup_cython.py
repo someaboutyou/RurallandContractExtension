@@ -37,6 +37,11 @@ KEEP_AS_PY = {
     "app/services/data_import_service.py",
 }
 
+# Directories whose .py files must all remain uncompiled
+KEEP_AS_PY_DIRS = [
+    "app/services/data_import/",
+]
+
 # Directories containing non-Python runtime files that must be copied to dist/
 COPY_DIRS = [
     "app/workflows",
@@ -83,8 +88,12 @@ def main():
     py_files = collect_py_files(APP_DIR)
 
     # Separate files to compile vs keep as .py
-    compile_files = [f for f in py_files if f not in KEEP_AS_PY]
-    keep_files = [f for f in py_files if f in KEEP_AS_PY]
+    def _is_kept(f):
+        if f in KEEP_AS_PY:
+            return True
+        return any(f.startswith(d) for d in KEEP_AS_PY_DIRS)
+    compile_files = [f for f in py_files if not _is_kept(f)]
+    keep_files = [f for f in py_files if _is_kept(f)]
 
     if not compile_files:
         print("No .py files to compile.")

@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <el-dialog
     v-model="visible"
     title="移除地块"
@@ -15,15 +15,21 @@
     />
 
     <el-form :model="form" label-position="top" class="parcel-form">
-      <el-form-item label="选择要移除的地块" required>
+      <el-form-item label="要移除的地块" required>
+        <el-input
+          v-if="preSelectedDkbm"
+          :model-value="preSelectedDkbm"
+          disabled
+        />
         <el-select
+          v-else
           v-model="form.dkbm"
           placeholder="请选择要移除的地块"
           style="width: 100%"
           @change="onParcelSelect"
         >
           <el-option
-            v-for="p in parcels"
+            v-for="p in eligibleParcels"
             :key="p.dkbm"
             :label="`${p.dkbm} — ${p.dkmc || '未命名'}（${p.scmj || 0} 亩）`"
             :value="p.dkbm"
@@ -73,6 +79,14 @@
 <script setup>
 import { computed, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
+import {
+  isCurrentParcel,
+  isRemovedParcel,
+  isSwappedOutParcel,
+  isSwappedInParcel,
+  isSplitSourceParcel,
+  isSplitGeneratedParcel,
+} from "../../utils/parcelStatusHelpers";
 
 const emit = defineEmits(["done"]);
 
@@ -81,6 +95,7 @@ const submitting = ref(false);
 const batchId = ref(null);
 const contractorUid = ref("");
 const parcels = ref([]);
+const preSelectedDkbm = ref(null);
 
 const dklbMap = { "01": "耕地", "02": "园地", "03": "林地", "04": "草地", "05": "养殖水面", "09": "其他" };
 
@@ -92,22 +107,39 @@ function defaultForm() {
 }
 const form = reactive(defaultForm());
 
+/** 过滤出可移除的地块（当前承包户的现势地块） */
+const eligibleParcels = computed(() =>
+  parcels.value.filter((p) => isCurrentParcel(p) && !isRemovedParcel(p) && !isSwappedOutParcel(p) && !isSwappedInParcel(p) && !isSplitSourceParcel(p) && !isSplitGeneratedParcel(p))
+);
+
 const selectedParcel = computed(() =>
   parcels.value.find((p) => p.dkbm === form.dkbm) || null
 );
 
 const canSubmit = computed(() => form.dkbm.trim());
 
-function open(bid, cuid, parcelList) {
+/**
+ * 打开移除地块对话框
+ * @param {number} bid 批次ID
+ * @param {string} cuid 承包方UID
+ * @param {Array} parcelList 地块列表
+ * @param {string} [dkbm] 预选中的地块编码（从右侧列表选中传入）
+ */
+function open(bid, cuid, parcelList, dkbm) {
   batchId.value = bid;
   contractorUid.value = cuid;
   parcels.value = parcelList || [];
   Object.assign(form, defaultForm());
+  preSelectedDkbm.value = dkbm || null;
+  if (dkbm) {
+    form.dkbm = dkbm;
+  }
   visible.value = true;
 }
 
 function resetForm() {
   Object.assign(form, defaultForm());
+  preSelectedDkbm.value = null;
 }
 
 function onParcelSelect() {

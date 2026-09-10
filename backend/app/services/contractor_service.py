@@ -143,7 +143,7 @@ class ContractorService:
             "publicNoticeReviewer": contractor.gsshr,
             "groupRegionCode": contractor.group_region_code,
             "groupRegionName": contractor.group_region_name,
-            "batchId": db.get(SurveyCbfBase, contractor.base_id).batch_id if contractor.base_id and db.get(SurveyCbfBase, contractor.base_id) else None,
+            "batchId": contractor.source_import_batch_id,
             "contractorUid": contractor.contractor_uid,
             "familyMembers": [],
         }
@@ -313,3 +313,4 @@ class ContractorService:
 
 
 contractor_service = ContractorService()
+

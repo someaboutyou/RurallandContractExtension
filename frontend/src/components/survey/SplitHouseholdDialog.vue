@@ -1,293 +1,156 @@
 <template>
-  <el-dialog
-    v-model="visible"
-    title="分户"
-    width="900px"
-    destroy-on-close
-    @closed="resetForm"
-  >
-    <el-alert
-      title="填写新户信息，分配成员和地块。户主将留在原户，至少保留 1 名成员在原户。"
-      type="info"
-      :closable="false"
-      show-icon
-      class="dialog-alert"
-    />
-
-    <el-form :model="form" label-position="top" class="split-form">
-      <div class="form-row">
-        <el-form-item label="新承包方编码" required class="form-half">
-          <el-input v-model="form.newCbfbm" placeholder="18位编码" maxlength="18" />
+  <el-dialog v-model="visible" title="分户" width="960px" destroy-on-close>
+    <el-alert title="原承包户将注销，所有成员和有效地块必须分配到至少两个新承包户。" type="warning" :closable="false" show-icon />
+    <div class="actions"><el-button type="primary" plain @click="addHousehold">新增承包户</el-button></div>
+    <el-card v-for="(household, index) in households" :key="household.key" class="household-card" shadow="never">
+      <template #header>
+        <div class="card-header"><strong>新承包户 {{ index + 1 }}</strong><el-button v-if="households.length > 2" link type="danger" @click="removeHousehold(index)">删除</el-button></div>
+      </template>
+      <div class="grid">
+        <el-form-item label="承包方编码（自动生成）" required><el-input v-model="household.newCbfbm" readonly /></el-form-item>
+        <el-form-item label="承包方名称" required><el-input v-model="household.newCbfmc" maxlength="50" /></el-form-item>
+        <el-form-item label="家庭成员" required>
+          <el-select v-model="household.memberUids" multiple filterable style="width:100%" @change="handleAssignmentChange('memberUids', index)">
+            <el-option v-for="item in allMembers" :key="item.memberUid" :label="item.name || item.cyxm" :value="item.memberUid" />
+          </el-select>
         </el-form-item>
-        <el-form-item label="新承包方名称" required class="form-half">
-          <el-input v-model="form.newCbfmc" placeholder="例如：张三户（分户）" maxlength="50" />
+        <el-form-item label="承包地块" required>
+          <el-select v-model="household.parcelDkbms" multiple filterable style="width:100%" @change="handleAssignmentChange('parcelDkbms', index)">
+            <el-option v-for="item in allParcels" :key="item.dkbm" :label="`${item.dkbm}${item.dkmc ? ` - ${item.dkmc}` : ''}`" :value="item.dkbm" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="户主" required>
+          <el-select v-model="household.householdHeadMemberUid" style="width:100%" placeholder="请选择本户户主" @change="handleHeadChange(household)">
+            <el-option v-for="item in membersFor(household)" :key="item.memberUid" :label="item.name || item.cyxm" :value="item.memberUid" />
+          </el-select>
+          <div class="head-hint">当前户主：{{ householdHeadName(household) || "尚未指定" }}</div>
         </el-form-item>
       </div>
-    </el-form>
-
-    <el-divider />
-
-    <!-- 成员分配 -->
-    <div class="assign-section">
-      <div class="assign-header">
-        <span class="assign-title">成员分配</span>
-        <span class="assign-hint">原户 {{ stayMembers.length }} 人，新户 {{ moveMembers.length }} 人</span>
-      </div>
-      <div class="assign-panels member-panels">
-        <div class="assign-panel">
-          <div class="panel-label">原户保留</div>
-          <el-table :data="stayMembers" border size="small" max-height="240" @row-click="moveMemberToNew">
-            <el-table-column prop="name" label="姓名" min-width="80" />
-            <el-table-column label="与户主关系" width="90">
-              <template #default="{ row }">{{ relationLabel(row.relationToHead || row.yhzgx) }}</template>
-            </el-table-column>
-            <el-table-column label="户主" width="60">
-              <template #default="{ row }">
-                <el-tag v-if="row.isHouseholdHead" size="small" type="warning">户主</el-tag>
-              </template>
-            </el-table-column>
-          </el-table>
-        </div>
-
-        <div class="assign-actions">
-          <el-button size="small" @click="moveAllMembersToNew">≫</el-button>
-          <el-button size="small" @click="moveAllMembersToStay">≪</el-button>
-        </div>
-
-        <div class="assign-panel">
-          <div class="panel-label panel-label-new">移至新户</div>
-          <el-table :data="moveMembers" border size="small" max-height="240" @row-click="moveMemberToStay">
-            <el-table-column prop="name" label="姓名" min-width="80" />
-            <el-table-column label="与户主关系" width="90">
-              <template #default="{ row }">{{ relationLabel(row.relationToHead || row.yhzgx) }}</template>
-            </el-table-column>
-          </el-table>
-        </div>
-      </div>
-    </div>
-
-    <el-divider />
-
-    <!-- 地块分配 -->
-    <div class="assign-section">
-      <div class="assign-header">
-        <span class="assign-title">地块分配</span>
-        <span class="assign-hint">原户 {{ stayParcels.length }} 块，新户 {{ moveParcels.length }} 块</span>
-      </div>
-      <div class="assign-panels">
-        <div class="assign-panel">
-          <div class="panel-label">原户保留</div>
-          <el-table :data="stayParcels" border size="small" max-height="200" @row-click="moveParcelToNew">
-            <el-table-column prop="dkbm" label="地块编码" min-width="140" />
-            <el-table-column prop="dkmc" label="地块名称" min-width="100" show-overflow-tooltip />
-            <el-table-column prop="scmj" label="面积（亩）" width="90" />
-          </el-table>
-        </div>
-
-        <div class="assign-actions">
-          <el-button size="small" @click="moveAllParcelsToNew">≫</el-button>
-          <el-button size="small" @click="moveAllParcelsToStay">≪</el-button>
-        </div>
-
-        <div class="assign-panel">
-          <div class="panel-label panel-label-new">移至新户</div>
-          <el-table :data="moveParcels" border size="small" max-height="200" @row-click="moveParcelToStay">
-            <el-table-column prop="dkbm" label="地块编码" min-width="140" />
-            <el-table-column prop="dkmc" label="地块名称" min-width="100" show-overflow-tooltip />
-            <el-table-column prop="scmj" label="面积（亩）" width="90" />
-          </el-table>
-        </div>
-      </div>
-    </div>
-
-    <el-divider />
-
-    <el-form :model="form" label-position="top">
-      <el-form-item label="分户原因">
-        <el-input
-          v-model="form.reason"
-          type="textarea"
-          :rows="2"
-          placeholder="说明本次分户的原因"
-          maxlength="500"
-          show-word-limit
-        />
-      </el-form-item>
-    </el-form>
-
-    <template #footer>
-      <el-button @click="visible = false">取消</el-button>
-      <el-button
-        type="primary"
-        :loading="submitting"
-        :disabled="!canSubmit"
-        @click="handleSubmit"
-      >
-        确认分户
-      </el-button>
-    </template>
+    </el-card>
+    <el-form-item label="分户原因" required><el-input v-model="reason" type="textarea" :rows="2" maxlength="500" show-word-limit /></el-form-item>
+    <el-alert v-if="assignmentError" :title="assignmentError" type="error" :closable="false" show-icon />
+    <template #footer><el-button @click="visible=false">取消</el-button><el-button type="primary" :disabled="Boolean(assignmentError)" @click="submit">加入待保存</el-button></template>
   </el-dialog>
 </template>
 
 <script setup>
-import { computed, reactive, ref } from "vue";
+import { computed, ref } from "vue";
 import { ElMessage } from "element-plus";
 
 const emit = defineEmits(["done"]);
-
 const visible = ref(false);
-const submitting = ref(false);
-const batchId = ref(null);
-const contractorUid = ref("");
-
 const allMembers = ref([]);
 const allParcels = ref([]);
-const memberUidsToMove = ref(new Set());
-const parcelDkbmsToMove = ref(new Set());
+const households = ref([]);
+const reason = ref("");
+let keySeed = 0;
+const existingCodes = ref(new Set());
+const codePrefix = ref("");
+const assignmentSnapshots = new Map();
+const emptyHousehold = () => ({ key: ++keySeed, newCbfbm: generateCode(), newCbfmc: "", memberUids: [], parcelDkbms: [], householdHeadMemberUid: "" });
 
-const relationMap = {
-  "01": "户主", "02": "配偶", "03": "子女", "04": "子女",
-  "06": "父母", "08": "兄弟姐妹", "09": "其他",
-};
-function relationLabel(v) {
-  return relationMap[v] || v || "-";
-}
-
-const form = reactive({
-  newCbfbm: "",
-  newCbfmc: "",
-  reason: "",
+const assignmentError = computed(() => {
+  if (households.value.length < 2) return "至少需要两个新承包户";
+  if (!reason.value.trim()) return "请填写分户原因";
+  if (households.value.some(h => !h.newCbfbm.trim() || !h.newCbfmc.trim() || !h.memberUids.length || !h.parcelDkbms.length)) return "请完整填写每个新户，并至少分配一名成员和一块地";
+  if (households.value.some(h => !h.householdHeadMemberUid || !h.memberUids.includes(h.householdHeadMemberUid))) return "请为每个新承包户指定户主";
+  const codes = households.value.map(h => h.newCbfbm.trim());
+  if (new Set(codes).size !== codes.length) return "新承包方编码不能重复";
+  const members = households.value.flatMap(h => h.memberUids);
+  if (members.length !== allMembers.value.length || new Set(members).size !== allMembers.value.length) return "所有成员必须且只能分配一次";
+  const parcels = households.value.flatMap(h => h.parcelDkbms);
+  if (parcels.length !== allParcels.value.length || new Set(parcels).size !== allParcels.value.length) return "所有有效地块必须且只能分配一次";
+  return "";
 });
 
-const stayMembers = computed(() =>
-  allMembers.value.filter((m) => !memberUidsToMove.value.has(m.memberUid))
-);
-const moveMembers = computed(() =>
-  allMembers.value.filter((m) => memberUidsToMove.value.has(m.memberUid))
-);
-const stayParcels = computed(() =>
-  allParcels.value.filter((p) => !parcelDkbmsToMove.value.has(p.dkbm))
-);
-const moveParcels = computed(() =>
-  allParcels.value.filter((p) => parcelDkbmsToMove.value.has(p.dkbm))
-);
-
-const canSubmit = computed(() =>
-  form.newCbfbm.trim() &&
-  form.newCbfmc.trim() &&
-  memberUidsToMove.value.size > 0 &&
-  stayMembers.value.length > 0
-);
-
-function open(bid, cuid, members, parcels) {
-  batchId.value = bid;
-  contractorUid.value = cuid;
+function open(_batchId, _contractorUid, members, parcels, sourceCode, tasks) {
   allMembers.value = members || [];
-  allParcels.value = parcels || [];
-  memberUidsToMove.value = new Set();
-  parcelDkbmsToMove.value = new Set();
-
-  // 默认建议：户主留在原户，其余均分
-  const head = allMembers.value.find((m) => m.isHouseholdHead);
-  const others = allMembers.value.filter((m) => m !== head);
-  const half = Math.ceil(others.length / 2);
-  for (let i = 0; i < half; i++) {
-    if (others[i]) memberUidsToMove.value.add(others[i].memberUid);
-  }
-
-  // 地块默认均分
-  const parcelHalf = Math.ceil(allParcels.value.length / 2);
-  for (let i = 0; i < parcelHalf; i++) {
-    if (allParcels.value[i]) parcelDkbmsToMove.value.add(allParcels.value[i].dkbm);
-  }
-
-  form.newCbfbm = "";
-  form.newCbfmc = "";
-  form.reason = "";
+  allParcels.value = (parcels || []).filter(item => !["removed", "split_source"].includes(item.resultStatus));
+  const digits = String(sourceCode || "").replace(/\D/g, "");
+  codePrefix.value = digits.slice(0, Math.min(14, digits.length));
+  existingCodes.value = new Set((tasks || []).map(item => String(item.cbfbm || "").replace(/\D/g, "")).filter(Boolean));
+  households.value = [emptyHousehold(), emptyHousehold()];
+  allMembers.value.forEach((m, i) => households.value[i % 2].memberUids.push(m.memberUid));
+  allParcels.value.forEach((p, i) => households.value[i % 2].parcelDkbms.push(p.dkbm));
+  households.value.forEach(item => {
+    item.householdHeadMemberUid = item.memberUids[0] || "";
+    applyDefaultContractorName(item);
+    saveSnapshot(item);
+  });
+  reason.value = "";
   visible.value = true;
 }
-
-function resetForm() {
-  memberUidsToMove.value = new Set();
-  parcelDkbmsToMove.value = new Set();
+function generateCode() {
+  const prefix = codePrefix.value;
+  if (!prefix) return "";
+  const suffixLength = 18 - prefix.length;
+  const used = [...existingCodes.value, ...households.value.map(item => item.newCbfbm)].filter(code => code.startsWith(prefix) && code.length === 18);
+  const next = Math.max(0, ...used.map(code => Number(code.slice(prefix.length))).filter(Number.isFinite)) + 1;
+  const code = `${prefix}${String(next).padStart(suffixLength, "0")}`.slice(0, 18);
+  existingCodes.value.add(code);
+  return code;
 }
-
-function moveMemberToNew(row) {
-  memberUidsToMove.value.add(row.memberUid);
-  memberUidsToMove.value = new Set(memberUidsToMove.value);
+function membersFor(household) { const ids = new Set(household.memberUids); return allMembers.value.filter(item => ids.has(item.memberUid)); }
+function householdHeadName(household) { const item = allMembers.value.find(member => member.memberUid === household.householdHeadMemberUid); return item?.name || item?.cyxm || ""; }
+function applyDefaultContractorName(household) {
+  const name = householdHeadName(household);
+  if (name) household.newCbfmc = name;
 }
-function moveMemberToStay(row) {
-  memberUidsToMove.value.delete(row.memberUid);
-  memberUidsToMove.value = new Set(memberUidsToMove.value);
-}
-function moveAllMembersToNew() {
-  for (const m of allMembers.value) memberUidsToMove.value.add(m.memberUid);
-  memberUidsToMove.value = new Set(memberUidsToMove.value);
-}
-function moveAllMembersToStay() {
-  memberUidsToMove.value = new Set();
-}
-
-function moveParcelToNew(row) {
-  parcelDkbmsToMove.value.add(row.dkbm);
-  parcelDkbmsToMove.value = new Set(parcelDkbmsToMove.value);
-}
-function moveParcelToStay(row) {
-  parcelDkbmsToMove.value.delete(row.dkbm);
-  parcelDkbmsToMove.value = new Set(parcelDkbmsToMove.value);
-}
-function moveAllParcelsToNew() {
-  for (const p of allParcels.value) parcelDkbmsToMove.value.add(p.dkbm);
-  parcelDkbmsToMove.value = new Set(parcelDkbmsToMove.value);
-}
-function moveAllParcelsToStay() {
-  parcelDkbmsToMove.value = new Set();
-}
-
-async function handleSubmit() {
-  if (!canSubmit.value) {
-    ElMessage.warning("请填写新户信息，至少移入 1 名成员且原户保留至少 1 名成员");
+function handleHeadChange(household) { applyDefaultContractorName(household); }
+function saveSnapshot(item) { assignmentSnapshots.set(item.key, { memberUids: [...item.memberUids], parcelDkbms: [...item.parcelDkbms] }); }
+function addHousehold() {
+  if (allMembers.value.length <= households.value.length) {
+    ElMessage.warning("没有可继续分配的家庭成员，无法新增承包户");
     return;
   }
-  submitting.value = true;
-  try {
-    const payload = {
-      newCbfbm: form.newCbfbm.trim(),
-      newCbfmc: form.newCbfmc.trim(),
-      memberUids: [...memberUidsToMove.value],
-      parcelDkbms: [...parcelDkbmsToMove.value],
-      reason: form.reason || undefined,
-    };
-    ElMessage.success("分户已加入待保存");
-    visible.value = false;
-    emit("done", { type: "split_household", payload });
-  } catch (e) {
-    ElMessage.error(e?.message || "分户失败");
-  } finally {
-    submitting.value = false;
+  if (allParcels.value.length <= households.value.length) {
+    ElMessage.warning("没有可继续分配的有效地块，无法新增承包户");
+    return;
   }
+  const household = emptyHousehold();
+  households.value.push(household);
+  saveSnapshot(household);
 }
-
+function removeHousehold(index) { households.value.splice(index, 1); }
+function handleAssignmentChange(field, currentIndex) {
+  const current = households.value[currentIndex];
+  if (!current[field].length) {
+    const label = field === "memberUids" ? "家庭成员" : "地块";
+    ElMessage.warning(`${label}不能为空，本次调整已取消`);
+    current[field] = [...(assignmentSnapshots.get(current.key)?.[field] || [])];
+    return;
+  }
+  const selected = new Set(households.value[currentIndex][field]);
+  households.value.forEach((item, index) => { if (index !== currentIndex) item[field] = item[field].filter(value => !selected.has(value)); });
+  const emptyOther = households.value.find((item, index) => index !== currentIndex && !item[field].length);
+  if (emptyOther) {
+    const label = field === "memberUids" ? "家庭成员" : "地块";
+    ElMessage.warning(`调整后其他新承包户的${label}将为空，本次调整已取消`);
+    households.value.forEach(item => { const snapshot = assignmentSnapshots.get(item.key); if (snapshot) item[field] = [...snapshot[field]]; });
+    return;
+  }
+  if (field === "memberUids") households.value.forEach(item => {
+    if (!item.memberUids.includes(item.householdHeadMemberUid)) {
+      item.householdHeadMemberUid = item.memberUids[0] || "";
+      applyDefaultContractorName(item);
+    }
+  });
+  households.value.forEach(saveSnapshot);
+}
+function submit() {
+  if (assignmentError.value) { ElMessage.warning(assignmentError.value); return; }
+  emit("done", { type: "split_household", payload: { newHouseholds: households.value.map(({ newCbfbm, newCbfmc, memberUids, parcelDkbms, householdHeadMemberUid }) => ({ newCbfbm: newCbfbm.trim(), newCbfmc: newCbfmc.trim(), memberUids, parcelDkbms, householdHeadMemberUid })), reason: reason.value.trim() } });
+  visible.value = false;
+  ElMessage.success("分户已加入待保存");
+}
 defineExpose({ open });
 </script>
 
 <style scoped>
-.dialog-alert { margin-bottom: 16px; }
-.split-form { margin-bottom: 0; }
-.form-row { display: flex; gap: 12px; }
-.form-half { flex: 1; min-width: 0; }
-
-.assign-section { margin: 12px 0; }
-.assign-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.assign-title { font-weight: 600; font-size: 14px; }
-.assign-hint { color: #909399; font-size: 12px; }
-
-.assign-panels { display: flex; gap: 10px; align-items: flex-start; }
-.member-panels .assign-panel { flex: 1; min-width: 0; }
-.assign-panel { flex: 1; min-width: 0; }
-.panel-label { font-size: 12px; font-weight: 500; color: #606266; margin-bottom: 4px; }
-.panel-label-new { color: #409eff; }
-.assign-actions {
-  display: flex; flex-direction: column; gap: 4px; padding-top: 20px; flex-shrink: 0;
-}
+.actions { margin: 14px 0; text-align: right; }
+.household-card { margin-bottom: 14px; }
+.card-header { display:flex; align-items:center; justify-content:space-between; }
+.grid { display:grid; grid-template-columns:1fr 1fr; gap:0 16px; }
+.head-hint { margin-top:6px; color:#b88230; font-size:12px; }
+@media (max-width: 720px) { .grid { grid-template-columns:1fr; } }
 </style>

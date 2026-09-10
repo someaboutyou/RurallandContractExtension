@@ -183,6 +183,7 @@ export function useDialogMap(targetRef) {
   const basemapLayers = new Map();
   let dkLayers = [];
   let parcelLayer = null;
+  let initPromise = null;
 
   async function loadBasemapConfigs() {
     try {
@@ -202,6 +203,17 @@ export function useDialogMap(targetRef) {
 
   async function initMap() {
     if (mapRef.value) return;
+    if (initPromise) return initPromise;
+
+    initPromise = initializeMap();
+    try {
+      await initPromise;
+    } finally {
+      initPromise = null;
+    }
+  }
+
+  async function initializeMap() {
 
     await loadBasemapConfigs();
 
@@ -316,7 +328,9 @@ export function useDialogMap(targetRef) {
     if (!extent || extent[0] === Infinity) return;
     mapRef.value?.getView().fit(extent, {
       padding: [40, 40, 40, 40],
-      duration: 400,
+      // Initial fitting should jump directly to the target resolution. An
+      // animated fit causes tile sources to request intermediate zoom levels.
+      duration: 0,
       maxZoom: 18,
     });
   }

@@ -7,7 +7,7 @@
     @closed="resetForm"
   >
     <el-alert
-      title="注销后将删除该承包方及其所有家庭成员、地块关联的调查结果。原始快照保留在 base 表中，可通过变化记录恢复。"
+      title="注销后不会删除承包方、成员、地块和承包地块调查结果，只会把承包方标记为已注销，并将地块与承包地块信息标记为变更状态。"
       type="warning"
       :closable="false"
       show-icon
@@ -16,7 +16,7 @@
 
     <el-descriptions :column="1" border size="small" style="margin-bottom: 16px">
       <el-descriptions-item label="承包方名称">{{ form.contractorName }}</el-descriptions-item>
-      <el-descriptions-item label="承包方代码">{{ form.cbfbm }}</el-descriptions-item>
+      <el-descriptions-item label="承包方编码">{{ form.cbfbm }}</el-descriptions-item>
       <el-descriptions-item label="家庭成员数">{{ form.memberCount }}</el-descriptions-item>
     </el-descriptions>
 
@@ -55,8 +55,6 @@ const emit = defineEmits(["done"]);
 
 const visible = ref(false);
 const submitting = ref(false);
-const batchId = ref(null);
-const contractorUid = ref("");
 
 const form = reactive({
   contractorName: "",
@@ -65,9 +63,7 @@ const form = reactive({
   reason: "",
 });
 
-function open(bid, cuid, contractorName, cbfbm, memberCount) {
-  batchId.value = bid;
-  contractorUid.value = cuid;
+function open(_batchId, _contractorUid, contractorName, cbfbm, memberCount) {
   form.contractorName = contractorName;
   form.cbfbm = cbfbm;
   form.memberCount = memberCount;
@@ -86,23 +82,22 @@ async function handleSubmit() {
   }
   try {
     await ElMessageBox.confirm(
-      `确定注销承包方「${form.contractorName}」吗？此操作将删除其调查结果（包括 ${form.memberCount} 名家庭成员及地块关联），但原始快照保留可恢复。`,
+      `确定注销承包方“${form.contractorName}”吗？注销后会保留调查结果，并将该承包方标记为已注销，地块和承包地块信息改为变更状态。`,
       "二次确认注销",
       { type: "error", confirmButtonText: "确认注销", cancelButtonText: "取消" },
     );
   } catch {
     return;
   }
+
   submitting.value = true;
   try {
-    const payload = {
-      reason: form.reason.trim(),
-    };
+    const payload = { reason: form.reason.trim() };
     ElMessage.success("注销承包方已加入待保存");
     visible.value = false;
     emit("done", { type: "deregister", payload });
-  } catch (e) {
-    ElMessage.error(e?.message || "注销失败");
+  } catch (error) {
+    ElMessage.error(error?.message || "注销失败");
   } finally {
     submitting.value = false;
   }
@@ -112,5 +107,7 @@ defineExpose({ open });
 </script>
 
 <style scoped>
-.dialog-alert { margin-bottom: 16px; }
+.dialog-alert {
+  margin-bottom: 16px;
+}
 </style>

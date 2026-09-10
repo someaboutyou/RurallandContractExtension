@@ -21,7 +21,7 @@
       <span class="section-title">承包方信息</span>
       <el-tag v-if="isAddedContractor" type="success" effect="dark" size="small" class="new-tag">NEW</el-tag>
     </div>
-    <el-form :model="result" label-position="left" label-width="118px" class="contractor-form">
+    <el-form :model="result" label-position="left" label-width="118px" class="contractor-form" :disabled="readonly">
       <div class="form-grid-3">
         <el-form-item label="承包方编码" :class="changedClass('code')">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isContractorFieldChanged('code'), beforeValueText('code'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
@@ -164,7 +164,7 @@
     <!-- 家庭成员（可编辑表格） -->
     <div class="section-header">
       <span class="section-title">家庭成员（{{ visibleMembers.length }} 人）</span>
-      <el-button type="primary" plain size="small" @click="addMember">+ 添加成员</el-button>
+      <el-button type="primary" plain size="small" :disabled="readonly" @click="addMember">+ 添加成员</el-button>
     </div>
 
     <el-table :data="visibleMembers" border size="small" class="member-table">
@@ -182,7 +182,7 @@
       <el-table-column label="姓名" min-width="100">
         <template #default="{ row }">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isMemberFieldChanged(row, 'name'), memberBeforeValueText(row, 'name'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
-            <el-input v-model="row.name" size="small" :disabled="row._deleted" :class="memberChangedClass(row, 'name')" />
+            <el-input v-model="row.name" size="small" :disabled="readonly || row._deleted" :class="memberChangedClass(row, 'name')" />
           </div>
         </template>
       </el-table-column>
@@ -191,7 +191,7 @@
       <el-table-column label="性别" width="80">
         <template #default="{ row }">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isMemberFieldChanged(row, 'gender'), memberBeforeValueText(row, 'gender'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
-            <el-select v-model="row.gender" size="small" :disabled="row._deleted" :class="memberChangedClass(row, 'gender')">
+            <el-select v-model="row.gender" size="small" :disabled="readonly || row._deleted" :class="memberChangedClass(row, 'gender')">
               <el-option label="男" value="1" />
               <el-option label="女" value="2" />
             </el-select>
@@ -203,7 +203,7 @@
       <el-table-column label="证件类型" width="100">
         <template #default="{ row }">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isMemberFieldChanged(row, 'idType'), memberBeforeValueText(row, 'idType'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
-            <el-select v-model="row.idType" size="small" :disabled="row._deleted" :class="memberChangedClass(row, 'idType')">
+            <el-select v-model="row.idType" size="small" :disabled="readonly || row._deleted" :class="memberChangedClass(row, 'idType')">
               <el-option label="身份证" value="1" />
               <el-option label="户口簿" value="2" />
               <el-option label="军官证" value="3" />
@@ -216,7 +216,7 @@
       <el-table-column label="证件号码" min-width="160">
         <template #default="{ row }">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isMemberFieldChanged(row, 'idNo'), memberBeforeValueText(row, 'idNo'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
-            <el-input v-model="row.idNo" size="small" :disabled="row._deleted" :class="memberChangedClass(row, 'idNo')" />
+            <el-input v-model="row.idNo" size="small" :disabled="readonly || row._deleted" :class="memberChangedClass(row, 'idNo')" />
           </div>
         </template>
       </el-table-column>
@@ -229,7 +229,7 @@
               v-model="row.relationToHead"
               size="small"
               filterable
-              :disabled="row._deleted"
+              :disabled="readonly || row._deleted"
               :class="memberChangedClass(row, 'relationToHead')"
               @change="handleRelationChange(row)"
             >
@@ -248,7 +248,7 @@
       <el-table-column label="共有人" width="80">
         <template #default="{ row }">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isMemberFieldChanged(row, 'isCoOwner'), memberBeforeValueText(row, 'isCoOwner'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
-            <el-select v-model="row.isCoOwner" size="small" :disabled="row._deleted" :class="memberChangedClass(row, 'isCoOwner')">
+            <el-select v-model="row.isCoOwner" size="small" :disabled="readonly || row._deleted" :class="memberChangedClass(row, 'isCoOwner')">
               <el-option label="是" value="1" />
               <el-option label="否" value="0" />
             </el-select>
@@ -267,7 +267,7 @@
       <el-table-column label="备注" min-width="120">
         <template #default="{ row }">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isMemberFieldChanged(row, 'note'), memberBeforeValueText(row, 'note'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
-            <el-input v-model="row.note" size="small" :disabled="row._deleted" :class="memberChangedClass(row, 'note')" />
+            <el-input v-model="row.note" size="small" :disabled="readonly || row._deleted" :class="memberChangedClass(row, 'note')" />
           </div>
         </template>
       </el-table-column>
@@ -309,7 +309,7 @@
       <el-table-column label="操作" width="150" fixed="right">
         <template #default="{ row }">
           <el-button
-            v-if="!row._deleted && !row.isHouseholdHead"
+            v-if="!readonly && !row._deleted && !row.isHouseholdHead"
             link
             type="danger"
             size="small"
@@ -318,7 +318,7 @@
             删除
           </el-button>
           <el-button
-            v-if="row._deleted"
+            v-if="!readonly && row._deleted"
             link
             type="primary"
             size="small"
@@ -347,6 +347,7 @@ import ChangeDiffViewer from "./ChangeDiffViewer.vue";
 import { useDictionary } from "../../composables/useDictionary";
 
 const props = defineProps({
+  readonly: { type: Boolean, default: false },
   batchId: { type: Number, required: true },
   contractorUid: { type: String, required: true },
   result: { type: Object, required: true },

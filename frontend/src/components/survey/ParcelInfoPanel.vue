@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div
     v-loading.lock="isValidatingAddGeometry"
     class="parcel-info-panel"
@@ -40,7 +40,7 @@
           plain
           size="small"
           :disabled="actionDisabled || parcels.length === 0"
-          @click="emit('remove-parcel')"
+          @click="handleRemoveParcel"
         >
           移除地块
         </el-button>
@@ -73,16 +73,21 @@
           按图形切割
         </el-button>
         <template v-if="splitForm.splitMethod === 'geometry'">
-          <label class="upload-button" :class="{ disabled: !splitSourceHasGeometry }">
-            <input
-              class="upload-input"
-              type="file"
-              accept=".zip,application/zip"
-              :disabled="!splitSourceHasGeometry"
-              @change="handleSplitShpUpload"
-            />
-            <span>上传 SHP</span>
-          </label>
+          <el-button
+            size="small"
+            :disabled="!splitSourceHasGeometry"
+            @click="$refs.splitShpInput.click()"
+          >
+            上传 SHP
+          </el-button>
+          <input
+            ref="splitShpInput"
+            type="file"
+            accept=".zip,application/zip"
+            style="display: none"
+            @change="handleSplitShpUpload"
+          />
+          
           <el-button
             size="small"
             :disabled="!splitSourceHasGeometry"
@@ -111,13 +116,13 @@
           按面积切割
         </el-button>
         <el-button
+          v-if="splitForm.splitMethod === 'area'"
           size="small"
           type="primary"
           :disabled="!splitCanSubmit"
-          :loading="submittingSplitParcel"
-          @click="submitSplitParcel"
+          @click="splitConfigDialogVisible = true"
         >
-          加入待保存
+          切割设置
         </el-button>
         <el-button size="small" @click="cancelSplitParcelMode">取消切割</el-button>
         <span class="add-mode-hint">
@@ -185,6 +190,13 @@
           </div>
         </div>
       </div>
+        <!-- Validation loading overlay on map -->
+        <div v-if="splitPreviewLoading" class="split-validation-overlay">
+          <div class="split-validation-spinner">
+            <el-icon class="is-loading" :size="32"><Loading /></el-icon>
+            <span>正在验证切割图形...</span>
+          </div>
+        </div>
 
       <div class="parcel-list">
         <el-table
@@ -242,68 +254,55 @@
         </el-table>
 
         <div v-if="selectedParcel" class="parcel-detail" :class="{ 'is-removed': isHistoricalParcel(selectedParcel) }">
-          <el-descriptions :column="2" border size="small" :title="selectedParcel.dkmc">
-            <el-descriptions-item label="地块编码">{{ selectedParcel.dkbm }}</el-descriptions-item>
-            <el-descriptions-item label="实测面积">{{ selectedParcel.scmj }} 亩</el-descriptions-item>
-            <el-descriptions-item label="合同面积">{{ selectedParcel.htmj }} 亩</el-descriptions-item>
-            <el-descriptions-item label="土地利用类型">{{ tdlylxMap[selectedParcel.tdlylx] || selectedParcel.tdlylx || "-" }}</el-descriptions-item>
-            <el-descriptions-item label="东至">{{ selectedParcel.dkdz || "-" }}</el-descriptions-item>
-            <el-descriptions-item label="西至">{{ selectedParcel.dkxz || "-" }}</el-descriptions-item>
-            <el-descriptions-item label="南至">{{ selectedParcel.dknz || "-" }}</el-descriptions-item>
-            <el-descriptions-item label="北至">{{ selectedParcel.dkbz || "-" }}</el-descriptions-item>
-            <el-descriptions-item label="承包方">{{ selectedParcel.cbfmc || "-" }}</el-descriptions-item>
-            <el-descriptions-item label="合同编码">{{ selectedParcel.cbhtbm || "-" }}</el-descriptions-item>
-            <el-descriptions-item v-if="selectedParcel.changeReason" label="变更原因" :span="2">
-              {{ selectedParcel.changeReason }}
-            </el-descriptions-item>
-          </el-descriptions>
-        </div>
-
-        <div v-if="splitModeActive" class="split-config-card">
-          <div class="split-config-title">切割设置</div>
-          <el-form label-position="top" size="small">
-            <div class="split-config-grid">
-              <el-form-item label="新地块编码" required>
-                <el-input v-model="splitForm.newDkbm" maxlength="19" placeholder="请输入新地块编码">
-                  <template #append>
-                    <el-button :loading="generatingSplitCode" @click="handleGenerateSplitCode">自动生成</el-button>
-                  </template>
-                </el-input>
+          <div class="parcel-detail-title">{{ selectedParcel.dkmc || '地块详情' }}</div>
+          <el-form label-position="top" size="small" :disabled="isHistoricalParcel(selectedParcel)">
+            <div class="parcel-detail-grid">
+              <el-form-item label="地块编码">
+                <el-input :model-value="selectedParcel.dkbm" disabled />
               </el-form-item>
-              <el-form-item label="新地块名称" required>
-                <el-input v-model="splitForm.newDkmc" maxlength="50" placeholder="例如：切割地块A" />
+              <el-form-item label="地块名称">
+                <el-input v-model="selectedParcel.dkmc" placeholder="请输入地块名称" />
               </el-form-item>
             </div>
-
-            <div v-if="splitForm.splitMethod === 'area'" class="split-config-grid">
-              <el-form-item label="切出面积（亩）" required>
-                <el-input-number
-                  v-model="splitForm.newScmj"
-                  :min="0.01"
-                  :max="splitMaxArea"
-                  :precision="2"
-                  style="width: 100%"
-                />
+            <div class="parcel-detail-grid">
+              <el-form-item label="实测面积（亩）">
+                <el-input-number v-model="selectedParcel.scmj" :min="0" :precision="2" style="width: 100%" />
               </el-form-item>
-              <el-form-item label="切割方向" required>
-                <el-select v-model="splitForm.splitDirection" style="width: 100%">
-                  <el-option label="从东侧切割" value="east" />
-                  <el-option label="从西侧切割" value="west" />
-                  <el-option label="从南侧切割" value="south" />
-                  <el-option label="从北侧切割" value="north" />
-                </el-select>
+              <el-form-item label="合同面积（亩）">
+                <el-input-number v-model="selectedParcel.htmj" :min="0" :precision="2" style="width: 100%" />
               </el-form-item>
             </div>
-
-            <el-form-item label="切割原因">
-              <el-input
-                v-model="splitForm.reason"
-                type="textarea"
-                :rows="3"
-                maxlength="500"
-                show-word-limit
-                placeholder="请输入切割原因"
-              />
+            <el-form-item label="土地利用类型">
+              <el-select v-model="selectedParcel.tdlylx" style="width: 100%" clearable>
+                <el-option v-for="(label, code) in tdlylxMap" :key="code" :label="label" :value="code" />
+              </el-select>
+            </el-form-item>
+            <div class="parcel-detail-grid">
+              <el-form-item label="东至">
+                <el-input v-model="selectedParcel.dkdz" placeholder="东至" />
+              </el-form-item>
+              <el-form-item label="西至">
+                <el-input v-model="selectedParcel.dkxz" placeholder="西至" />
+              </el-form-item>
+            </div>
+            <div class="parcel-detail-grid">
+              <el-form-item label="南至">
+                <el-input v-model="selectedParcel.dknz" placeholder="南至" />
+              </el-form-item>
+              <el-form-item label="北至">
+                <el-input v-model="selectedParcel.dkbz" placeholder="北至" />
+              </el-form-item>
+            </div>
+            <div class="parcel-detail-grid">
+              <el-form-item label="承包方">
+                <el-input :model-value="selectedParcel.cbfmc || '-'" disabled />
+              </el-form-item>
+              <el-form-item label="合同编码">
+                <el-input :model-value="selectedParcel.cbhtbm || '-'" disabled />
+              </el-form-item>
+            </div>
+            <el-form-item v-if="selectedParcel.changeReason" label="变更原因">
+              <el-input :model-value="selectedParcel.changeReason" disabled type="textarea" :rows="2" />
             </el-form-item>
           </el-form>
         </div>
@@ -328,7 +327,164 @@
       </div>
     </div>
 
-    <AddParcelDialog
+    <!-- Split config dialog -->
+    <el-dialog
+      v-model="splitConfigDialogVisible"
+      title="切割设置"
+      width="680px"
+      :close-on-click-modal="false"
+      destroy-on-close
+      @closed="cancelSplitParcelMode"
+    >
+      <!-- Geometry mode content -->
+      <template v-if="splitForm.splitMethod === 'geometry'">
+        <div v-if="splitPreviewLoading" class="split-preview-loading">
+          <el-icon class="is-loading"><Loading /></el-icon>
+          <span>正在验证切割图形...</span>
+        </div>
+        <template v-else-if="splitPreviewGenerated.length">
+          <div class="split-original-parcel">
+            <el-tag type="info" size="small">历史</el-tag>
+            <span class="split-original-code">{{ splitSourceParcel?.dkbm || "-" }}</span>
+            <span class="split-original-name">{{ splitSourceParcel?.dkmc || "-" }}</span>
+            <span class="split-original-area">{{ splitSourceParcel?.scmj || 0 }} 亩</span>
+          </div>
+          <el-tabs v-model="activeSplitTab" type="card" class="split-parcel-tabs">
+            <el-tab-pane
+              v-for="(parcel, index) in splitPreviewGenerated"
+              :key="parcel.dkbm"
+              :label="'地块 ' + (index + 1)"
+              :name="String(index)"
+            >
+              <el-form label-position="top" size="small">
+                <div class="split-config-grid">
+                  <el-form-item label="地块编码">
+                    <el-input :model-value="parcel.dkbm" disabled />
+                  </el-form-item>
+                  <el-form-item label="地块名称" required>
+                    <el-input
+                      v-model="splitParcelSettings[index].dkmc"
+                      maxlength="50"
+                      placeholder="请输入地块名称"
+                    />
+                  </el-form-item>
+                </div>
+                <div class="split-config-grid">
+                  <el-form-item label="实测面积（亩）">
+                    <el-input :model-value="parcel.scmj || 0" disabled />
+                  </el-form-item>
+                  <el-form-item label="合同面积（亩）">
+                    <el-input-number
+                      v-model="splitParcelSettings[index].htmj"
+                      :min="0"
+                      :precision="2"
+                      style="width: 100%"
+                    />
+                  </el-form-item>
+                </div>
+                <el-form-item label="土地利用类型">
+                  <el-select v-model="splitParcelSettings[index].tdlylx" style="width: 100%" clearable>
+                    <el-option
+                      v-for="(label, code) in tdlylxMap"
+                      :key="code"
+                      :label="label"
+                      :value="code"
+                    />
+                  </el-select>
+                </el-form-item>
+                <div class="split-config-grid">
+                  <el-form-item label="东至">
+                    <el-input v-model="splitParcelSettings[index].dkdz" placeholder="东至" />
+                  </el-form-item>
+                  <el-form-item label="西至">
+                    <el-input v-model="splitParcelSettings[index].dkxz" placeholder="西至" />
+                  </el-form-item>
+                </div>
+                <div class="split-config-grid">
+                  <el-form-item label="南至">
+                    <el-input v-model="splitParcelSettings[index].dknz" placeholder="南至" />
+                  </el-form-item>
+                  <el-form-item label="北至">
+                    <el-input v-model="splitParcelSettings[index].dkbz" placeholder="北至" />
+                  </el-form-item>
+                </div>
+                <el-form-item label="承包方">
+                  <el-input :model-value="splitSourceParcel?.cbfmc || '-'" disabled />
+                </el-form-item>
+              </el-form>
+            </el-tab-pane>
+          </el-tabs>
+          <el-form-item label="切割原因" class="split-reason-field">
+            <el-input
+              v-model="splitForm.reason"
+              type="textarea"
+              :rows="2"
+              maxlength="500"
+              show-word-limit
+              placeholder="请输入切割原因"
+            />
+          </el-form-item>
+        </template>
+      </template>
+      <!-- Area mode content -->
+      <template v-else>
+        <el-form label-position="top" size="small">
+          <div class="split-config-grid">
+            <el-form-item label="新地块编码" required>
+              <el-input v-model="splitForm.newDkbm" maxlength="19" placeholder="请输入新地块编码">
+                <template #append>
+                  <el-button :loading="generatingSplitCode" @click="handleGenerateSplitCode">自动生成</el-button>
+                </template>
+              </el-input>
+            </el-form-item>
+            <el-form-item label="新地块名称" required>
+              <el-input v-model="splitForm.newDkmc" maxlength="50" placeholder="例如：切割地块A" />
+            </el-form-item>
+          </div>
+          <div class="split-config-grid">
+            <el-form-item label="切出面积（亩）" required>
+              <el-input-number
+                v-model="splitForm.newScmj"
+                :min="0.01"
+                :max="splitMaxArea"
+                :precision="2"
+                style="width: 100%"
+              />
+            </el-form-item>
+            <el-form-item label="切割方向" required>
+              <el-select v-model="splitForm.splitDirection" style="width: 100%">
+                <el-option label="从东侧切割" value="east" />
+                <el-option label="从西侧切割" value="west" />
+                <el-option label="从南侧切割" value="south" />
+                <el-option label="从北侧切割" value="north" />
+              </el-select>
+            </el-form-item>
+          </div>
+          <el-form-item label="切割原因">
+            <el-input
+              v-model="splitForm.reason"
+              type="textarea"
+              :rows="3"
+              maxlength="500"
+              show-word-limit
+              placeholder="请输入切割原因"
+            />
+          </el-form-item>
+        </el-form>
+      </template>
+      <template #footer>
+        <el-button @click="splitConfigDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="submittingSplitParcel"
+          :disabled="!splitCanSubmit"
+          @click="submitSplitParcel"
+        >
+          确认切割
+        </el-button>
+      </template>
+    </el-dialog>
+<AddParcelDialog
       ref="addParcelDialog"
       :batch-id="batchId"
       :contractor-uid="contractorUid"
@@ -340,18 +496,31 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
-import shp from "shpjs";
-import Draw from "ol/interaction/Draw";
-import GeoJSON from "ol/format/GeoJSON";
-import VectorLayer from "ol/layer/Vector";
-import VectorSource from "ol/source/Vector";
-import { Fill, Stroke, Style } from "ol/style";
 
 import AddParcelDialog from "./AddParcelDialog.vue";
 import { useDialogMap } from "../../composables/useDialogMap";
-import { generateNextSurveyParcelCode, previewSplitSurveyParcel, validateSurveyParcelGeometry } from "../../api/survey";
+import { useParcelDraftMap } from "../../composables/survey/useParcelDraftMap";
+import { useSplitParcel } from "../../composables/survey/useSplitParcel";
+import { useAddParcelGeometry } from "../../composables/survey/useAddParcelGeometry";
+import {
+  dklbMap,
+  tdlylxMap,
+  formatArea,
+  isCurrentParcel,
+  isHistoricalParcel,
+  isRemovedParcel,
+  isSplitSourceParcel,
+  isSplitGeneratedParcel,
+  isSwappedInParcel,
+  isSwappedOutParcel,
+  isAddedParcel,
+  parcelStatusLabel,
+  parcelStatusType,
+  parcelRowClassName,
+  parcelChangedClass,
+} from "../../utils/parcelStatusHelpers";
 
 const props = defineProps({
   batchId: { type: Number, required: true },
@@ -362,329 +531,94 @@ const props = defineProps({
   isResultLocked: { type: Boolean, default: false },
   savedSwapRecords: { type: Array, default: () => [] },
   savedSplitRecords: { type: Array, default: () => [] },
+  savedRemoveRecords: { type: Array, default: () => [] },
   canRollbackSavedParcelChange: { type: Boolean, default: false },
   rollbackChangeLoadingId: { type: [Number, String], default: null },
 });
 
-const emit = defineEmits(["swap-parcels", "add-parcel", "split-parcel", "remove-parcel", "rollback-saved-swap", "rollback-saved-split"]);
+const emit = defineEmits(["swap-parcels", "add-parcel", "split-parcel", "remove-parcel", "rollback-saved-swap", "rollback-saved-split", "undo-pending-remove", "rollback-saved-remove"]);
 
 const addParcelDialog = ref(null);
 const mapRoot = ref(null);
 const selectedParcel = ref(null);
-const addModeActive = ref(false);
-const splitModeActive = ref(false);
-const uploadedFilename = ref("");
-const splitUploadedFilename = ref("");
-const addValidationError = ref("");
-const addGeometry = ref(null);
-const splitGeometry = ref(null);
-const addDialogSubmitted = ref(false);
-const isValidatingAddGeometry = ref(false);
-const splitDrawMode = ref("");
-const generatingSplitCode = ref(false);
-const submittingSplitParcel = ref(false);
 
-function defaultSplitForm() {
-  return {
-    dkbm: "",
-    newDkbm: "",
-    newDkmc: "",
-    newScmj: 0,
-    splitDirection: "east",
-    splitMethod: "geometry",
-    reason: "",
-  };
-}
+// --- Map + draft layer ---
+const dialogMap = useDialogMap(mapRoot);
+const draftMap = useParcelDraftMap(mapRoot, dialogMap);
+const { activeBasemap, basemapOptions } = draftMap;
 
-const splitForm = reactive(defaultSplitForm());
-
-const addValidation = reactive({
-  checked: false,
-  valid: false,
-  areaMu: null,
-  overlaps: [],
-});
-
-const dklbMap = { "01": "耕地", "02": "园地", "03": "林地", "04": "草地", "05": "养殖水面", "09": "其他" };
-const tdlylxMap = {
-  "011": "水田", "012": "水浇地", "013": "旱地",
-  "021": "果园", "022": "茶园", "023": "其他园地",
-  "031": "有林地", "032": "灌木林地", "033": "其他林地",
-  "041": "天然牧草地", "042": "人工牧草地",
-  "111": "设施农用地", "114": "坑塘水面",
-};
-
-const {
-  mapRef,
-  mapReady,
-  activeBasemap,
-  basemapOptions,
-  initMap,
-  switchBasemap,
-  loadParcels,
-  fitToParcels,
-  focusParcel,
-  clearSelection,
-  updateMapSize,
-  destroyMap,
-} = useDialogMap(mapRoot);
-
+// --- Shared computed (defined before composables to avoid circular refs) ---
 const toolModeActive = computed(() => addModeActive.value || splitModeActive.value);
 const actionDisabled = computed(() => !props.canManage || props.isResultLocked || toolModeActive.value);
 const parcelTableMaxHeight = computed(() => (
-  splitModeActive.value ? "220px" : "calc(92vh - 380px)"
+  splitModeActive.value ? "340px" : "calc(92vh - 380px)"
 ));
-const splitSourceParcel = computed(() =>
-  props.parcels.find((item) => item?.dkbm === splitForm.dkbm && isCurrentParcel(item)) || null
-);
-const splitSourceHasGeometry = computed(() => Boolean(splitSourceParcel.value?.geometry));
-const splitRemainingArea = computed(() => {
-  if (!splitSourceParcel.value) return 0;
-  const area = Number(splitSourceParcel.value.scmj || 0);
-  return Math.max(0, +(area - Number(splitForm.newScmj || 0)).toFixed(2));
-});
-const splitMaxArea = computed(() => {
-  if (!splitSourceParcel.value) return 0;
-  const area = Number(splitSourceParcel.value.scmj || 0);
-  return Math.max(0, +(area - 0.01).toFixed(2));
-});
-const splitCanSubmit = computed(() => {
-  if (!splitModeActive.value) return false;
-  if (!splitForm.dkbm || !splitForm.newDkbm.trim() || !splitForm.newDkmc.trim()) {
-    return false;
-  }
-  if (splitForm.splitMethod === "geometry") {
-    return splitSourceHasGeometry.value && Boolean(splitGeometry.value);
-  }
-  return (
-    splitSourceHasGeometry.value &&
-    Number(splitForm.newScmj) > 0 &&
-    Number(splitForm.newScmj) < Number(splitSourceParcel.value?.scmj || 0) &&
-    Boolean(splitForm.splitDirection)
-  );
-});
-const splitModeAlertType = computed(() => {
-  if (!splitSourceParcel.value) return "warning";
-  if (!splitSourceHasGeometry.value) return "warning";
-  if (splitForm.splitMethod === "geometry") {
-    return splitGeometry.value ? "success" : "info";
-  }
-  return splitCanSubmit.value ? "success" : "info";
-});
-const splitModeAlertText = computed(() => {
-  if (!splitSourceParcel.value) {
-    return "请先在右侧列表中选择待切割地块。";
-  }
-  if (!splitSourceHasGeometry.value) {
-    return "当前地块没有图形数据，无法进行切割。";
-  }
-  if (splitForm.splitMethod === "geometry") {
-    if (!splitGeometry.value) {
-      return "请上传 SHP，或在左侧地图中绘制切割线/切割面。";
-    }
-    return "切割图形已准备好，可以加入待保存。";
-  }
-  return `请填写切出面积和方向，当前预计剩余 ${splitRemainingArea.value} 亩。`;
+
+// --- Split parcel mode ---
+const splitResult = useSplitParcel({
+  parcels: computed(() => props.parcels),
+  draftMap,
+  emit,
+  props,
 });
 
-const addModeAlertType = computed(() => {
-  if (addValidationError.value) return "error";
-  if (isValidatingAddGeometry.value) return "warning";
-  if (!addGeometry.value) return "info";
-  if (!addValidation.checked) return "warning";
-  return addValidation.valid ? "success" : "warning";
+const {
+  splitModeActive,
+  splitPreviewLoading,
+  splitPreviewGenerated,
+  splitParcelSettings,
+  activeSplitTab,
+  splitConfigDialogVisible,
+  splitUploadedFilename,
+  splitGeometry,
+  splitDrawMode,
+  generatingSplitCode,
+  submittingSplitParcel,
+  splitForm,
+  splitSourceParcel,
+  splitSourceHasGeometry,
+  splitRemainingArea,
+  splitCanSubmit,
+  splitModeAlertType,
+  splitModeAlertText,
+  beginSplitParcelMode,
+  cancelSplitParcelMode,
+  switchSplitMethod,
+  clearSplitDraft,
+  handleGenerateSplitCode,
+  handleSplitShpUpload,
+  startSplitDrawMode,
+  submitSplitParcel,
+  selectParcelInSplitMode,
+} = splitResult;
+
+// --- Add parcel geometry mode ---
+const addResult = useAddParcelGeometry({
+  parcels: computed(() => props.parcels),
+  draftMap,
+  emit,
+  props,
+  addParcelDialog,
+  selectedParcel,
 });
 
-const addModeAlertText = computed(() => {
-  if (addValidationError.value) return addValidationError.value;
-  if (isValidatingAddGeometry.value) return "正在核验新增地块图形，请稍候。";
-  if (!addGeometry.value) return "请在左侧地图上直接绘制新增地块，或上传 shp(zip) 图形。";
-  if (!addValidation.checked) return "已获取图形，正在等待核验结果。";
-  if (addValidation.valid) return "图形核验通过，正在打开属性表单。";
-  return "图形与其他地块存在重叠，请重新绘制或重新上传。";
-});
+const {
+  addModeActive,
+  uploadedFilename,
+  isValidatingAddGeometry,
+  addValidation,
+  addModeAlertType,
+  addModeAlertText,
+  addGeometryAreaText,
+  addGeometryValidationText,
+  beginAddParcelMode,
+  cancelAddParcelMode,
+  handleShpUpload,
+  handleAddParcelDone,
+  handleAddParcelDialogClosed,
+} = addResult;
 
-const addGeometryAreaText = computed(() => formatArea(addValidation.areaMu));
-const addGeometryValidationText = computed(() => {
-  if (!addGeometry.value) return "未录入";
-  if (isValidatingAddGeometry.value) return "核验中";
-  if (!addValidation.checked) return "待核验";
-  return addValidation.valid ? "已通过" : `发现 ${addValidation.overlaps.length} 处重叠`;
-});
-
-const geoJsonFormat = new GeoJSON();
-const draftSource = new VectorSource();
-const draftLayer = new VectorLayer({
-  source: draftSource,
-  style: new Style({
-    fill: new Fill({ color: "rgba(37, 99, 235, 0.18)" }),
-    stroke: new Stroke({ color: "#2563eb", width: 2.4 }),
-  }),
-  zIndex: 1000,
-});
-let drawInteraction = null;
-let draftLayerMounted = false;
-
-function logAddParcel(message, extra) {
-  if (extra === undefined) {
-    console.info(`[ParcelInfoPanel:add] ${message}`);
-    return;
-  }
-  console.info(`[ParcelInfoPanel:add] ${message}`, extra);
-}
-
-function formatArea(value) {
-  if (value == null || Number.isNaN(Number(value))) {
-    return "-";
-  }
-  return `${Number(value).toFixed(2)} 亩`;
-}
-
-function buildExistingParcelCodeSet() {
-  return new Set(
-    props.parcels
-      .map((item) => String(item?.dkbm || "").trim())
-      .filter(Boolean),
-  );
-}
-
-function ensureLocalUniqueParcelCode(prefix, sequence, candidate) {
-  const existingCodes = buildExistingParcelCodeSet();
-  let nextSequence = Number(sequence) || 1;
-  let nextCode = String(candidate || "").trim();
-  if (!prefix) {
-    return nextCode;
-  }
-  while (existingCodes.has(nextCode)) {
-    nextSequence += 1;
-    nextCode = `${prefix}${String(nextSequence).padStart(5, "0")}`;
-  }
-  return nextCode;
-}
-
-function resetAddValidation() {
-  addValidation.checked = false;
-  addValidation.valid = false;
-  addValidation.areaMu = null;
-  addValidation.overlaps = [];
-  addValidationError.value = "";
-}
-
-function ensureDraftLayer() {
-  if (!mapRef.value || draftLayerMounted) return;
-  mapRef.value.addLayer(draftLayer);
-  draftLayerMounted = true;
-}
-
-function removeDraftLayer() {
-  if (!mapRef.value || !draftLayerMounted) return;
-  mapRef.value.removeLayer(draftLayer);
-  draftLayerMounted = false;
-}
-
-function stopDraw() {
-  if (drawInteraction && mapRef.value) {
-    mapRef.value.removeInteraction(drawInteraction);
-  }
-  drawInteraction = null;
-  splitDrawMode.value = "";
-}
-
-function clearDraftGeometry() {
-  draftSource.clear();
-  addGeometry.value = null;
-  uploadedFilename.value = "";
-  resetAddValidation();
-}
-
-function fitToDraftGeometry() {
-  if (!mapRef.value || draftSource.getFeatures().length === 0) return;
-  mapRef.value.getView().fit(draftSource.getExtent(), {
-    padding: [50, 50, 50, 50],
-    duration: 250,
-    maxZoom: 18,
-  });
-}
-
-function writeDraftGeometry(feature) {
-  if (!feature) return null;
-  return geoJsonFormat.writeGeometryObject(feature.getGeometry(), {
-    featureProjection: "EPSG:3857",
-    dataProjection: "EPSG:4326",
-    decimals: 8,
-  });
-}
-
-function writeCurrentDraftGeometry() {
-  return writeDraftGeometry(draftSource.getFeatures()[0]);
-}
-
-function parcelChangedClass(row) {
-  return row.isChanged ? "field-changed" : "";
-}
-
-function isRemovedParcel(parcel) {
-  return parcel?.resultStatus === "removed";
-}
-
-function isHistoricalParcel(parcel) {
-  return ["removed", "split_source"].includes(parcel?.resultStatus);
-}
-
-function isCurrentParcel(parcel) {
-  return !isHistoricalParcel(parcel);
-}
-
-function isSwappedOutParcel(parcel) {
-  return isRemovedParcel(parcel) && parcel?.changeType === "swap_parcels";
-}
-
-function isSwappedInParcel(parcel) {
-  return !isRemovedParcel(parcel) && parcel?.changeType === "swap_parcels";
-}
-
-function isSplitSourceParcel(parcel) {
-  return parcel?.resultStatus === "split_source";
-}
-
-function isSplitGeneratedParcel(parcel) {
-  return isCurrentParcel(parcel) && parcel?.resultStatus === "split_generated";
-}
-
-function isAddedParcel(parcel) {
-  return (
-    isCurrentParcel(parcel) &&
-    (
-      parcel?.resultStatus === "added" ||
-      parcel?.changeType === "add_parcel"
-    )
-  );
-}
-
-function parcelStatusLabel(parcel) {
-  if (isSplitSourceParcel(parcel)) return "被切割";
-  if (isSplitGeneratedParcel(parcel)) return "切割生成";
-  if (isSwappedOutParcel(parcel)) return "已换出";
-  if (isSwappedInParcel(parcel)) return "已换入";
-  if (isAddedParcel(parcel)) return "新增";
-  if (parcel?.isChanged || isRemovedParcel(parcel)) return "变更";
-  return "正常";
-}
-
-function parcelStatusType(parcel) {
-  if (isSplitSourceParcel(parcel)) return "warning";
-  if (isSplitGeneratedParcel(parcel)) return "success";
-  if (isSwappedOutParcel(parcel)) return "info";
-  if (isSwappedInParcel(parcel)) return "warning";
-  if (isAddedParcel(parcel)) return "success";
-  if (parcel?.isChanged || isRemovedParcel(parcel)) return "warning";
-  return "success";
-}
-
-function parcelRowClassName({ row }) {
-  return isHistoricalParcel(row) ? "parcel-row-removed" : "";
-}
-
+// --- Parcel change records (need props/emit context) ---
 function findSavedSwapRecord(parcel) {
   return (props.savedSwapRecords || []).find((item) => (item.swappedIn || []).includes(parcel?.dkbm)) || null;
 }
@@ -693,18 +627,30 @@ function findSavedSplitRecord(parcel) {
   return (props.savedSplitRecords || []).find((item) => item.originalDkbm === parcel?.dkbm) || null;
 }
 
+function findSavedRemoveRecord(parcel) {
+  if (!isRemovedParcel(parcel) || parcel._pending) return null;
+  return (props.savedRemoveRecords || []).find((item) => item.removedDkbm === parcel?.dkbm) || null;
+}
+
 function parcelRollbackChangeId(parcel) {
-  return findSavedSplitRecord(parcel)?.id || findSavedSwapRecord(parcel)?.id || null;
+  if (isRemovedParcel(parcel) && parcel._pending) return undefined;
+  return findSavedSplitRecord(parcel)?.id || findSavedSwapRecord(parcel)?.id || findSavedRemoveRecord(parcel)?.id || null;
 }
 
 function parcelActionLabel(parcel) {
   if (findSavedSplitRecord(parcel)) return "撤回切割";
   if (findSavedSwapRecord(parcel)) return "撤回互换";
+  if (findSavedRemoveRecord(parcel)) return "撤回移除";
+  if (isRemovedParcel(parcel) && parcel._pending && parcel.changeType === "remove_parcel") return "撤回移除";
   return "";
 }
 
 function parcelActionDisabled(parcel) {
-  return !props.canRollbackSavedParcelChange || toolModeActive.value || !parcelActionLabel(parcel);
+  if (!parcelActionLabel(parcel)) return true;
+  if (toolModeActive.value) return true;
+  if (isRemovedParcel(parcel) && parcel._pending && parcel.changeType === "remove_parcel") return !props.canManage || props.isResultLocked;
+  if (findSavedRemoveRecord(parcel)) return !props.canRollbackSavedParcelChange;
+  return !props.canRollbackSavedParcelChange;
 }
 
 function handleParcelAction(parcel) {
@@ -716,6 +662,15 @@ function handleParcelAction(parcel) {
   const swapRecord = findSavedSwapRecord(parcel);
   if (swapRecord) {
     emit("rollback-saved-swap", swapRecord);
+    return;
+  }
+  const removeRecord = findSavedRemoveRecord(parcel);
+  if (removeRecord) {
+    emit("rollback-saved-remove", removeRecord);
+    return;
+  }
+  if (isRemovedParcel(parcel) && parcel._pending && parcel.changeType === "remove_parcel") {
+    emit("undo-pending-remove", parcel.dkbm);
   }
 }
 
@@ -747,16 +702,11 @@ function parcelChangeTip(parcel) {
   return messages.join("；");
 }
 
+// --- Parcel selection ---
 function selectParcel(parcel) {
   selectedParcel.value = parcel;
-  focusParcel(parcel.dkbm);
-  if (splitModeActive.value && isCurrentParcel(parcel)) {
-    if (splitForm.dkbm !== parcel.dkbm) {
-      splitForm.dkbm = parcel.dkbm;
-      splitForm.newScmj = 0;
-      clearSplitDraft();
-    }
-  }
+  draftMap.focusParcel(parcel.dkbm);
+  selectParcelInSplitMode(parcel);
 }
 
 function handleSplitParcel() {
@@ -770,518 +720,66 @@ function handleSplitParcel() {
   }
   if (!selectedParcel.value) {
     selectedParcel.value = parcel;
-    focusParcel(parcel.dkbm);
+    draftMap.focusParcel(parcel.dkbm);
   }
   beginSplitParcelMode(parcel);
 }
 
+
+function handleRemoveParcel() {
+  const parcel = selectedParcel.value;
+  if (!parcel || !isCurrentParcel(parcel) || isRemovedParcel(parcel)) {
+    ElMessage.warning("请先在右侧列表中选中需要移除的地块");
+    return;
+  }
+  if (isSwappedOutParcel(parcel) || isSwappedInParcel(parcel)) {
+    ElMessage.warning("互换的地块不能直接移除，请先撤回互换操作");
+    return;
+  }
+  if (isSplitSourceParcel(parcel) || isSplitGeneratedParcel(parcel)) {
+    ElMessage.warning("切割相关的地块不能直接移除，请先撤回切割操作");
+    return;
+  }
+  emit("remove-parcel", parcel.dkbm);
+}
 function handleBasemapChange(key) {
-  switchBasemap(key);
+  draftMap.switchBasemap(key);
 }
 
-async function startDrawMode() {
-  if (!addModeActive.value || !mapRef.value) return;
-  logAddParcel("startDrawMode", {
-    addModeActive: addModeActive.value,
-    hasMap: Boolean(mapRef.value),
-  });
-  stopDraw();
-  drawInteraction = new Draw({
-    source: draftSource,
-    type: "Polygon",
-  });
-  drawInteraction.on("drawstart", () => {
-    logAddParcel("drawstart");
-    draftSource.clear();
-    addGeometry.value = null;
-    resetAddValidation();
-    uploadedFilename.value = "";
-  });
-  drawInteraction.on("drawend", async (event) => {
-    logAddParcel("drawend");
-    addGeometry.value = writeDraftGeometry(event.feature) || writeCurrentDraftGeometry();
-    logAddParcel("draw geometry prepared", {
-      geometryType: addGeometry.value?.type || null,
-      hasGeometry: Boolean(addGeometry.value),
-    });
-    fitToDraftGeometry();
-    await validateAddGeometry();
-  });
-  mapRef.value.addInteraction(drawInteraction);
-}
-
-async function beginAddParcelMode() {
-  logAddParcel("beginAddParcelMode", {
-    batchId: props.batchId,
-    contractorUid: props.contractorUid,
-    parcelCount: props.parcels.length,
-  });
-  addModeActive.value = true;
-  clearSelection();
-  selectedParcel.value = null;
-  clearDraftGeometry();
+// --- Lifecycle ---
+async function renderParcelsOnMap(list) {
   await nextTick();
-  if (!mapReady.value) {
-    await initMap();
-  }
-  ensureDraftLayer();
-  mapRef.value?.updateSize();
-  await startDrawMode();
-  ElMessage.info("请直接在地图上绘制新增地块，或上传 SHP 图形");
-}
-
-function finishAddParcelMode() {
-  addModeActive.value = false;
-  stopDraw();
-  clearDraftGeometry();
-}
-
-function cancelAddParcelMode() {
-  addDialogSubmitted.value = false;
-  finishAddParcelMode();
-}
-
-async function beginSplitParcelMode(parcel) {
-  if (!parcel) return;
-  splitModeActive.value = true;
-  splitForm.dkbm = parcel.dkbm;
-  splitForm.newScmj = 0;
-  splitForm.splitMethod = "geometry";
-  splitForm.reason = "";
-  splitForm.newDkbm = "";
-  splitForm.newDkmc = "";
-  clearSplitDraft();
-  await nextTick();
-  if (!mapReady.value) {
-    await initMap();
-  }
-  ensureDraftLayer();
-  mapRef.value?.updateSize();
-  focusParcel(parcel.dkbm);
-  ElMessage.info("请在工具栏下方选择上传 SHP、绘图切割，或切换到按面积切割。");
-}
-
-function finishSplitParcelMode() {
-  splitModeActive.value = false;
-  stopDraw();
-  clearSplitDraft();
-  Object.assign(splitForm, defaultSplitForm());
-}
-
-function cancelSplitParcelMode() {
-  finishSplitParcelMode();
-}
-
-function switchSplitMethod(method) {
-  splitForm.splitMethod = method;
-  splitForm.newScmj = 0;
-  if (method !== "geometry") {
-    stopDraw();
-    clearSplitDraft();
-  }
-}
-
-function clearSplitDraft() {
-  draftSource.clear();
-  splitGeometry.value = null;
-  splitUploadedFilename.value = "";
-}
-
-async function handleGenerateSplitCode() {
-  if (!props.batchId || !props.contractorUid) {
-    ElMessage.warning("当前承包方信息不完整，无法生成地块编码");
-    return;
-  }
-  generatingSplitCode.value = true;
-  try {
-    const { data } = await generateNextSurveyParcelCode(props.batchId, props.contractorUid);
-    const payload = data.data || {};
-    splitForm.newDkbm = ensureLocalUniqueParcelCode(payload.prefix, payload.sequence, payload.dkbm);
-    ElMessage.success("已生成新地块编码");
-  } catch (error) {
-    ElMessage.error(error.response?.data?.detail || "生成地块编码失败");
-  } finally {
-    generatingSplitCode.value = false;
-  }
-}
-
-function collectSplitGeometries(geometry, bucket) {
-  if (!geometry || typeof geometry !== "object") return;
-  if (geometry.type === "Feature") {
-    collectSplitGeometries(geometry.geometry, bucket);
-    return;
-  }
-  if (geometry.type === "FeatureCollection") {
-    for (const feature of geometry.features || []) {
-      collectSplitGeometries(feature, bucket);
-    }
-    return;
-  }
-  if (Array.isArray(geometry)) {
-    for (const item of geometry) {
-      collectSplitGeometries(item, bucket);
-    }
-    return;
-  }
-  if (geometry.type === "LineString") {
-    bucket.lines.push(geometry.coordinates);
-    return;
-  }
-  if (geometry.type === "MultiLineString") {
-    for (const line of geometry.coordinates || []) {
-      bucket.lines.push(line);
-    }
-    return;
-  }
-  if (geometry.type === "Polygon") {
-    bucket.polygons.push(geometry.coordinates);
-    return;
-  }
-  if (geometry.type === "MultiPolygon") {
-    for (const polygon of geometry.coordinates || []) {
-      bucket.polygons.push(polygon);
-    }
-  }
-}
-
-function normalizeUploadedSplitGeometry(parsed) {
-  const bucket = { lines: [], polygons: [] };
-  collectSplitGeometries(parsed, bucket);
-  if (bucket.lines.length && bucket.polygons.length) {
-    throw new Error("上传文件不能同时包含切割线和切割面");
-  }
-  if (bucket.lines.length === 1) {
-    return { type: "LineString", coordinates: bucket.lines[0] };
-  }
-  if (bucket.lines.length > 1) {
-    return { type: "MultiLineString", coordinates: bucket.lines };
-  }
-  if (bucket.polygons.length === 1) {
-    return { type: "Polygon", coordinates: bucket.polygons[0] };
-  }
-  if (bucket.polygons.length > 1) {
-    return { type: "MultiPolygon", coordinates: bucket.polygons };
-  }
-  throw new Error("上传文件中未识别到可用于切割的线或面");
-}
-
-function applySplitGeometryToMap(geometry) {
-  draftSource.clear();
-  const feature = geoJsonFormat.readFeature(
-    { type: "Feature", geometry, properties: {} },
-    {
-      dataProjection: "EPSG:4326",
-      featureProjection: "EPSG:3857",
-    },
-  );
-  draftSource.addFeature(feature);
-  splitGeometry.value = geometry;
-  fitToDraftGeometry();
-}
-
-async function handleSplitShpUpload(event) {
-  const file = event.target.files?.[0];
-  event.target.value = "";
-  if (!file || !splitModeActive.value || !splitSourceHasGeometry.value) return;
-  try {
-    const buffer = await file.arrayBuffer();
-    const parsed = await shp(buffer);
-    const geometry = normalizeUploadedSplitGeometry(parsed);
-    splitUploadedFilename.value = file.name;
-    stopDraw();
-    applySplitGeometryToMap(geometry);
-    ElMessage.success("切割图形已载入");
-  } catch (error) {
-    splitUploadedFilename.value = "";
-    clearSplitDraft();
-    ElMessage.error(error?.message || "SHP 解析失败");
-  }
-}
-
-function startSplitDrawMode(mode) {
-  if (!splitModeActive.value || !mapRef.value || !splitSourceHasGeometry.value) {
-    ElMessage.warning("请先选择带图形的地块");
-    return;
-  }
-  splitForm.splitMethod = "geometry";
-  stopDraw();
-  clearSplitDraft();
-  splitDrawMode.value = mode;
-  drawInteraction = new Draw({
-    source: draftSource,
-    type: mode === "polygon" ? "Polygon" : "LineString",
-  });
-  drawInteraction.on("drawstart", () => {
-    draftSource.clear();
-    splitGeometry.value = null;
-    splitUploadedFilename.value = "";
-  });
-  drawInteraction.on("drawend", (event) => {
-    const geometry = writeDraftGeometry(event.feature) || writeCurrentDraftGeometry();
-    if (!geometry) {
-      ElMessage.warning("切割图形无效，请重新绘制");
-      return;
-    }
-    splitGeometry.value = geometry;
-    splitUploadedFilename.value = "";
-    fitToDraftGeometry();
-    stopDraw();
-  });
-  mapRef.value.addInteraction(drawInteraction);
-}
-
-async function submitSplitParcel() {
-  if (!splitCanSubmit.value) {
-    ElMessage.warning("请先补全切割信息");
-    return;
-  }
-  const payload = {
-    dkbm: splitForm.dkbm,
-    newDkbm: splitForm.newDkbm.trim(),
-    newDkmc: splitForm.newDkmc.trim(),
-    reason: splitForm.reason?.trim() || undefined,
-  };
-  if (splitForm.splitMethod === "geometry") {
-    payload.splitMode = "geometry";
-    payload.splitGeometry = splitGeometry.value;
-    payload.geometrySourceSrid = 4326;
-  } else {
-    payload.splitMode = "area";
-    payload.newScmj = Number(splitForm.newScmj);
-    payload.splitDirection = splitForm.splitDirection;
-  }
-  submittingSplitParcel.value = true;
-  try {
-    const { data } = await previewSplitSurveyParcel(props.batchId, props.contractorUid, payload);
-    const generatedParcels = Array.isArray(data.data?.generatedParcels) ? data.data.generatedParcels : [];
-    if (generatedParcels.length < 2) {
-      ElMessage.error("切割结果至少应生成 2 个现势地块");
-      return;
-    }
-    payload.generatedParcels = generatedParcels.map((item) => ({
-      dkbm: item.dkbm,
-      dkmc: item.dkmc,
-      scmj: item.scmj,
-      htmj: item.htmj,
-      geometry: item.geometry,
-    }));
-    emit("split-parcel", { type: "split_parcel", payload });
-    finishSplitParcelMode();
-    ElMessage.success(`切割地块已加入待保存，将生成 ${generatedParcels.length} 个现势地块`);
-  } catch (error) {
-    ElMessage.error(error.response?.data?.detail || "切割地块失败");
-  } finally {
-    submittingSplitParcel.value = false;
-  }
-}
-
-function collectPolygonCoordinates(geometry, target) {
-  if (!geometry || typeof geometry !== "object") return;
-  if (geometry.type === "Feature") {
-    collectPolygonCoordinates(geometry.geometry, target);
-    return;
-  }
-  if (geometry.type === "FeatureCollection") {
-    for (const feature of geometry.features || []) {
-      collectPolygonCoordinates(feature, target);
-    }
-    return;
-  }
-  if (Array.isArray(geometry)) {
-    for (const item of geometry) {
-      collectPolygonCoordinates(item, target);
-    }
-    return;
-  }
-  if (geometry.type === "Polygon") {
-    target.push(geometry.coordinates);
-    return;
-  }
-  if (geometry.type === "MultiPolygon") {
-    for (const polygon of geometry.coordinates || []) {
-      target.push(polygon);
-    }
-  }
-}
-
-function normalizeUploadedGeometry(parsed) {
-  const polygons = [];
-  collectPolygonCoordinates(parsed, polygons);
-  if (!polygons.length) {
-    throw new Error("上传文件中未识别到面要素");
-  }
-  if (polygons.length === 1) {
-    return { type: "Polygon", coordinates: polygons[0] };
-  }
-  return { type: "MultiPolygon", coordinates: polygons };
-}
-
-function applyUploadedGeometryToMap(geometry) {
-  draftSource.clear();
-  const feature = geoJsonFormat.readFeature(
-    { type: "Feature", geometry, properties: {} },
-    {
-      dataProjection: "EPSG:4326",
-      featureProjection: "EPSG:3857",
-    },
-  );
-  draftSource.addFeature(feature);
-  addGeometry.value = geometry;
-  fitToDraftGeometry();
-}
-
-async function handleShpUpload(event) {
-  const file = event.target.files?.[0];
-  event.target.value = "";
-  if (!file || !addModeActive.value) return;
-  uploadedFilename.value = file.name;
-  logAddParcel("handleShpUpload", {
-    filename: file.name,
-    size: file.size,
-  });
-  try {
-    const buffer = await file.arrayBuffer();
-    const parsed = await shp(buffer);
-    const geometry = normalizeUploadedGeometry(parsed);
-    applyUploadedGeometryToMap(geometry);
-    logAddParcel("shp geometry prepared", {
-      geometryType: geometry?.type || null,
-    });
-    await validateAddGeometry();
-  } catch (error) {
-    logAddParcel("handleShpUpload error", {
-      message: error?.message || String(error),
-    });
-    uploadedFilename.value = "";
-    addValidationError.value = error.message || "SHP 解析失败，请确认上传的是标准 shp 压缩包";
-    draftSource.clear();
-    addGeometry.value = null;
-    resetAddValidation();
-    ElMessage.error(addValidationError.value);
-  }
-}
-
-async function validateAddGeometry() {
-  if (!addModeActive.value || !addGeometry.value || !props.batchId || !props.contractorUid) {
-    logAddParcel("validateAddGeometry skipped", {
-      addModeActive: addModeActive.value,
-      hasGeometry: Boolean(addGeometry.value),
-      batchId: props.batchId,
-      contractorUid: props.contractorUid,
-    });
-    return;
-  }
-  isValidatingAddGeometry.value = true;
-  resetAddValidation();
-  stopDraw();
-  try {
-    const payload = {
-      geometry: addGeometry.value,
-      geometrySourceSrid: 4326,
-      localParcels: props.parcels
-        .filter((item) => item?.geometry && isCurrentParcel(item))
-        .map((item) => ({
-          dkbm: item.dkbm,
-          dkmc: item.dkmc,
-          cbfbm: item.cbfbm,
-          cbfmc: item.cbfmc,
-          resultStatus: item.resultStatus,
-          geometry: item.geometry,
-        })),
-    };
-    logAddParcel("validateAddGeometry request", {
-      batchId: props.batchId,
-      contractorUid: props.contractorUid,
-      geometryType: payload.geometry?.type || null,
-      localParcelCount: payload.localParcels.length,
-    });
-    const { data } = await validateSurveyParcelGeometry(props.batchId, props.contractorUid, payload);
-    const result = data.data || {};
-    logAddParcel("validateAddGeometry response", result);
-    addValidation.checked = true;
-    addValidation.valid = Boolean(result.valid);
-    addValidation.areaMu = result.areaMu ?? null;
-    addValidation.overlaps = Array.isArray(result.overlaps) ? result.overlaps : [];
-    if (result.valid) {
-      stopDraw();
-      addDialogSubmitted.value = false;
-      addParcelDialog.value?.open({
-        geometry: addGeometry.value,
-        geometrySourceSrid: 4326,
-        scmj: result.areaMu ?? null,
-        htmj: result.areaMu ?? null,
-      });
-    } else {
-      ElMessage.warning("新增地块图形与其他地块存在重叠，请重新绘制或重新上传");
-      logAddParcel("validateAddGeometry invalid", {
-        overlapCount: addValidation.overlaps.length,
-      });
-      clearDraftGeometry();
-      await startDrawMode();
-    }
-  } catch (error) {
-    logAddParcel("validateAddGeometry error", {
-      message: error?.response?.data?.detail || error?.message || String(error),
-    });
-    addValidation.checked = true;
-    addValidation.valid = false;
-    addValidation.areaMu = null;
-    addValidation.overlaps = [];
-    addValidationError.value = error.response?.data?.detail || error.message || "图形核验失败";
-    clearDraftGeometry();
-    ElMessage.error(addValidationError.value);
-    await startDrawMode();
-  } finally {
-    isValidatingAddGeometry.value = false;
-  }
-}
-
-function handleAddParcelDone(operation) {
-  addDialogSubmitted.value = true;
-  emit("add-parcel", operation);
-  finishAddParcelMode();
-}
-
-function handleAddParcelDialogClosed({ submitted }) {
-  if (submitted || addDialogSubmitted.value) {
-    addDialogSubmitted.value = false;
-    return;
-  }
-  cancelAddParcelMode();
+  if (!draftMap.mapReady.value) await draftMap.initMap();
+  draftMap.ensureDraftLayer();
+  // Wait until the lazy tab and dialog transition have produced a measurable
+  // map viewport before calculating the target extent.
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  if (!mapRoot.value?.clientWidth || !mapRoot.value?.clientHeight) return;
+  draftMap.updateMapSize();
+  draftMap.loadParcels(list || []);
+  if (list?.length) draftMap.fitToParcels();
 }
 
 watch(
   () => props.parcels,
   async (list) => {
-    if (!mapReady.value) {
-      await initMap();
-      ensureDraftLayer();
-    }
-    loadParcels(list || []);
-    if (list?.length) {
-      fitToParcels();
-    }
-    if (toolModeActive.value && draftSource.getFeatures().length) {
-      fitToDraftGeometry();
+    await renderParcelsOnMap(list);
+    if (toolModeActive.value && draftMap.draftSource.getFeatures().length) {
+      draftMap.fitToDraftGeometry();
     }
   },
   { immediate: false, deep: true },
 );
 
 onMounted(async () => {
-  if (!mapReady.value) {
-    await initMap();
-  }
-  ensureDraftLayer();
-  setTimeout(() => {
-    if (mapRoot.value) updateMapSize();
-  }, 200);
+  await renderParcelsOnMap(props.parcels);
 });
 
 onBeforeUnmount(() => {
-  stopDraw();
-  removeDraftLayer();
-  destroyMap();
+  draftMap.stopDraw();
+  splitDrawMode.value = "";
+  draftMap.removeDraftLayer();
+  draftMap.destroyMap();
 });
 </script>
 
@@ -1410,6 +908,35 @@ onBeforeUnmount(() => {
   background: rgba(194, 65, 12, 0.92);
 }
 
+.split-validation-overlay {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 4px;
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  left: 0;
+  position: absolute;
+  right: 0;
+  top: 0;
+  z-index: 20;
+}
+
+.split-validation-spinner {
+  align-items: center;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  color: #9a3412;
+  display: flex;
+  font-size: 14px;
+  font-weight: 600;
+  gap: 10px;
+  padding: 16px 24px;
+}
+
+
 .map-add-meta {
   background: rgba(255, 255, 255, 0.96);
   border: 1px solid rgba(191, 219, 254, 0.95);
@@ -1433,7 +960,12 @@ onBeforeUnmount(() => {
   overflow-y: auto;
   padding-right: 2px;
 }
-.parcel-detail { flex-shrink: 0; max-height: 36vh; overflow-y: auto; border-radius: 4px; }
+.parcel-detail { flex-shrink: 0; max-height: 36vh; overflow-y: auto; border-radius: 4px; padding: 10px 12px; border: 1px solid #ebeef5; }
+.parcel-detail.is-removed { background: #f4f4f5; }
+.parcel-detail-title { color: #303133; font-size: 14px; font-weight: 600; margin-bottom: 10px; }
+.parcel-detail-grid { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.parcel-detail :deep(.el-form-item) { margin-bottom: 10px; }
+.parcel-detail :deep(.el-form-item__label) { padding: 0 0 4px; font-size: 12px; }
 .parcel-detail.is-removed { background: #f4f4f5; border: 1px solid #dcdfe6; padding: 8px; }
 .field-changed { background-color: #fdf6ec; padding: 2px 6px; border-radius: 3px; }
 .parcel-row-action-placeholder { color: #c0c4cc; }
@@ -1443,11 +975,7 @@ onBeforeUnmount(() => {
   border: 1px solid #fed7aa;
   border-radius: 10px;
   flex-shrink: 0;
-  order: -1;
   padding: 12px;
-  position: sticky;
-  top: 0;
-  z-index: 1;
 }
 
 .split-config-title {
@@ -1461,6 +989,61 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 10px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.split-preview-loading {
+  align-items: center;
+  color: #9a3412;
+  display: flex;
+  font-size: 13px;
+  gap: 8px;
+  justify-content: center;
+  padding: 16px 0;
+}
+
+.split-original-parcel {
+  align-items: center;
+  background: #f4f4f5;
+  border: 1px solid #dcdfe6;
+  border-radius: 8px;
+  display: flex;
+  font-size: 12px;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+}
+
+.split-original-code {
+  color: #606266;
+  font-weight: 600;
+}
+
+.split-original-name {
+  color: #909399;
+  flex: 1;
+}
+
+.split-original-area {
+  color: #909399;
+}
+
+.split-parcel-tabs {
+  margin-bottom: 10px;
+}
+
+.split-parcel-tabs :deep(.el-tabs__header) {
+  margin-bottom: 8px;
+}
+
+.split-parcel-info {
+  color: #909399;
+  display: flex;
+  font-size: 12px;
+  gap: 16px;
+  margin-top: 4px;
+}
+
+.split-reason-field {
+  margin-bottom: 0;
 }
 
 .overlap-list {
@@ -1517,3 +1100,6 @@ onBeforeUnmount(() => {
   }
 }
 </style>
+
+
+

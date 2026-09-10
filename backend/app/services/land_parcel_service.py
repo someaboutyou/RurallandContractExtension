@@ -149,7 +149,6 @@ class LandParcelService:
         cbdkxx_result_rows = db.scalars(
             select(SurveyCbdkxxResult).where(
                 SurveyCbdkxxResult.cbfbm == cbfbm,
-                SurveyCbdkxxResult.result_status != "removed",
             ).order_by(SurveyCbdkxxResult.dkbm)
         ).all()
         cbdkxx_base_rows = db.scalars(

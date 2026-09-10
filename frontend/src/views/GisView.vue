@@ -262,7 +262,7 @@
             <div class="gis-property-head" @pointerdown="startPropertyPanelDrag">
               <div>
                 <div class="gis-property-title">{{ selectedParcel ? "承包方卡片" : ui.attrTitle }}</div>
-                <div v-if="selectedParcel" class="gis-property-subtitle">{{ selectedParcel.cbfmc || selectedParcel.dkbm || ui.unknown }}</div>
+                <div v-if="selectedParcel" class="gis-property-subtitle">{{ contractorInfo?.cbfmc || selectedParcel.dkbm || ui.unknown }}</div>
               </div>
               <button type="button" class="gis-property-close" :aria-label="ui.clearSelection" @pointerdown.stop @click.stop="clearSelection">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
@@ -286,7 +286,7 @@
                 </button>
               </div>
 
-              <div v-if="activeParcelTab === 'contractor'" class="gis-card-pane">
+                                          <div v-if="activeParcelTab === 'contractor'" class="gis-card-pane">
                 <div class="gis-info-grid">
                   <div v-for="item in contractorInfoRows" :key="item.label" class="gis-info-cell">
                     <span>{{ item.label }}</span>
@@ -315,7 +315,7 @@
                 </div>
               </div>
 
-              <div v-else-if="activeParcelTab === 'issuer'" class="gis-card-pane">
+<div v-else-if="activeParcelTab === 'issuer'" class="gis-card-pane">
                 <div class="gis-info-grid">
                   <div v-for="item in issuerInfoRows" :key="item.label" class="gis-info-cell">
                     <span>{{ item.label }}</span>
@@ -324,16 +324,43 @@
                 </div>
               </div>
 
-              <div v-else-if="activeParcelTab === 'parcel'" class="gis-card-pane">
-                <div class="gis-info-grid">
-                  <div v-for="item in parcelInfoRows" :key="item.label" class="gis-info-cell">
-                    <span>{{ item.label }}</span>
-                    <strong>{{ item.value }}</strong>
+                            <div v-else-if="activeParcelTab === 'parcel'" class="gis-card-pane">
+                <div class="gis-table-title">承包地块列表</div>
+                <div class="gis-mini-table">
+                  <div class="gis-mini-table-row gis-mini-table-head">
+                    <span>序号</span>
+                    <span>地块编码</span>
+                    <span>地块名称</span>
+                    <span>合同面积</span>
+                    <span>实测面积</span>
                   </div>
+                  <div
+                    v-for="(parcel, index) in contractorParcels"
+                    :key="parcel.dkbm"
+                    class="gis-mini-table-row gis-contractor-parcel-row"
+                    :class="{ 'is-active': activeContractorParcelDkbm === parcel.dkbm }"
+                    @click="selectContractorParcel(parcel.dkbm)"
+                  >
+                    <span>{{ index + 1 }}</span>
+                    <span>{{ parcel.dkbm || ui.unknown }}</span>
+                    <span>{{ parcel.dkmc || '-' }}</span>
+                    <span>{{ parcel.htmj ? parcel.htmj + ' 亩' : '-' }}</span>
+                    <span>{{ parcel.scmj ? parcel.scmj + ' 亩' : '-' }}</span>
+                  </div>
+                  <div v-if="!contractorParcels.length" class="gis-mini-empty">暂无地块数据</div>
                 </div>
+                <template v-if="selectedParcel">
+                  <div class="gis-table-title">地块详情</div>
+                  <div class="gis-info-grid">
+                    <div v-for="item in parcelInfoRows" :key="item.label" class="gis-info-cell">
+                      <span>{{ item.label }}</span>
+                      <strong>{{ item.value }}</strong>
+                    </div>
+                  </div>
+                </template>
               </div>
 
-              <div v-else class="gis-card-pane">
+<div v-else class="gis-card-pane">
                 <div class="gis-info-grid">
                   <div v-for="item in contractInfoRows" :key="item.label" class="gis-info-cell">
                     <span>{{ item.label }}</span>
@@ -394,7 +421,7 @@ import Point from "ol/geom/Point";
 import Polygon from "ol/geom/Polygon";
 import { getArea, getLength } from "ol/sphere";
 
-import { fetchGisParcel, searchGisBusiness } from "../api/gis";
+import { fetchGisParcel, fetchContractorParcels, searchGisBusiness } from "../api/gis";
 import { useDictionary } from "../composables/useDictionary";
 import { fetchMapLayers } from "../api/mapLayer";
 import { basemapConfigs as fallbackBasemaps, vectorLayerConfigs as fallbackVectors } from "../config/mapLayers";
@@ -611,6 +638,9 @@ const basemapRows = ref([]);
 const layerRows = ref([]);
 const searchResult = ref({ requests: [], issuers: [], contractors: [] });
 const selectedParcel = ref(null);
+const contractorParcels = ref([]);
+const activeContractorParcelDkbm = ref(null);
+const contractorInfo = ref(null);
 const activeParcelTab = ref("contractor");
 const propertyPanelPosition = ref(null);
 const propertyPanelVisible = ref(false);
@@ -696,7 +726,7 @@ function withAreaUnit(value) {
 }
 
 const contractorInfoRows = computed(() => {
-  const parcel = selectedParcel.value || {};
+  const parcel = contractorInfo.value || {};
   return [
     { label: "承包方编码", value: displayValue(parcel.cbfbm) },
     { label: "承包方类型", value: dictDisplay(contractorTypeLabel, parcel.cbflx) },
@@ -1574,6 +1604,7 @@ async function applyParcelSelection(dkbm, coordinate, fallbackFeature = null) {
   }
 
   selectedParcel.value = parcel;
+  contractorInfo.value = { ...parcel };
   activeParcelTab.value = "contractor";
   updateAttrsByParcel(parcel);
   await showPropertyPanel();
@@ -1602,6 +1633,7 @@ async function locateParcelByCode(dkbm, silent = false) {
   }
 
   selectedParcel.value = parcel;
+  contractorInfo.value = { ...parcel };
   activeParcelTab.value = "contractor";
   updateAttrsByParcel(parcel);
   await showPropertyPanel();
@@ -2034,10 +2066,25 @@ async function applyIssuerResult(item) {
 }
 
 async function applyContractorResult(item) {
+  contractorParcels.value = [];
+  activeContractorParcelDkbm.value = null;
+  contractorInfo.value = null;
+  if (item.code) {
+    try {
+      const { data } = await fetchContractorParcels(item.code);
+      contractorParcels.value = data.data || [];
+    } catch (_error) {
+      contractorParcels.value = [];
+    }
+  }
   const located = await locateParcelByCode(item.primaryParcelCode, true);
   if (!located) {
     await fitToPrimaryLayer();
     selectedParcel.value = null;
+  }
+  if (selectedParcel.value) {
+    contractorInfo.value = { ...selectedParcel.value };
+    activeContractorParcelDkbm.value = selectedParcel.value.dkbm;
   }
   activeParcelTab.value = "contractor";
   updateAttrsByEntries([
@@ -2054,6 +2101,27 @@ async function applyContractorResult(item) {
   queryMessage.value = `${ui.contractorLinked}${item.name}`;
 }
 
+
+
+async function selectContractorParcel(dkbm) {
+  if (!dkbm) return;
+  activeContractorParcelDkbm.value = dkbm;
+  let parcel = null;
+  try {
+    const { data } = await fetchGisParcel(dkbm);
+    parcel = data.data;
+  } catch (_error) {
+    return;
+  }
+  if (!parcel) return;
+  selectedParcel.value = parcel;
+  activeParcelTab.value = "parcel";
+  try {
+    highlightParcel(parcel, null);
+  } catch (error) {
+    console.warn("Failed to highlight parcel:", error);
+  }
+}
 function normalizeSearchResultForType(data) {
   const result = data || { requests: [], issuers: [], contractors: [] };
   return {
@@ -2141,6 +2209,9 @@ function clearSelection() {
   parcelHighlightLayer?.getSource?.().clear();
   parcelPopupOverlay?.setPosition(undefined);
   selectedParcel.value = null;
+  contractorParcels.value = [];
+  activeContractorParcelDkbm.value = null;
+  contractorInfo.value = null;
   propertyPanelVisible.value = false;
   queryMessage.value = "";
   searchResult.value = { requests: [], issuers: [], contractors: [] };
@@ -2151,14 +2222,19 @@ async function resetView() {
   await fitToPrimaryLayer();
 }
 
+let disposed = false;
+
 onMounted(async () => {
   await loadLayerConfigs();
+  if (disposed) return;
   await buildMap();
+  if (disposed) return;
   mapRef.value.setTarget(mapRootRef.value);
   await fitToPrimaryLayer();
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
   clearMeasureInteraction();
   clearLabelInteraction();
   stopPropertyPanelDrag();
