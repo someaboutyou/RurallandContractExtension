@@ -3,6 +3,7 @@
 功能：验证tif、裁剪tif、发布到GeoServer、创建底图记录
 """
 
+import json
 import logging
 import math
 import os
@@ -144,8 +145,17 @@ class RasterPublishService:
                 })
                 with rasterio.open(output_path, "w", **out_meta) as dest:
                     dest.write(out_image)
+            # 获取裁剪后的bounds
+            with rasterio.open(output_path) as clipped_src:
+                clipped_bounds = clipped_src.bounds
+                clipped_bounds_wgs84 = self._transform_bounds_to_wgs84(
+                    clipped_bounds.left, clipped_bounds.bottom,
+                    clipped_bounds.right, clipped_bounds.top,
+                    clipped_src.crs
+                )
+            
             logger.info("Raster clipped: %s -> %s", tif_path, output_path)
-            return output_path
+            return output_path, clipped_bounds_wgs84
         except Exception as e:
             logger.error("Raster clip failed: %s", str(e))
             raise ValueError(f"裁剪失败: {str(e)}")
@@ -159,16 +169,24 @@ class RasterPublishService:
             self._update_progress(task_id, 10, "正在验证TIFF文件...")
             tif_info = self.validate_tif(tif_path)
 
+            clip_bounds_wgs84 = None
             if clip_geojson:
                 self._update_progress(task_id, 20, "正在裁剪影像...")
-                publish_tif_path = self.clip_raster(tif_path, clip_geojson)
+                publish_tif_path, clip_bounds_wgs84 = self.clip_raster(tif_path, clip_geojson)
                 self._update_progress(task_id, 40, "裁剪完成")
             else:
                 self._update_progress(task_id, 40, "跳过裁剪（未提供裁剪范围）")
 
             if not store_name:
-                store_name = Path(tif_path).stem
-                store_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in store_name)
+                base_name = Path(tif_path).stem
+                base_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in base_name)
+                if clip_geojson:
+                    # 有裁剪范围时，添加唯一后缀避免覆盖
+                    import hashlib
+                    clip_hash = hashlib.md5(json.dumps(clip_geojson, sort_keys=True).encode()).hexdigest()[:6]
+                    store_name = f"{base_name}_clip_{clip_hash}"
+                else:
+                    store_name = base_name
 
             self._update_progress(task_id, 45, "正在准备GeoServer数据目录...")
             coverage_dir = os.path.join(self.geoserver_data_dir, "workspaces", workspace, store_name)
@@ -191,10 +209,10 @@ class RasterPublishService:
             self._update_progress(task_id, 75, f"正在创建切片缓存（级别{min_zoom}-{max_zoom}）...")
             geoserver_service.ensure_tile_layer(layer_name, grid_set_id=grid_set_id)
             
-            # 设置GWC层的正确extent
-            bounds_wgs84 = tif_info.get('bounds_wgs84') or tif_info.get('bounds')
-            if bounds_wgs84:
-                self._update_gwc_extent(layer_name, bounds_wgs84)
+            # 设置GWC层的正确extent（优先使用裁剪后的bounds）
+            gwc_bounds = clip_bounds_wgs84 or tif_info.get('bounds_wgs84') or tif_info.get('bounds')
+            if gwc_bounds:
+                self._update_gwc_extent(layer_name, gwc_bounds)
             
             wmts_url = None
             try:
@@ -225,7 +243,8 @@ class RasterPublishService:
                 "wmts_url": wmts_url,
                 "zoom_range": {"min": min_zoom, "max": max_zoom},
                 "tif_info": tif_info,
-                "clipped": clip_geojson is not None
+                "clipped": clip_geojson is not None,
+                "clip_bounds_wgs84": clip_bounds_wgs84
             }
         except Exception as e:
             logger.error("Raster publish failed: %s", str(e))
