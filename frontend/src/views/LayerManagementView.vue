@@ -6,6 +6,7 @@
         <el-button plain @click="loadLayers">{{ ui.refresh }}</el-button>
         <el-button v-if="canManage" plain :loading="bulkBboxLoading" @click="handleRecalculateAllBbox">{{ ui.recalculateAllBbox }}</el-button>
         <el-button v-if="canManage" type="success" @click="openCreateDialog">{{ ui.create }}</el-button>
+        <el-button v-if="canManage" type="primary" @click="publishRasterVisible = true">发布影像</el-button>
       </div>
     </div>
 
@@ -138,7 +139,8 @@
         </div>
       </el-tab-pane>
     </el-tabs>
-  </section>
+    <PublishRasterDialog v-model="publishRasterVisible" @published="loadLayers" />
+</section>
 
   <el-dialog v-model="dialogVisible" :title="editingId ? ui.editDialog : ui.createDialog" width="920px" destroy-on-close>
     <el-form ref="formRef" :model="form" :rules="rules" class="compact-form" label-position="top" status-icon>
@@ -335,6 +337,7 @@ import {
   validateMapLayerService,
 } from "../api/mapLayer";
 import { basemapConfigs, vectorLayerConfigs } from "../config/mapLayers";
+import PublishRasterDialog from "../components/publish/PublishRasterDialog.vue";
 import { useAuthStore } from "../stores/auth";
 
 const ui = {
@@ -549,6 +552,7 @@ const authStore = useAuthStore();
 const canManage = computed(() => authStore.hasPermission("layers.manage"));
 
 const activeTab = ref("vector");
+const publishRasterVisible = ref(false);
 const loading = ref(false);
 const submitting = ref(false);
 const bulkBboxLoading = ref(false);
@@ -1058,3 +1062,4 @@ async function testLayer(row) {
 
 loadLayers();
 </script>
+

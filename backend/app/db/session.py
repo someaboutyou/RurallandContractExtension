@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.db import base as _base  # noqa: F401  Ensures all ORM models are registered.
 from app.models.base import TenantScopedMixin
 from app.services.data_access_service import data_access_service
+from app.core.license import license_validator
 
 engine = create_engine(settings.sqlalchemy_database_uri, echo=False, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
@@ -30,6 +31,34 @@ def set_current_user(session: Session, user) -> None:
 def _add_tenant_scope(execute_state):
     if not execute_state.is_select or execute_state.execution_options.get("skip_tenant_scope"):
         return
+    
+    # ===== 系统级授权检查（优先级最高）=====
+    authorized_region = license_validator.get_authorized_region_code()
+    if authorized_region:
+        # 有授权文件：强制过滤到授权区域
+        tenant_code = authorized_region[:6]
+        region_pattern = authorized_region + "%"
+        
+        # 创建绑定参数
+        tenant_param = bindparam("sys_tenant_code", value=tenant_code)
+        region_pattern_param = bindparam("sys_region_pattern", value=region_pattern)
+        
+        # 定义过滤条件
+        criteria = lambda cls: and_(
+            cls.tenant_code == tenant_param,
+            cls.region_code.like(region_pattern_param),
+        )
+        
+        execute_state.statement = execute_state.statement.options(
+            with_loader_criteria(
+                TenantScopedMixin,
+                criteria,
+                include_aliases=True,
+            )
+        )
+        return
+    
+    # ===== 原有用户级权限逻辑 =====
     data_scope = execute_state.session.info.get("current_user_data_scope")
     if data_scope is None:
         return
@@ -58,25 +87,40 @@ def _add_tenant_scope(execute_state):
 
 @event.listens_for(Session, "before_flush")
 def _fill_tenant_scope(session, _flush_context, _instances):
+    # ===== 系统级授权检查 =====
+    authorized_region = license_validator.get_authorized_region_code()
+    
     data_scope = session.info.get("current_user_data_scope")
     tenant_scope = session.info.get("current_user_tenant_code")
     permissions = session.info.get("current_user_region_permissions") or ()
     current_user = session.info.get("current_user")
+    
     for item in session.new.union(session.dirty):
         if not isinstance(item, TenantScopedMixin):
             continue
+        
         region_code = getattr(item, "region_code", None)
         if not region_code:
             region_code = _derive_region_code(item)
         if not region_code and current_user is not None:
             region_code = getattr(getattr(current_user, "region", None), "code", None)
+        
         region_code = data_access_service.normalize_region_code(region_code)
         if region_code:
             item.region_code = region_code
+        
         tenant_code = getattr(item, "tenant_code", None) or data_access_service.derive_tenant_code(region_code)
         if tenant_code:
             item.tenant_code = tenant_code
-        if data_scope is not None:
+        
+        # 系统级授权校验
+        if authorized_region:
+            if region_code and not str(region_code).startswith(authorized_region):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="系统授权范围为 {}，无法操作区域 {} 的数据".format(authorized_region, region_code)
+                )
+        elif data_scope is not None:
             _validate_scope(data_scope, tenant_scope, permissions, item)
 
 

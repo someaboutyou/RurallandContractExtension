@@ -10,8 +10,10 @@ from app.api.v1.endpoints import (
     gis,
     issuer,
     land_parcel,
+    license,
     map_layer,
     permission,
+    raster_publish,
     region,
     request_attachment_template,
     request_case,
@@ -32,9 +34,11 @@ api_router.include_router(data_import.router, prefix="/data-imports", tags=["Dat
 api_router.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
 api_router.include_router(dictionary.router, prefix="/dictionaries", tags=["Dictionaries"])
 api_router.include_router(gis.router, prefix="/gis", tags=["GIS"])
+api_router.include_router(license.router, prefix="/license", tags=["License"])
 api_router.include_router(region.router, prefix="/regions", tags=["Regions"])
 api_router.include_router(permission.router, prefix="/permissions", tags=["Permissions"])
 api_router.include_router(map_layer.router, prefix="/map-layers", tags=["MapLayers"])
+api_router.include_router(raster_publish.router, prefix="/raster-publish", tags=["RasterPublish"])
 api_router.include_router(role.router, prefix="/roles", tags=["Roles"])
 api_router.include_router(tenant.router, prefix="/tenants", tags=["Tenants"])
 api_router.include_router(user.router, prefix="/users", tags=["Users"])
