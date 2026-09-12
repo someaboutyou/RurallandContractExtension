@@ -11,6 +11,7 @@ from starlette.responses import Response
 from app.api.router import api_router
 from app.core.config import settings
 from app.db.bootstrap import bootstrap_database
+from app.core.license.middleware import LicenseCheckMiddleware
 
 
 def setup_logging() -> None:
@@ -126,6 +127,9 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # 添加授权检查中间件
+    app.add_middleware(LicenseCheckMiddleware)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -158,10 +162,21 @@ def create_app() -> FastAPI:
             "Install httpx to enable single-port deployment."
         )
 
-    # ---- 前端静态文件（最低优先级，仅在生产/构建后生效）----------------
+    # ---- 前端静态文件 + SPA catch-all（最低优先级，仅在生产/构建后生效）----
     frontend_dist = _find_frontend_dist()
     if frontend_dist:
-        app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")
+        from starlette.responses import FileResponse
+
+        _static = StaticFiles(directory=str(frontend_dist))
+
+        @app.get("/{path:path}", include_in_schema=False)
+        async def serve_frontend(path: str):
+            # 如果是真实文件（js/css/图片等），直接返回
+            file_path = frontend_dist / path
+            if file_path.is_file():
+                return FileResponse(file_path)
+            # 否则返回 index.html，让前端路由接管
+            return FileResponse(frontend_dist / "index.html")
 
     return app
 
