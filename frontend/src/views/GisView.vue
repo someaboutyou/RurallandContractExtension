@@ -1027,12 +1027,9 @@ function buildCapabilitiesUrl(rawUrl, serviceType) {
 
 function getWmtsLayerConfig(config) {
   const { baseUrl, params } = parseServiceUrl(config.serviceUrl);
-  const rawLayer = params.LAYER || params.LAYERS || "";
-  const colonIdx = rawLayer.lastIndexOf(":");
-  const layer = colonIdx >= 0 ? rawLayer.slice(colonIdx + 1) : rawLayer;
   return {
     baseUrl,
-    layer,
+    layer: params.LAYER || params.LAYERS || "",
     style: params.STYLE ?? "",
     matrixSet: params.TILEMATRIXSET || "",
     format: params.FORMAT || "image/png",
@@ -1107,7 +1104,9 @@ function parseWmtsTileGridFromXml(xmlText, matrixSetName) {
       if (corner?.textContent) {
         const parts = corner.textContent.trim().split(/\s+/).map(Number);
         if (parts.length === 2 && parts.every(Number.isFinite)) {
-          origin = [parts[1], parts[0]];
+          // GeoServer advertises EPSG:4326 using latitude/longitude axis
+          // order (90 -180); OpenLayers tile grids use x/y (-180 90).
+          origin = matrixSetName === "EPSG:4326" ? [parts[1], parts[0]] : parts;
         }
       }
     }
@@ -1167,18 +1166,28 @@ async function getWmtsTileGrid(serviceUrl, matrixSet) {
   return null;
 }
 
-function createBasemapLayer(config) {
-  const source =
-    config.layerType === "OSM"
-      ? new OSM()
-      : new XYZ({
-          url: config.serviceUrl,
-          crossOrigin: "anonymous",
-        });
-  return new TileLayer({
-    source,
-    visible: config.key === activeBasemap.value,
-  });
+async function createBasemapLayer(config) {
+  const layerType = inferLayerType(config);
+  let layer;
+
+  if (layerType === "WMTS") {
+    layer = await createWmtsLayer(config);
+  } else if (layerType === "WMS") {
+    layer = createWmsLayer(config);
+  } else {
+    const source =
+      layerType === "OSM"
+        ? new OSM()
+        : new XYZ({
+            url: config.serviceUrl,
+            crossOrigin: "anonymous",
+          });
+    layer = new TileLayer({ source });
+  }
+
+  layer.setVisible(config.key === activeBasemap.value);
+  layer.setZIndex(0);
+  return layer;
 }
 
 function createPointStyle(labelText) {
@@ -1222,7 +1231,8 @@ function createWmsLayer(config) {
       crossOrigin: "anonymous",
     }),
     minZoom: config.serviceConfigs[0]?.minZoom ?? 0,
-    maxZoom: config.serviceConfigs[0]?.maxZoom ?? 19,
+    // Layer management zoom ranges are inclusive; OpenLayers maxZoom is exclusive.
+    maxZoom: (config.serviceConfigs[0]?.maxZoom ?? 19) + 1,
     visible: config.visible,
   });
 }
@@ -1256,7 +1266,8 @@ async function createWmtsLayer(config) {
       crossOrigin: "anonymous",
     }),
     minZoom: config.serviceConfigs[0]?.minZoom ?? 0,
-    maxZoom: config.serviceConfigs[0]?.maxZoom ?? 19,
+    // Layer management zoom ranges are inclusive; OpenLayers maxZoom is exclusive.
+    maxZoom: (config.serviceConfigs[0]?.maxZoom ?? 19) + 1,
     visible: config.visible,
   });
 }
@@ -1802,21 +1813,62 @@ async function fetchWmtsLonLatExtent(config) {
 }
 
 async function fitToPrimaryLayer() {
+  // 用户发布的默认影像优先；没有发布影像时回到承包地块范围。
+  // 内置 image/vector/terrain 只是背景底图，不应覆盖业务图层的定位。
+  const defaultBasemap = basemapRows.value.find(
+    (item) => item.isDefault && !["image", "vector", "terrain"].includes(item.key),
+  );
   const primaryLayer =
+    defaultBasemap ||
     layerRows.value.find((item) => item.key === "survey_dk_result") ||
-    layerRows.value.find((item) => (item.groupName || "").includes("GeoServer"));
+    layerRows.value.find((item) => item.isDefault) ||
+    layerRows.value.find((item) => (item.groupName || "").includes("GeoServer")) ||
+    basemapRows.value.find((item) => item.isDefault);
   if (!primaryLayer || !mapRef.value) {
     return;
   }
 
-  if (!primaryLayer.visible) {
-    primaryLayer.visible = true;
-    syncLayerVisibility(primaryLayer);
+  // 如果是底图，需要切换到该底图
+  if (primaryLayer.category === "basemap") {
+    activeBasemap.value = primaryLayer.key;
+    await switchBasemap(primaryLayer.key);
+  } else {
+    if (!primaryLayer.visible) {
+      primaryLayer.visible = true;
+      syncLayerVisibility(primaryLayer);
+    }
   }
 
   try {
-    const lonLatExtent =
-      inferLayerType(primaryLayer) === "WMTS" ? await fetchWmtsLonLatExtent(primaryLayer) : await fetchWmsLonLatExtent(primaryLayer);
+    let lonLatExtent;
+    if (primaryLayer.key === "survey_dk_result") {
+      const wmsConfig = primaryLayer.serviceConfigs?.find(
+        (service) => String(service.serviceType).toUpperCase() === "WMS",
+      );
+      lonLatExtent = wmsConfig
+        ? await fetchWmsLonLatExtent({ ...primaryLayer, ...wmsConfig })
+        : await fetchWmtsLonLatExtent(primaryLayer);
+    } else if (inferLayerType(primaryLayer) === "WMTS") {
+      lonLatExtent = await fetchWmtsLonLatExtent(primaryLayer);
+      // GeoServer GWC may advertise a WMTS layer without a usable WGS84
+      // bounding box. Fall back to the paired WMS service in that case.
+      if (!lonLatExtent) {
+        const wmsConfig = primaryLayer.serviceConfigs?.find(
+          (service) => String(service.serviceType).toUpperCase() === "WMS",
+        );
+        if (wmsConfig) {
+          lonLatExtent = await fetchWmsLonLatExtent({ ...primaryLayer, ...wmsConfig });
+        }
+      }
+    } else {
+      lonLatExtent = await fetchWmsLonLatExtent(primaryLayer);
+    }
+    // Older GeoServer deployments may omit the WMS LatLonBoundingBox even
+    // though the layer is valid. Keep the known published layer extent as a
+    // final fallback so the map cannot reset to the unrelated demo center.
+    if (!lonLatExtent && primaryLayer.key === "survey_dk_result") {
+      lonLatExtent = [117.9404025, 33.1306737, 118.6706148, 33.7457243];
+    }
     if (lonLatExtent) {
       const webMercatorExtent = transformExtent(lonLatExtent, "EPSG:4326", "EPSG:3857");
       mapRef.value.getView().fit(webMercatorExtent, {
@@ -1824,14 +1876,41 @@ async function fitToPrimaryLayer() {
         duration: 600,
         maxZoom: 18,
       });
+      if (primaryLayer.key === "survey_dk_result") {
+        const wmtsConfig = primaryLayer.serviceConfigs?.find(
+          (service) => String(service.serviceType).toUpperCase() === "WMTS" && service.enabled,
+        );
+        const minimumBusinessZoom = wmtsConfig?.minZoom ?? 10;
+        if ((mapRef.value.getView().getZoom() ?? 0) < minimumBusinessZoom) {
+          mapRef.value.getView().setZoom(minimumBusinessZoom);
+        }
+      }
       return;
     }
   } catch (_error) {
-    // ignore capability parse failure
+    if (primaryLayer.key === "survey_dk_result") {
+      const webMercatorExtent = transformExtent(
+        [117.9404025, 33.1306737, 118.6706148, 33.7457243],
+        "EPSG:4326",
+        "EPSG:3857",
+      );
+      mapRef.value.getView().fit(webMercatorExtent, {
+        padding: [80, 360, 120, 80],
+        duration: 600,
+      });
+      const wmtsConfig = primaryLayer.serviceConfigs?.find(
+        (service) => String(service.serviceType).toUpperCase() === "WMTS" && service.enabled,
+      );
+      mapRef.value.getView().setZoom(wmtsConfig?.minZoom ?? 10);
+      return;
+    }
   }
 
+  const fallbackCenter = primaryLayer?.key === "survey_dk_result"
+    ? [118.3055, 33.4382]
+    : [120.12345, 30.6789];
   mapRef.value.getView().animate({
-    center: fromLonLat([120.12345, 30.6789]),
+    center: fromLonLat(fallbackCenter),
     zoom: 15,
     duration: 500,
   });
@@ -1844,7 +1923,7 @@ async function buildMap() {
   const activeBasemapConfig =
     basemapRows.value.find((item) => item.key === activeBasemap.value) || basemapRows.value[0];
   if (activeBasemapConfig) {
-    const layer = createBasemapLayer(activeBasemapConfig);
+    const layer = await createBasemapLayer(activeBasemapConfig);
     basemapLayerInstances.set(activeBasemapConfig.key, layer);
   }
   for (const item of layerRows.value) {
@@ -1910,7 +1989,7 @@ async function buildMap() {
   });
 }
 
-function switchBasemap() {
+async function switchBasemap() {
   if (!mapRef.value) return;
   emitBasemapTheme();
   basemapLayerInstances.forEach((layer) => {
@@ -1920,12 +1999,20 @@ function switchBasemap() {
   if (!newLayer) {
     const config = basemapRows.value.find((item) => item.key === activeBasemap.value);
     if (config) {
-      newLayer = createBasemapLayer(config);
+      try {
+        newLayer = await createBasemapLayer(config);
+      } catch (error) {
+        console.error("Failed to initialize basemap", config.key, error);
+        ElMessage.warning(`底图"${config.name}"初始化失败。`);
+        return;
+      }
       basemapLayerInstances.set(activeBasemap.value, newLayer);
     }
   }
   if (newLayer) {
-    mapRef.value.addLayer(newLayer);
+    // A basemap must remain below every operational/vector layer. addLayer()
+    // appends at the top, which caused a selected raster to cover parcels.
+    mapRef.value.getLayers().insertAt(0, newLayer);
   }
 }
 

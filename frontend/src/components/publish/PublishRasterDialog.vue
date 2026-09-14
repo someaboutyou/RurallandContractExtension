@@ -220,7 +220,7 @@
 
 <script setup>
 import { ref, computed, watch, nextTick, onBeforeUnmount } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { UploadFilled } from "@element-plus/icons-vue";
 import "ol/ol.css";
 import OlMap from "ol/Map";
@@ -400,7 +400,7 @@ function initDrawMap() {
         LAYERS: "erlunyanbao:survey_dk_result",
         FORMAT: "image/png",
         TRANSPARENT: true,
-        STYLES: "survey_dk_result",
+        STYLES: "dk",
       },
       crossOrigin: "anonymous",
     }),
@@ -630,6 +630,17 @@ async function handleFinish() {
   // Auto create map layer record
   if (autoCreateLayer.value && publishResult.value) {
     try {
+      // 询问用户是否设为默认底图
+      const isDefault = await ElMessageBox.confirm(
+        "是否将此影像设为默认底图？设为默认后，打开一张图时会自动缩放到此影像范围。",
+        "设为默认底图",
+        {
+          confirmButtonText: "设为默认",
+          cancelButtonText: "不设为默认",
+          type: "info",
+        }
+      ).then(() => true).catch(() => false);
+
       await createMapLayer({
         name: publishResult.value.store_name,
         key: publishResult.value.store_name,
@@ -637,7 +648,8 @@ async function handleFinish() {
         category: "basemap",
         enabled: true,
         defaultVisible: true,
-        sortOrder: 99,
+        isDefault: isDefault,
+        sortOrder: isDefault ? 0 : 99,
         serviceConfigs: [
           {
             serviceType: "WMTS",
@@ -649,7 +661,12 @@ async function handleFinish() {
           },
         ],
       });
-      ElMessage.success("已自动添加到底图管理");
+      
+      if (isDefault) {
+        ElMessage.success("已设为默认底图，打开一张图时会自动缩放到此影像范围");
+      } else {
+        ElMessage.success("已添加到底图管理");
+      }
       emit("published");
     } catch {
       ElMessage.warning("自动添加底图失败，请手动在底图管理中添加");

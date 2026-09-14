@@ -129,7 +129,7 @@ class RasterPublishService:
                 # 如果tif是投影坐标系，需要将WGS84 GeoJSON转换为tif的坐标系
                 geojson_for_clip = geojson
                 if src.crs and not src.crs.is_geographic:
-                    geojson_for_clip = self._reproject_geojson(geojson, src.crs)
+                    geojson_for_clip = self._reproject_geojson(geojson, src.crs, src.bounds)
                 
                 out_image, out_transform = rasterio_mask(
                     src, [geojson_for_clip], crop=True,
@@ -141,7 +141,11 @@ class RasterPublishService:
                     "height": out_image.shape[1],
                     "width": out_image.shape[2],
                     "transform": out_transform,
-                    "compress": "lzw"
+                    "compress": "lzw",
+                    # Pixels outside the clipping polygon are filled with 0.
+                    # Persist that value as NoData so GeoServer renders the
+                    # clipped surround transparently instead of as black.
+                    "nodata": src.nodata if src.nodata is not None else 0,
                 })
                 with rasterio.open(output_path, "w", **out_meta) as dest:
                     dest.write(out_image)
@@ -183,22 +187,42 @@ class RasterPublishService:
                 if clip_geojson:
                     # 有裁剪范围时，添加唯一后缀避免覆盖
                     import hashlib
+                    import time
                     clip_hash = hashlib.md5(json.dumps(clip_geojson, sort_keys=True).encode()).hexdigest()[:6]
-                    store_name = f"{base_name}_clip_{clip_hash}"
+                    timestamp = int(time.time()) % 10000  # 使用时间戳后4位
+                    store_name = f"{base_name}_clip_{clip_hash}_{timestamp}"
                 else:
                     store_name = base_name
 
             self._update_progress(task_id, 45, "正在准备GeoServer数据目录...")
             coverage_dir = os.path.join(self.geoserver_data_dir, "workspaces", workspace, store_name)
+            
+            # 先删除旧的CoverageStore（释放文件锁）
+            self._delete_coveragestore_if_exists(workspace, store_name)
+            
             os.makedirs(coverage_dir, exist_ok=True)
             dest_tif_path = os.path.join(coverage_dir, f"{store_name}.tif")
             
             # 复制并修复坐标系（如果需要）
-            self._copy_and_fix_crs(publish_tif_path, dest_tif_path)
+            result_path = self._copy_and_fix_crs(publish_tif_path, dest_tif_path)
+            if result_path and result_path != dest_tif_path:
+                # 文件被占用，使用了新路径
+                dest_tif_path = result_path
+                tif_filename = os.path.basename(dest_tif_path)
             self._update_progress(task_id, 50, "数据已复制到GeoServer目录")
 
             self._update_progress(task_id, 55, "正在创建GeoServer CoverageStore...")
-            self._create_coveragestore_and_coverage(workspace, store_name, dest_tif_path)
+            # 获取实际的文件名
+            tif_filename = os.path.basename(dest_tif_path)
+            self._create_coveragestore_and_coverage(workspace, store_name, dest_tif_path, tif_filename)
+            
+            with rasterio.open(dest_tif_path) as published_src:
+                published_epsg = published_src.crs.to_epsg() if published_src.crs else None
+                if not published_epsg:
+                    published_epsg = self._guess_epsg_from_bounds(published_src.bounds)
+            if published_epsg:
+                self._set_coverage_srs(workspace, store_name, f"EPSG:{published_epsg}")
+            
             self._update_progress(task_id, 70, "Coverage发布成功")
 
             avg_pixel_size = (tif_info['pixel_size']['x'] + tif_info['pixel_size']['y']) / 2
@@ -209,17 +233,14 @@ class RasterPublishService:
             self._update_progress(task_id, 75, f"正在创建切片缓存（级别{min_zoom}-{max_zoom}）...")
             geoserver_service.ensure_tile_layer(layer_name, grid_set_id=grid_set_id)
             
-            # 设置GWC层的正确extent（优先使用裁剪后的bounds）
-            gwc_bounds = clip_bounds_wgs84 or tif_info.get('bounds_wgs84') or tif_info.get('bounds')
-            if gwc_bounds:
-                self._update_gwc_extent(layer_name, gwc_bounds)
-            
             wmts_url = None
             try:
-                result = geoserver_service.seed_tile_cache(bounds=bounds_wgs84 and [
-                    bounds_wgs84['left'], bounds_wgs84['bottom'],
-                    bounds_wgs84['right'], bounds_wgs84['top']
-                ] if bounds_wgs84 else None,
+                # 优先使用裁剪后的bounds，否则使用原始tif的bounds
+                seed_bounds = clip_bounds_wgs84 or tif_info.get('bounds_wgs84') or tif_info.get('bounds')
+                result = geoserver_service.seed_tile_cache(bounds=seed_bounds and [
+                    seed_bounds['left'], seed_bounds['bottom'],
+                    seed_bounds['right'], seed_bounds['top']
+                ] if seed_bounds else None,
                     layer_name=layer_name, grid_set_id=grid_set_id,
                     zoom_start=min_zoom, zoom_stop=max_zoom,
                     seed_type="reseed", thread_count=2
@@ -227,6 +248,11 @@ class RasterPublishService:
                 wmts_url = result.get("wmtsUrl")
             except Exception as e:
                 logger.warning("Tile seed failed (non-critical): %s", str(e))
+            
+            # 设置GWC层的正确extent（在seed之后，避免被覆盖）
+            gwc_bounds = clip_bounds_wgs84 or tif_info.get('bounds_wgs84') or tif_info.get('bounds')
+            if gwc_bounds:
+                self._update_gwc_extent(layer_name, gwc_bounds)
             self._update_progress(task_id, 90, "切片缓存已提交")
 
             wms_url = f"/geoserver/wms?service=WMS&version=1.1.1&request=GetMap&layers={layer_name}&styles=&format=image/png&transparent=true"
@@ -257,7 +283,7 @@ class RasterPublishService:
                 except:
                     pass
 
-    def _create_coveragestore_and_coverage(self, workspace: str, store_name: str, tif_path: str):
+    def _create_coveragestore_and_coverage(self, workspace: str, store_name: str, tif_path: str, tif_filename: str = None):
         """通过GeoServer REST API创建CoverageStore和Coverage"""
         import json
         import urllib.request
@@ -272,7 +298,7 @@ class RasterPublishService:
                 "workspace": workspace,
                 "type": "GeoTIFF",
                 "enabled": True,
-                "url": f"file:workspaces/{workspace}/{store_name}/{store_name}.tif"
+                "url": f"file:workspaces/{workspace}/{store_name}/{tif_filename or store_name + chr(46) + chr(116) + chr(105) + chr(102)}"
             }
         }
         req = urllib.request.Request(
@@ -289,7 +315,6 @@ class RasterPublishService:
                 logger.info("CoverageStore already exists: %s:%s", workspace, store_name)
             else:
                 body = e.read().decode("utf-8", errors="ignore") if e.fp else ""
-                # 如果是已存在，继续执行
                 if "already exists" in body:
                     logger.info("CoverageStore already exists, continuing: %s:%s", workspace, store_name)
                 else:
@@ -318,6 +343,54 @@ class RasterPublishService:
                 logger.info("Coverage already exists, continuing: %s:%s", workspace, store_name)
             else:
                 raise ValueError(f"创建Coverage失败: HTTP {e.code} {body}")
+
+    def _delete_coveragestore_if_exists(self, workspace: str, store_name: str):
+        """检查CoverageStore是否存在（不删除，因为GeoServer可能不允许DELETE）"""
+        import urllib.request
+        import urllib.error
+        
+        try:
+            base_url = geoserver_service.base_url.rstrip("/")
+            auth = geoserver_service._auth_header()
+            
+            url = f"{base_url}/rest/workspaces/{workspace}/coveragestores/{store_name}"
+            req = urllib.request.Request(url, headers={"Authorization": auth})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status == 200:
+                    logger.info("CoverageStore exists: %s:%s (will be updated)", workspace, store_name)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                logger.info("CoverageStore does not exist: %s:%s", workspace, store_name)
+            else:
+                logger.warning("Failed to check CoverageStore: %s", str(e))
+        except Exception as e:
+            logger.warning("Failed to check CoverageStore: %s", str(e))
+
+    def _set_coverage_srs(self, workspace: str, store_name: str, srs: str):
+        """设置Coverage的SRS"""
+        import urllib.request
+        import urllib.error
+        import json
+        
+        try:
+            base_url = geoserver_service.base_url.rstrip("/")
+            auth = geoserver_service._auth_header()
+            
+            update_data = json.dumps({
+                "coverage": {"srs": srs, "projectionPolicy": "FORCE_DECLARED"}
+            }).encode("utf-8")
+            
+            url = f"{base_url}/rest/workspaces/{workspace}/coveragestores/{store_name}/coverages/{store_name}"
+            req = urllib.request.Request(
+                url,
+                data=update_data,
+                method="PUT",
+                headers={"Authorization": auth, "Content-Type": "application/json", "Accept": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                logger.info("Coverage SRS set to %s for %s:%s", srs, workspace, store_name)
+        except Exception as e:
+            logger.warning("Failed to set Coverage SRS: %s", str(e))
 
     def _update_gwc_extent(self, layer_name: str, bounds: dict):
         """更新GWC层的extent配置"""
@@ -361,9 +434,10 @@ class RasterPublishService:
         except Exception as e:
             logger.warning('Failed to update GWC extent: %s', str(e))
 
-    def _copy_and_fix_crs(self, src_path: str, dest_path: str):
+    def _copy_and_fix_crs(self, src_path: str, dest_path: str) -> str:
         """复制tif并修复坐标系（将LOCAL_CS转换为标准PROJCS）"""
         import shutil
+        
         try:
             with rasterio.open(src_path) as src:
                 crs = src.crs
@@ -373,38 +447,42 @@ class RasterPublishService:
                     logger.info("Detected LOCAL_CS, fixing CRS for %s", src_path)
                     data = src.read()
                     meta = src.meta.copy()
+
+                    epsg = self._guess_epsg_from_bounds(src.bounds)
+                    if not epsg:
+                        raise ValueError("无法根据影像坐标范围识别CGCS2000高斯-克吕格分带")
+                    meta["crs"] = CRS.from_epsg(epsg)
                     
-                    # CGCS2000 / 3-degree Gauss-Kruger zone 39 WKT
-                    wkt = (
-                        'PROJCS["CGCS2000 / 3-degree Gauss-Kruger zone 39",'
-                        'GEOGCS["China Geodetic Coordinate System 2000",'
-                        'DATUM["China_2000",'
-                        'SPHEROID["CGCS2000",6378137,298.257222101]],'
-                        'PRIMEM["Greenwich",0],'
-                        'UNIT["degree",0.0174532925199433]],'
-                        'PROJECTION["Transverse_Mercator"],'
-                        'PARAMETER["latitude_of_origin",0],'
-                        'PARAMETER["central_meridian",117],'
-                        'PARAMETER["scale_factor",1],'
-                        'PARAMETER["false_easting",39500000],'
-                        'PARAMETER["false_northing",0],'
-                        'UNIT["metre",1],'
-                        'AXIS["Easting",EAST],'
-                        'AXIS["Northing",NORTH]]'
-                    )
-                    meta["crs"] = CRS.from_wkt(wkt)
-                    
-                    with rasterio.open(dest_path, "w", **meta) as dest:
-                        dest.write(data)
-                    
-                    logger.info("Fixed CRS to PROJCS for %s", dest_path)
+                    # 尝试写入文件，如果被占用则使用不同的文件名
+                    try:
+                        with rasterio.open(dest_path, "w", **meta) as dest:
+                            dest.write(data)
+                        logger.info("Fixed CRS to PROJCS for %s", dest_path)
+                    except PermissionError:
+                        # 文件被占用，使用不同的文件名
+                        import time
+                        alt_path = dest_path.replace('.tif', f'_{int(time.time())}.tif')
+                        with rasterio.open(alt_path, "w", **meta) as dest:
+                            dest.write(data)
+                        logger.info("Fixed CRS to PROJCS for %s (alt)", alt_path)
+                        # 返回新路径
+                        return alt_path
                     return
             
             # 不需要修复，直接复制
             shutil.copy2(src_path, dest_path)
         except Exception as e:
-            logger.warning("Failed to fix CRS, copying as-is: %s", str(e))
-            shutil.copy2(src_path, dest_path)
+            logger.warning("Failed to fix CRS: %s", str(e))
+            # 尝试使用不同的文件名
+            try:
+                import time
+                alt_path = dest_path.replace('.tif', f'_{int(time.time())}.tif')
+                shutil.copy2(src_path, alt_path)
+                logger.info("Copied to alternate path: %s", alt_path)
+                return alt_path
+            except Exception as e2:
+                logger.error("Failed to copy to alternate path: %s", str(e2))
+                raise
 
     def _guess_epsg_from_bounds(self, bounds) -> int | None:
         """根据坐标范围推断EPSG代码"""
@@ -425,29 +503,25 @@ class RasterPublishService:
         
         # 根据带号推断EPSG
         if 36 <= zone <= 44:
-            return 4508 + zone  # 4544对应36带，4547对应39带
+            return 4488 + zone  # 4524对应36带，4527对应39带
         
         return None
-    def _reproject_geojson(self, geojson: dict, target_crs) -> dict:
+    def _reproject_geojson(self, geojson: dict, target_crs, target_bounds=None) -> dict:
         """将GeoJSON从WGS84转换为目标CRS"""
         try:
             from pyproj import CRS, Transformer
             
             epsg = target_crs.to_epsg() if target_crs else None
             if not epsg:
-                epsg = 4547
+                epsg = self._guess_epsg_from_bounds(target_bounds) if target_bounds else None
+            if not epsg:
+                raise ValueError("无法识别影像坐标系")
             
             target = CRS.from_epsg(epsg)
             transformer = Transformer.from_crs("EPSG:4326", target, always_xy=True)
             
             def transform_coord(x, y):
                 new_x, new_y = transformer.transform(x, y)
-                # 对于3度带投影，需要添加带号
-                # 带号 = round((中央经线) / 3)，中央经线 = 带号 * 3
-                # 对于EPSG:4547 (39带)，中央经线是117度
-                if epsg and 4539 <= epsg <= 4555:  # CGCS2000 3度带范围
-                    zone = epsg - 4508  # 4547对应39带: 4547-4508=39
-                    new_x = new_x + zone * 1000000
                 return new_x, new_y
             
             coords = geojson.get("coordinates", [])
@@ -496,24 +570,17 @@ class RasterPublishService:
             if epsg:
                 src_for_transform = CRS.from_epsg(epsg)
             else:
-                # 对于 CGCS2000 3度带39带，EPSG是4547
-                src_for_transform = CRS.from_epsg(4547)
+                inferred_epsg = self._guess_epsg_from_bounds(
+                    type("Bounds", (), {"left": left})()
+                )
+                if not inferred_epsg:
+                    return None
+                src_for_transform = CRS.from_epsg(inferred_epsg)
             
             transformer = Transformer.from_crs(src_for_transform, "EPSG:4326", always_xy=True)
             
-            # 处理带号：如果Easting > 1000000，可能包含带号
-            # 对于3度带，带号 = (中央经线 - 1.5) / 3
-            if left > 1000000:
-                # 计算带号（假设是3度带）
-                zone = int(left / 1000000)
-                left_adj = left - zone * 1000000
-                right_adj = right - zone * 1000000
-            else:
-                left_adj = left
-                right_adj = right
-            
-            lon1, lat1 = transformer.transform(left_adj, bottom)
-            lon2, lat2 = transformer.transform(right_adj, top)
+            lon1, lat1 = transformer.transform(left, bottom)
+            lon2, lat2 = transformer.transform(right, top)
             return {
                 "left": round(min(lon1, lon2), 6),
                 "bottom": round(min(lat1, lat2), 6),
