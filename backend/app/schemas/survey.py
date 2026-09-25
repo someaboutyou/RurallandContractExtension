@@ -8,6 +8,13 @@ class SurveyBatchCreate(BaseModel):
     regionCode: str | None = Field(default=None, max_length=32)
     regionName: str | None = Field(default=None, max_length=120)
     remark: str | None = None
+    # 指派调查员。**必填与否取决于是不是管理员**，所以这里不能写 min_length=1：
+    # - 管理员：必填（至少 1 人），可指派他人；
+    # - 其他人：前端不显示选择器、也不传这个字段，服务端强制派给自己。
+    # Pydantic 拿不到 current_user，做不了「按角色必填」；若在此写 min_length=1，
+    # 非管理员的正常请求会被 422 拦死。必填校验统一放
+    # services/survey/assignment.py::resolve_batch_create_assignees 按角色判。
+    assigneeIds: list[int] | None = Field(default=None, max_length=50)
 
 
 class SurveyBatchRead(BaseModel):
@@ -26,6 +33,16 @@ class SurveyBatchRead(BaseModel):
     skippedCount: int = 0
     createdAt: datetime
     remark: str | None = None
+    # 批次调查员：聚合自该批次任务的归属人（survey_cbf_base.assigned_to），
+    # 按名下户数降序去重。批次本身不存调查员字段，避免与任务归属两处真相。
+    assigneeNames: list[str] = Field(default_factory=list)
+    assigneeCount: int = 0
+    unassignedCount: int = 0
+    # 「与我相关」的标记：调查员登录后，自己创建的批次与（别人创建但）分给自己的批次
+    # 都要在列表里显示出来，卡片上据此打标签。
+    createdByMe: bool = False
+    assignedToMe: bool = False
+    myTaskCount: int = 0
 
 
 class SurveyTaskRead(BaseModel):
@@ -45,6 +62,16 @@ class SurveyTaskRead(BaseModel):
     changeCount: int
     investigatedAt: datetime | None = None
     remark: str | None = None
+    # 任务归属（survey_cbf_base.assigned_to）：只有归属人能录入，其余人只能查看。
+    assignedTo: int | None = None
+    assignedToName: str | None = None
+    assignedAt: datetime | None = None
+    # 实际调查人（区别于归属人）：来自 survey_cbf_result.investigator_name。
+    investigatorName: str | None = None
+    # 当前用户能否录入这一户（后端算，与 ensure_task_write_permission 同口径）。
+    # 前端据此把「调查录入」降级成「查看详情」并把对话框切只读；
+    # 默认 False 是安全方向：调用方忘传时就当只读，而不是当可写。
+    canWrite: bool = False
 
 
 class SurveyDeregisteredContractorRead(BaseModel):
@@ -61,6 +88,9 @@ class SurveyDeregisteredContractorRead(BaseModel):
     deregisterReason: str | None = None
     deregisteredAt: datetime | None = None
     changeNo: str | None = None
+    #: 让该户离开待办的终态操作类型：deregister / merge_household / split_household。
+    #: 前端据此把「撤回」按钮分流到对应的撤回接口（不再一律打 rollback-deregister）。
+    changeType: str | None = None
     canRollback: bool = True
 
 
@@ -220,6 +250,33 @@ class SurveyContractRead(BaseModel):
     cbdkzs: int | None = None
     qdsj: str | None = None
     renderedHtml: str | None = None
+    # 延包业务：合同版本（现行 / 历史）与来源（上次承包合同 / 平台生成的延包合同）
+    contractStatus: str | None = None
+    contractStatusText: str | None = None
+    contractSource: str | None = None
+    isCurrent: bool | None = None
+    isOriginal: bool | None = None
+    generatedAt: str | None = None
+    generatedBy: str | None = None
+
+
+class SurveyContractGenerate(BaseModel):
+    """生成延包合同。
+
+    全部字段都可缺省：承包期限起默认取**上次合同到期时间**（没有上次合同则为空），
+    承包期限止默认 = 起 + ``years`` 年 − 1 天（``years`` 默认 30）。
+    """
+
+    cbqxq: str | None = None
+    cbqxz: str | None = None
+    years: int | None = Field(default=None, ge=1, le=100)
+    qdsj: str | None = None
+    cbfs: str | None = Field(default=None, max_length=3)
+
+
+class SurveyContractPrint(BaseModel):
+    cbhtbm: str | None = None
+
 
 
 class SurveyPlotSketchMapRead(BaseModel):
@@ -343,6 +400,86 @@ class SurveyRollbackSwapParcelsRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
 
 
+# ── 界址点 / 界址线维护 ──────────────────────────────────────────────────────
+# 结构（点位、边）由地块图形决定，请求体只提交属性，并按显示序号 seq 对齐。
+
+
+class SurveyBoundaryPointUpdate(BaseModel):
+    """界址点属性更新项。``seq`` 与界面上 ``J1..Jn`` 的显示序号一致。"""
+
+    seq: int = Field(ge=1)
+    jzdh: str | None = Field(default=None, max_length=32)
+    jblx: str | None = Field(default=None, max_length=2)
+    bz: str | None = Field(default=None, max_length=200)
+
+
+class SurveyBoundaryLineUpdate(BaseModel):
+    """界址线属性更新项。
+
+    ``seq`` 表示"从第 seq 个界址点出发的那条界址线"，与调查表逐行对应。
+    """
+
+    seq: int = Field(ge=1)
+    fromCode: str | None = Field(default=None, max_length=16)
+    toCode: str | None = Field(default=None, max_length=16)
+    jzxlb: str | None = Field(default=None, max_length=2)
+    jzxwz: str | None = Field(default=None, max_length=2)
+    jzxsm: str | None = Field(default=None, max_length=200)
+
+
+class SurveyParcelBoundaryUpdate(BaseModel):
+    points: list[SurveyBoundaryPointUpdate] = []
+    lines: list[SurveyBoundaryLineUpdate] = []
+
+
+class SurveyBoundaryOptionRead(BaseModel):
+    value: str
+    label: str
+
+
+class SurveyBoundaryOptionsRead(BaseModel):
+    markTypes: list[SurveyBoundaryOptionRead] = []
+    lineCategories: list[SurveyBoundaryOptionRead] = []
+    linePositions: list[SurveyBoundaryOptionRead] = []
+
+
+class SurveyBoundaryPointRead(BaseModel):
+    seq: int
+    code: str
+    jzdh: str | None = None
+    x: str
+    y: str
+    jblx: str | None = None
+    bz: str | None = None
+    edge: str | None = None
+    registered: bool = False
+
+
+class SurveyBoundaryLineRead(BaseModel):
+    seq: int
+    fromCode: str
+    toCode: str
+    fromJzdh: str | None = None
+    toJzdh: str | None = None
+    jzxlb: str | None = None
+    jzxwz: str | None = None
+    jzxsm: str | None = None
+    registered: bool = False
+
+
+class SurveyParcelBoundaryRead(BaseModel):
+    dkbm: str
+    dkmc: str | None = None
+    contractorUid: str
+    cbfbm: str
+    mappingUnit: str
+    cordSystem: str
+    editable: bool
+    options: SurveyBoundaryOptionsRead
+    points: list[SurveyBoundaryPointRead] = []
+    lines: list[SurveyBoundaryLineRead] = []
+
+
 class SurveySplitHouseholdTarget(BaseModel):
     newCbfbm: str = Field(min_length=1, max_length=18)
     newCbfmc: str = Field(min_length=1, max_length=50)
@@ -400,6 +537,13 @@ class SurveyGenerateRequest(BaseModel):
 
 class SurveyTaskSkip(BaseModel):
     skipReason: str = Field(min_length=1, max_length=500)
+
+
+class SurveyTaskAssignRequest(BaseModel):
+    """批量分配/改派承包方调查任务。assigneeId 为 None 表示收回分配。"""
+
+    contractorUids: list[str] = Field(min_length=1, max_length=500)
+    assigneeId: int | None = None
 
 
 class SurveyMemberUpdate(BaseModel):
@@ -578,6 +722,9 @@ class SurveyContractorRead(BaseModel):
     isChanged: bool
     changeType: str
     changeReason: str | None = None
+    # 已被终结（注销 / 被合户并走 / 被分户拆走）。⚠️ 必须在这里声明：模型外字段会被
+    # pydantic **静默丢掉**，前端就拿不到（`/auth/me` 漏 `regionPermissions` 的同类坑）。
+    isTerminal: bool = False
     policyBasis: str | None = None
     evidenceSummary: str | None = None
     remark: str | None = None

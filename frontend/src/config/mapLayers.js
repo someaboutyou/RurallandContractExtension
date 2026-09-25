@@ -79,7 +79,7 @@ export const vectorLayerConfigs = [
       {
         serviceType: "WMTS",
         serviceUrl:
-          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:survey_dk_result&style=survey_dk_result&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:survey_dk_result&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
         projection: "EPSG:4326",
         minZoom: 0,
         maxZoom: 15,
@@ -110,7 +110,7 @@ export const vectorLayerConfigs = [
       {
         serviceType: "WMTS",
         serviceUrl:
-          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:czkfbj&style=czkfbj&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:czkfbj&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
         projection: "EPSG:4326",
         minZoom: 0,
         maxZoom: 15,
@@ -141,7 +141,7 @@ export const vectorLayerConfigs = [
       {
         serviceType: "WMTS",
         serviceUrl:
-          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:dltb&style=dltb&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:dltb&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
         projection: "EPSG:4326",
         minZoom: 0,
         maxZoom: 15,
@@ -172,7 +172,7 @@ export const vectorLayerConfigs = [
       {
         serviceType: "WMTS",
         serviceUrl:
-          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:gdbhmb&style=gdbhmb&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:gdbhmb&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
         projection: "EPSG:4326",
         minZoom: 0,
         maxZoom: 15,
@@ -203,7 +203,7 @@ export const vectorLayerConfigs = [
       {
         serviceType: "WMTS",
         serviceUrl:
-          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:stbhhx&style=stbhhx&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:stbhhx&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
         projection: "EPSG:4326",
         minZoom: 0,
         maxZoom: 15,
@@ -234,7 +234,7 @@ export const vectorLayerConfigs = [
       {
         serviceType: "WMTS",
         serviceUrl:
-          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:xzq&style=xzq&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:xzq&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
         projection: "EPSG:4326",
         minZoom: 0,
         maxZoom: 15,
@@ -265,7 +265,7 @@ export const vectorLayerConfigs = [
       {
         serviceType: "WMTS",
         serviceUrl:
-          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:xzqjx&style=xzqjx&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:xzqjx&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
         projection: "EPSG:4326",
         minZoom: 0,
         maxZoom: 15,
@@ -296,7 +296,7 @@ export const vectorLayerConfigs = [
       {
         serviceType: "WMTS",
         serviceUrl:
-          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:yjjbntbhtb&style=yjjbntbhtb&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
+          "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:yjjbntbhtb&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png",
         projection: "EPSG:4326",
         minZoom: 0,
         maxZoom: 15,

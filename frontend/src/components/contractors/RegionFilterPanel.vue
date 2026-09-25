@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <aside class="contractor-region-panel">
     <div class="region-panel-head">
       <div>
@@ -14,6 +14,7 @@
       placeholder="按区域名称搜索"
     />
     <el-tree
+      ref="treeRef"
       class="region-filter-tree"
       :data="displayRegionTree"
       node-key="value"
@@ -22,19 +23,33 @@
       :props="regionTreeProps"
       :expand-on-click-node="false"
       :default-expanded-keys="regionDefaultExpandedKeys"
+      :filter-node-method="filterRegionNode"
+      @node-expand="handleNodeExpand"
     >
       <template #default="{ node, data }">
         <div class="region-tree-node">
-          <button class="region-tree-label" type="button" @click.stop="$emit('select', data)">
+          <button
+            class="region-tree-label"
+            type="button"
+            :class="{ 'is-placeholder': data.level === 'placeholder' }"
+            @click.stop="data.level !== 'placeholder' && $emit('select', data)"
+          >
             {{ node.label }}
           </button>
-          <el-dropdown trigger="click" @command="(command) => $emit('action', { command, data })">
+          <el-dropdown
+            v-if="data.level !== 'placeholder'"
+            trigger="click"
+            @command="(command) => $emit('action', { command, data })"
+          >
             <el-button link type="primary" class="region-tree-action" @click.stop>操作</el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="printSurveyForms">批量打印调查表</el-dropdown-item>
+                <!-- 「批量打印调查表」只在组级出现：整村一次上千户，整批渲染会拖垮浏览器 -->
+                <el-dropdown-item v-if="data.level === 'group'" command="printSurveyForms">
+                  批量打印调查表
+                </el-dropdown-item>
+                <el-dropdown-item command="exportSurveyForms">导出地籍调查表（Word）</el-dropdown-item>
                 <el-dropdown-item command="printRoster">打印承包方清册</el-dropdown-item>
-                <el-dropdown-item command="exportSurveyForms">导出调查表信息</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -45,9 +60,13 @@
 </template>
 
 <script setup>
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
+import { ElMessage } from "element-plus";
+
+import { fetchRegionChildren } from "../../api/region";
 
 const props = defineProps({
+  /** 省 / 县 / 镇 / 村 四级树（同步加载，组不在其中） */
   regionTree: { type: Array, default: () => [] },
   activeRegionCode: { type: String, default: "" },
   activeRegionLabel: { type: String, default: "" },
@@ -55,39 +74,89 @@ const props = defineProps({
 
 defineEmits(["select", "clear", "action"]);
 
+const treeRef = ref(null);
 const regionNameKeyword = ref("");
 
 const regionTreeProps = { label: "label", children: "children" };
 
-function filterRegionNodesByName(nodes, keyword) {
-  const result = [];
-  for (const item of nodes || []) {
-    const children = filterRegionNodesByName(item.children || [], keyword);
-    if (item.label?.includes(keyword) || children.length) {
-      result.push({ ...item, children });
-    }
-  }
-  return result;
+//: 已加载的组：``村 code -> 子节点列表``。缓存在这里，搜索触发的树重建后不会丢。
+const groupsByVillage = ref({});
+
+const PLACEHOLDER_SUFFIX = "__pending__";
+
+function normalizeNodes(nodes = []) {
+  return nodes.map((item) => ({
+    ...item,
+    value: item.code,
+    label: item.name,
+    children: normalizeNodes(item.children || []),
+  }));
 }
 
-function collectDefaultExpandedRegionKeys(nodes, expandTownLevel = false) {
-  const keys = [];
-  for (const item of nodes || []) {
-    const children = item.children || [];
-    const childKeys = collectDefaultExpandedRegionKeys(children, expandTownLevel);
-    if (expandTownLevel || childKeys.length || children.length) {
-      keys.push(item.value, ...childKeys);
+/**
+ * 给尚未展开的村挂一个占位子节点 —— Element Plus 的 tree 在非 lazy 模式下
+ * 用「有没有 children」判断叶子，空数组会让村失去展开箭头。
+ */
+function decorate(nodes) {
+  return nodes.map((item) => {
+    const cached = groupsByVillage.value[item.code];
+    if (cached) {
+      return { ...item, children: cached };
     }
-  }
-  return keys;
+    const children = decorate(item.children || []);
+    if (item.level === "village" && !children.length) {
+      children.push({
+        value: `${item.code}${PLACEHOLDER_SUFFIX}`,
+        label: "加载中…",
+        level: "placeholder",
+        disabled: true,
+        children: [],
+      });
+    }
+    return { ...item, children };
+  });
 }
 
-const displayRegionTree = computed(() => {
-  const keyword = regionNameKeyword.value.trim();
-  return keyword ? filterRegionNodesByName(props.regionTree, keyword) : props.regionTree;
+const displayRegionTree = computed(() => decorate(props.regionTree));
+
+async function handleNodeExpand(data) {
+  if (!data || data.level !== "village" || props.regionTree.length === 0) return;
+  if (groupsByVillage.value[data.code]) return;
+
+  try {
+    const { data: response } = await fetchRegionChildren({
+      parentId: data.id,
+      includeGroups: true,
+    });
+    const groups = normalizeNodes(response.data || []);
+    groupsByVillage.value = { ...groupsByVillage.value, [data.code]: groups };
+    treeRef.value?.updateKeyChildren(data.code, groups);
+  } catch (error) {
+    treeRef.value?.updateKeyChildren(data.code, []);
+    ElMessage.error(error?.response?.data?.detail || "加载组失败");
+  }
+}
+
+function filterRegionNode(value, data) {
+  if (!value) return true;
+  const keyword = String(value);
+  return (
+    String(data.label || "").includes(keyword) ||
+    String(data.fullName || data.full_name || "").includes(keyword)
+  );
+}
+
+watch(regionNameKeyword, (value) => {
+  treeRef.value?.filter(String(value || "").trim());
 });
 
-const regionDefaultExpandedKeys = computed(() =>
-  collectDefaultExpandedRegionKeys(props.regionTree),
-);
+// 只展开顶层（省级），镇级以下依次展开，村展开时才异步取组。
+const regionDefaultExpandedKeys = computed(() => props.regionTree.map((item) => item.value));
 </script>
+
+<style scoped>
+.region-tree-label.is-placeholder {
+  color: #a8abb2;
+  cursor: default;
+}
+</style>

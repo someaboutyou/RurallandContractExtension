@@ -220,6 +220,7 @@
         </el-form-item>
         <el-form-item class="form-span-2" label="数据权限区域" prop="regionCodes">
           <el-tree-select
+            ref="regionTreeSelectRef"
             v-model="userForm.regionCodes"
             multiple
             show-checkbox
@@ -232,8 +233,11 @@
             :props="regionTreeProps"
             :load="loadRegionPermissionNode"
             :filter-method="handleRegionPermissionFilter"
+            :render-content="renderRegionNode"
             node-key="code"
+            popper-class="region-perm-tree-popper"
             placeholder="请选择可操作区域"
+            @check="handleRegionPermissionCheck"
           />
         </el-form-item>
         <el-form-item v-if="!editingUserId" label="用户状态" prop="status">
@@ -323,11 +327,12 @@
 </template>
 
 <script setup>
-import { computed, onUnmounted, reactive, ref } from "vue";
+import { computed, nextTick, onUnmounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
 import { fetchPermissions } from "../api/permission";
 import { fetchRegionChildren, fetchRegions, searchRegions } from "../api/region";
+import { findCoveringCode, normalizeRegionCodes, regionCodeCovers } from "../utils/regionCode";
 import { createRole, deleteRole, fetchRoles, updateRole } from "../api/role";
 import { fetchTenants } from "../api/tenant";
 import { createUser, deleteUser, fetchUsers, resetUserPassword, updateUser } from "../api/user";
@@ -356,6 +361,7 @@ const roleOptions = ref([]);
 const regionOptions = ref([]);
 const regionPermissionTree = ref([]);
 const regionTreeProps = { label: "fullName", children: "children", disabled: "disabled", isLeaf: "leaf" };
+const regionTreeSelectRef = ref(null);
 const selectedRegionMap = ref(new Map());
 const tenantOptions = ref([]);
 const permissionsCatalog = ref([]);
@@ -671,6 +677,9 @@ async function loadRegionPermissionNode(node, resolve) {
   const { data } = await fetchRegionChildren({ parentId: node.data.id, includeGroups: true });
   rememberRegions(data.data);
   resolve(markAssignedGroupNodes(data.data, editingUserId.value));
+  // 新加载的这一层要按当前选中集合重新刷一遍勾选态：check-strictly 下 el-tree 不会自动联动，
+  // 父节点被选中时子节点不会自己点亮，得我们显式灌一次。
+  syncRegionTreeChecked();
 }
 
 function handleRegionPermissionFilter(keyword) {
@@ -700,6 +709,171 @@ function markAssignedGroupNodes(nodes, currentUserId) {
   });
 }
 
+// ---- 数据权限区域树：显式选中 / 随上级授权 / 部分选中 / 未选 四态 ----
+// 这棵树为了支持「授权到任意层级」用了 check-strictly，而且必须 lazy（组 3707 个，不能全量加载），
+// 代价是 el-tree 不做任何父子联动：勾了县，展开镇一看还是空的，像没生效。
+// 这里按区域编码自行补齐联动语义 —— 区域 code 是严格前缀层级（县 321324 → 镇 321324100 →
+// 村 321324100001 → 组 …101），而后端判权正是 `code LIKE 'xxx%'`，所以「勾父节点」在业务上
+// 等价于整棵子树授权。于是子孙节点直接渲染成「随上级授权」的浅色勾，**不把上千个子码写进
+// v-model**（那是 4025 个节点的全量展开，光 tag 就渲染不动），保存时再做归一化。
+const selectedRegionCodeSet = computed(() => new Set(userForm.regionCodes || []));
+
+// 每个已选 code 的所有前缀 = 「后代被选中」的祖先集合。O(选中数 × 编码长度) 预计算，
+// 避免对每个节点遍历整个选中集合；未展开的节点也能立刻得到状态。
+const partialRegionPrefixes = computed(() => {
+  const prefixes = new Set();
+  for (const code of userForm.regionCodes || []) {
+    const text = String(code);
+    for (let length = 1; length < text.length; length += 1) {
+      prefixes.add(text.slice(0, length));
+    }
+  }
+  return prefixes;
+});
+
+// ⚠️ 省级只是「展示」特例，**不参与覆盖判定**：省码是「2 位省码 + 0000」（江苏省 320000），
+// 而县码是 321324，两者不是前缀关系 ⇒ `"321324".startsWith("320000")` 为假 —— 勾省其实
+// 授不到任何县（与后端 ensure_code_in_scope 的 startswith 语义一致）。这里按前两位比，只是
+// 为了让用户看得出「我的选择落在江苏省下面」，否则勾了泗洪县、江苏省仍显示「未选」。
+const selectedProvincePrefixes = computed(() => {
+  const prefixes = new Set();
+  for (const code of userForm.regionCodes || []) {
+    prefixes.add(String(code).slice(0, 2));
+  }
+  return prefixes;
+});
+
+function regionTreeNodeState(data) {
+  const code = String(data.code);
+  if (selectedRegionCodeSet.value.has(code)) return "checked";
+  // 祖先已授权 ⇒ 这一支在业务上已经是可操作范围（后端按前缀判权），显示为「随上级授权」。
+  if (findCoveringCode(code, userForm.regionCodes || [])) return "inherited";
+  if (data.level === "province" && /^\d{6}$/.test(code)) {
+    return selectedProvincePrefixes.value.has(code.slice(0, 2)) ? "partial" : "none";
+  }
+  return partialRegionPrefixes.value.has(code) ? "partial" : "none";
+}
+
+function renderRegionNode(h, { data }) {
+  const state = regionTreeNodeState(data);
+  const children = [h("span", { class: "region-node-text" }, data.fullName)];
+  if (state === "inherited") {
+    children.push(h("span", { class: "region-node-badge region-node-badge--inherited" }, "随上级授权"));
+  } else if (state === "partial") {
+    children.push(h("span", { class: "region-node-badge" }, "含已选子项"));
+  }
+  return h(
+    "span",
+    {
+      class: ["region-node", `region-node--${state}`, { "is-disabled": Boolean(data.disabled) }],
+    },
+    children,
+  );
+}
+
+function regionLabelOf(code) {
+  return (
+    selectedRegionMap.value.get(String(code))?.fullName ||
+    findRegionTreeNode(regionPermissionTree.value, String(code))?.fullName ||
+    String(code)
+  );
+}
+
+// 选中集合的**唯一写入口**：始终归一化后再写回，保证集合里存的都是「互不包含的子树根」。
+function applyRegionCodes(codes) {
+  const next = normalizeRegionCodes(codes);
+  const current = (userForm.regionCodes || []).map((item) => String(item));
+  if (next.length === current.length && next.every((code, index) => code === current[index])) {
+    return;
+  }
+  userForm.regionCodes = next;
+  syncRegionTreeChecked();
+}
+
+// el-tree 的勾选态由它自己的 store 决定，新加载的节点要显式灌一遍 modelValue，
+// 否则「勾父节点 → 展开子层」时子节点会显示成没勾（check-strictly 下没有父子联动）。
+function syncRegionTreeChecked() {
+  const treeInstance = regionTreeSelectRef.value;
+  if (!treeInstance?.setCheckedKeys) return;
+  const keys = (userForm.regionCodes || []).map((item) => String(item));
+  nextTick(() => treeInstance.setCheckedKeys(keys));
+}
+
+// 已加载的子节点 code（树节点是按需 lazy 加载的，只有 tree 实例知道加载过哪些）。
+function loadedRegionChildCodes(code) {
+  const node = regionTreeSelectRef.value?.getNode?.(String(code));
+  if (!node?.childNodes?.length) return [];
+  return node.childNodes.map((child) => String(child.key));
+}
+
+// 取某个区域的直接子节点：已展开就用现成的，没展开就拉一次接口（顺手挂回树节点，
+// 免得用户随后展开时又请求一遍）。
+async function ensureRegionChildCodes(code) {
+  const loaded = loadedRegionChildCodes(code);
+  if (loaded.length) return loaded;
+  const region =
+    selectedRegionMap.value.get(String(code)) || findRegionTreeNode(regionPermissionTree.value, String(code));
+  if (!region?.id) return [];
+  const { data } = await fetchRegionChildren({ parentId: region.id, includeGroups: true });
+  rememberRegions(data.data);
+  const node = regionTreeSelectRef.value?.getNode?.(String(code));
+  if (node) node.data.children = data.data;
+  return data.data.map((item) => String(item.code));
+}
+
+/**
+ * 把「这一支」从上级授权里摘出去：把覆盖它的那个已选祖先拆成它的其余分支。
+ * 例：泗洪县已授权，取消其中的「某某村」⇒ 选中集合变成「泗洪县其余镇 + 该镇其余村」。
+ * 逐级展开，最多 4 级（县→镇→村→组）；拿不到子节点就整体回退、保持原授权，
+ * 绝不「悄悄少授一块地」。
+ */
+async function excludeRegionBranch(code, coverCode, baseCodes) {
+  const nextCodes = baseCodes.filter((item) => item !== coverCode);
+  let cursor = coverCode;
+  let depth = 0;
+  while (cursor && cursor !== code && depth <= 8) {
+    depth += 1;
+    const childCodes = await ensureRegionChildCodes(cursor);
+    const next = childCodes.find((child) => child === code || regionCodeCovers(child, code));
+    if (!next) {
+      ElMessage.warning(`无法展开上级区域「${regionLabelOf(coverCode)}」，已保持原有授权`);
+      applyRegionCodes(baseCodes);
+      return;
+    }
+    for (const child of childCodes) {
+      if (child !== next && !nextCodes.includes(child)) nextCodes.push(child);
+    }
+    cursor = next;
+  }
+  applyRegionCodes(nextCodes.filter((item) => item !== code && !regionCodeCovers(code, item)));
+}
+
+/**
+ * 复选框点击的统一入口。
+ * 规则只有两条：① 这次点击的节点被某个已选祖先覆盖 ⇒ 用户想把这一支摘出去（拆分支）；
+ * ② 其余就是普通的勾选 / 取消。
+ *
+ * ⛔ 关键时序（踩过坑）：el-tree-select 是**先**按它自己的 store 结果 emit 一次 update:modelValue，
+ * **之后**才在 nextTick 里回调我们的 @check。所以进到这里时 v-model 已经被它改过了：
+ *   勾上 ⇒ codes 里已经含 code（点击前的集合 = codes 去掉 code）
+ *   取消 ⇒ codes 里已不含 code（点击前的集合 = codes）
+ * 把这一点搞错，会把每一次点击都当成「取消」，表现为复选框点了没反应 —— 所以这里只用
+ * `withoutCode`（= 点击前的集合）判断是否被祖先覆盖，方向则看 store 这次是点亮还是熄灭。
+ */
+async function handleRegionPermissionCheck(data, info) {
+  const code = String(data?.code ?? "");
+  if (!code || data?.disabled) return;
+  const codes = Array.from(new Set((userForm.regionCodes || []).map((item) => String(item))));
+  const withoutCode = codes.filter((item) => item !== code);
+  const cover = findCoveringCode(code, withoutCode);
+  if (cover) {
+    await excludeRegionBranch(code, cover, withoutCode);
+    return;
+  }
+  const turnedOn = (info?.checkedKeys || []).map(String).includes(code);
+  applyRegionCodes(turnedOn ? [...withoutCode, code] : withoutCode);
+}
+
 function openEditUserDialog(row) {
   editingUserId.value = row.id;
   Object.assign(userForm, {
@@ -727,9 +901,13 @@ async function handleSubmitUser() {
     realName: userForm.realName.trim(),
     mobile: userForm.mobile.trim() || null,
     roleId: userForm.roleId,
-    regionCodes: [...userForm.regionCodes],
+    // 归一化：被祖先覆盖的子码是冗余的（后端按前缀判权），先丢掉再提交。
+    // 「子孙全选塌缩成父节点一行」需要 regions 全表，前端做不了 —— 交给后端
+    // user_service._build_region_permissions 再归一化一次（那里是权威实现）。
+    regionCodes: normalizeRegionCodes(userForm.regionCodes),
     status: userForm.status,
   };
+  userForm.regionCodes = payload.regionCodes;
 
   userSubmitting.value = true;
   try {

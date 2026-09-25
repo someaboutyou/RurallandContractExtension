@@ -76,3 +76,21 @@ def delete_region(
 ):
     region_service.delete_region(db, region_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/derive-from-fbf", response_model=ApiResponse[dict])
+def derive_regions_from_fbf(
+    db: Session = Depends(get_db),
+    current_user: object = Depends(require_permission("regions.manage")),
+):
+    return {"data": region_service.derive_regions_from_fbf(db, current_user)}
+
+
+@router.post("/sync-from-fbf", response_model=ApiResponse[dict])
+def sync_regions_from_fbf(
+    overwrite: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    current_user: object = Depends(require_permission("regions.manage")),
+):
+    return {"data": region_service.sync_regions_from_fbf(db, current_user, overwrite=overwrite)}
+

@@ -23,11 +23,18 @@ def upgrade_schema(engine: Engine) -> None:
     _upgrade_tenant_scope_columns(engine)
     _drop_survey_result_batch_ids(engine)
     _migrate_legacy_cbf_tables_to_survey(engine)
+    _normalize_region_scope_data(engine)
+    _backfill_contractor_group_region_name(engine)
+    _backfill_change_diff_scope(engine)
+    _backfill_change_diff_field_label(engine)
     _upgrade_survey_dk_postgis_geometry(engine)
     _upgrade_spatial_tables(engine)
     _upgrade_survey_base_result_refactor(engine)
     _upgrade_survey_cbf_base_task_columns(engine)
     _upgrade_survey_parcel_uniqueness(engine)
+    _upgrade_survey_boundary_uniqueness(engine)
+    _upgrade_cbht_contract_columns(engine)
+    _seed_survey_org_setting(engine)
 
 
 def _upgrade_data_import_operations(engine: Engine) -> None:
@@ -67,6 +74,95 @@ def _upgrade_data_import_operations(engine: Engine) -> None:
 def _add_column_if_missing(connection, columns: set[str], table_name: str, column_name: str, column_type: str) -> None:
     if column_name not in columns:
         connection.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+
+
+def _normalize_region_scope_data(engine: Engine) -> None:
+    """Backfill canonical scope fields used by hierarchical authorization."""
+    inspector = inspect(engine)
+    contractor_tables = ("survey_cbf_base", "survey_cbf_result")
+    member_tables = ("survey_cbf_jtcy_base", "survey_cbf_jtcy_result")
+    with engine.begin() as connection:
+        for table_name in contractor_tables:
+            if not inspector.has_table(table_name):
+                continue
+            columns = {column["name"] for column in inspector.get_columns(table_name)}
+            if {"region_code", "group_region_code", "cbfbm"}.issubset(columns):
+                connection.exec_driver_sql(
+                    f"""
+                    UPDATE {table_name}
+                    SET region_code = COALESCE(NULLIF(group_region_code, ''), LEFT(cbfbm, 14))
+                    WHERE COALESCE(NULLIF(group_region_code, ''), LEFT(cbfbm, 14)) IS NOT NULL
+                      AND region_code IS DISTINCT FROM COALESCE(NULLIF(group_region_code, ''), LEFT(cbfbm, 14))
+                    """
+                )
+        for table_name in member_tables:
+            if not inspector.has_table(table_name):
+                continue
+            columns = {column["name"] for column in inspector.get_columns(table_name)}
+            if {"region_code", "cbfbm"}.issubset(columns):
+                connection.exec_driver_sql(
+                    f"""
+                    UPDATE {table_name}
+                    SET region_code = LEFT(cbfbm, 14)
+                    WHERE cbfbm IS NOT NULL
+                      AND region_code IS DISTINCT FROM LEFT(cbfbm, 14)
+                    """
+                )
+        # 地块 / 发包方 / 合同 / 实施单位：region_code 必须取业务编码的前 14 位（到村组）。
+        # 这些表历史上被写成导入批次选定的县码（6 位），而授权区域过滤用的是
+        # region_code LIKE '<授权码>%' —— 授权到镇/村级时 6 位县码全部匹配失败，
+        # 会导致整表数据不可见。业务编码本身就是最细的行政码来源，以它为准。
+        biz_based_tables = {
+            "survey_dk_base": ("dkbm",),
+            "survey_dk_result": ("dkbm",),
+            "survey_cbdkxx_base": ("dkbm",),
+            "survey_cbdkxx_result": ("dkbm",),
+            "survey_fbf_base": ("fbfbm",),
+            "survey_fbf_result": ("fbfbm",),
+            "fbf": ("fbfbm",),
+            "cbht": ("cbfbm", "fbfbm", "cbhtbm"),
+            "issuers": ("code",),
+        }
+        for table_name, sources in biz_based_tables.items():
+            if not inspector.has_table(table_name):
+                continue
+            columns = {column["name"] for column in inspector.get_columns(table_name)}
+            if not {"tenant_code", "region_code"}.issubset(columns):
+                continue
+            available = [name for name in sources if name in columns]
+            if not available:
+                continue
+            source_expr = f"COALESCE({', '.join(available)})" if len(available) > 1 else available[0]
+            connection.exec_driver_sql(
+                f"""
+                UPDATE {table_name}
+                SET tenant_code = LEFT({source_expr}, 6),
+                    region_code = LEFT({source_expr}, 14)
+                WHERE {source_expr} IS NOT NULL
+                  AND (
+                    tenant_code IS DISTINCT FROM LEFT({source_expr}, 6)
+                    OR region_code IS DISTINCT FROM LEFT({source_expr}, 14)
+                  )
+                """
+            )
+        for table_name in ("data_import_files", "data_import_rows", "data_import_operations"):
+            if not inspector.has_table(table_name) or not inspector.has_table("data_import_batches"):
+                continue
+            columns = {column["name"] for column in inspector.get_columns(table_name)}
+            if {"import_batch_id", "tenant_code", "region_code"}.issubset(columns):
+                connection.exec_driver_sql(
+                    f"""
+                    UPDATE {table_name} item
+                    SET tenant_code = batch.tenant_code,
+                        region_code = batch.region_code
+                    FROM data_import_batches batch
+                    WHERE item.import_batch_id = batch.id
+                      AND (
+                        item.tenant_code IS DISTINCT FROM batch.tenant_code
+                        OR item.region_code IS DISTINCT FROM batch.region_code
+                      )
+                    """
+                )
 
 
 def _ensure_scope_columns(engine: Engine, table_name: str) -> None:
@@ -233,7 +329,14 @@ def _upgrade_tenant_scope_columns(engine: Engine) -> None:
 
 
 def _upgrade_user_region_permissions(engine: Engine) -> None:
+    """确保 user_region_permissions 表与索引存在。
+
+    ⚠️ 按用户所属区域反推补种初始授权（下面的 INSERT）**只在首次建表时执行**。
+    旧实现每次启动都跑，等于\"运维把这个用户的区域授权全删了 → 重启自动重建回来\"，
+    与\"初始化不得冲掉运维数据\"的原则冲突。
+    """
     inspector = inspect(engine)
+    table_created = False
     if not inspector.has_table("user_region_permissions"):
         with engine.begin() as connection:
             connection.exec_driver_sql(
@@ -261,39 +364,42 @@ def _upgrade_user_region_permissions(engine: Engine) -> None:
             connection.exec_driver_sql(
                 "CREATE INDEX ix_user_region_permissions_region_code ON user_region_permissions(region_code)"
             )
+        table_created = True
     with engine.begin() as connection:
-        connection.exec_driver_sql(
-            """
-            INSERT INTO user_region_permissions (user_id, tenant_code, region_code, level)
-            SELECT u.id,
-                   LEFT(r.code, 6),
-                   r.code,
-                   CASE LENGTH(r.code)
-                       WHEN 6 THEN 'county'
-                       WHEN 9 THEN 'town'
-                       WHEN 12 THEN 'village'
-                       WHEN 14 THEN 'group'
-                       ELSE 'custom'
-                   END
-            FROM users AS u
-            JOIN regions AS r ON r.id = u.region_id
-            WHERE NOT EXISTS (
-                SELECT 1
-                FROM user_region_permissions AS p
-                WHERE p.user_id = u.id
+        if table_created:
+            connection.exec_driver_sql(
+                """
+                INSERT INTO user_region_permissions (user_id, tenant_code, region_code, level)
+                SELECT u.id,
+                       LEFT(r.code, 6),
+                       r.code,
+                       CASE LENGTH(r.code)
+                           WHEN 6 THEN 'county'
+                           WHEN 9 THEN 'town'
+                           WHEN 12 THEN 'village'
+                           WHEN 14 THEN 'group'
+                           ELSE 'custom'
+                       END
+                FROM users AS u
+                JOIN regions AS r ON r.id = u.region_id
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM user_region_permissions AS p
+                    WHERE p.user_id = u.id
+                )
+                """
             )
-            """
-        )
-        connection.exec_driver_sql(
-            """
-            DELETE FROM user_region_permissions AS p
-            USING user_region_permissions AS kept
-            WHERE p.level = 'group'
-              AND kept.level = 'group'
-              AND p.region_code = kept.region_code
-              AND kept.id < p.id
-            """
-        )
+            # 唯一索引 uq_user_region_permissions_group_region 建之前，先合并同区域重复行。
+            connection.exec_driver_sql(
+                """
+                DELETE FROM user_region_permissions AS p
+                USING user_region_permissions AS kept
+                WHERE p.level = 'group'
+                  AND kept.level = 'group'
+                  AND p.region_code = kept.region_code
+                  AND kept.id < p.id
+                """
+            )
         connection.exec_driver_sql(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS uq_user_region_permissions_group_region
@@ -490,6 +596,159 @@ def _upgrade_contractor_group_region(engine: Engine) -> None:
             )
 
 
+def _backfill_contractor_group_region_name(engine: Engine) -> None:
+    """按 regions.full_name 回填 group_region_name（幂等）。
+
+    `_upgrade_contractor_group_region()` 只回填了 group_region_code，漏了名称，
+    使 `group_region_name` 全表为空；前端会把这个"空名称 + 有编码"的组合
+    自动填充后比对，误判为"已修改"并高亮，保存时还会把 14 位编码写进名称字段。
+    这里按 code 精确回填，与导入路径 `resolve_group_region()` 取 full_name 保持一致。
+
+    依赖：必须排在 `_upgrade_regions()` 之后（regions 表要先存在）。
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("regions"):
+        return
+    with engine.begin() as connection:
+        for table_name in ("survey_cbf_result", "survey_cbf_base", "cbf"):
+            if not inspector.has_table(table_name):
+                continue
+            columns = {column["name"] for column in inspector.get_columns(table_name)}
+            if not {"group_region_code", "group_region_name"}.issubset(columns):
+                continue
+            connection.exec_driver_sql(
+                f"""
+                UPDATE {table_name} t
+                SET group_region_name = g.full_name
+                FROM regions g
+                WHERE g.code = t.group_region_code
+                  AND COALESCE(t.group_region_name, '') = ''
+                  AND COALESCE(g.full_name, '') <> ''
+                """
+            )
+
+
+def _backfill_change_diff_scope(engine: Engine) -> None:
+    """把 survey_change_diffs 的 tenant_code / region_code 对齐到所属承包方结果（幂等）。
+
+    `survey_change_diffs` 没有业务编码列，before_flush 无法推导区域，只能退化成
+    "当前用户的 region.code"。历史数据因此写进了 6 位县码，与统一口径（14 位村组码）
+    不一致：授权到镇/村/组时这些差异行会被区域过滤掉，界面上看不到变更明细。
+    这里按 contractor_uid 关联 survey_cbf_result 回填，与写入路径 `_rebuild_diffs`
+    的口径（`group_region_code or region_code`）保持一致。
+
+    依赖：必须在 `_upgrade_tenant_scope_columns()` 之后（两列要先存在）。
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("survey_change_diffs"):
+        return
+    source_table = next(
+        (
+            name
+            for name in ("survey_cbf_result", "cbf")
+            if inspector.has_table(name)
+            and {"contractor_uid", "region_code"}.issubset(
+                {column["name"] for column in inspector.get_columns(name)}
+            )
+        ),
+        None,
+    )
+    if source_table is None:
+        return
+    diff_columns = {column["name"] for column in inspector.get_columns("survey_change_diffs")}
+    if not {"tenant_code", "region_code"}.issubset(diff_columns):
+        return
+    source_columns = {column["name"] for column in inspector.get_columns(source_table)}
+    if "group_region_code" not in source_columns:
+        return
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            f"""
+            UPDATE survey_change_diffs d
+            SET region_code = COALESCE(NULLIF(r.group_region_code, ''), r.region_code),
+                tenant_code = COALESCE(r.tenant_code, d.tenant_code)
+            FROM {source_table} r
+            WHERE r.contractor_uid = d.contractor_uid
+              AND COALESCE(NULLIF(r.group_region_code, ''), r.region_code) IS NOT NULL
+              AND (
+                    d.region_code IS DISTINCT FROM COALESCE(NULLIF(r.group_region_code, ''), r.region_code)
+                 OR COALESCE(d.tenant_code, '') <> COALESCE(r.tenant_code, '')
+              )
+            """
+        )
+
+
+# survey_change_diffs.field_label 的历史乱码回填。
+#
+# 早期版本的源码中文字面量在保存时损坏成了 mojibake（UTF-8 字节被按 GBK 解码后
+# 又存成 UTF-8），这些标签直接显示在变更明细界面上。源码字面量已修复，库里已有的
+# 历史行需要一次性回填。这里刻意不在代码里写乱码字面量：
+#   - field_name 能唯一决定标签的，直接按 field_name 对齐；
+#   - 一个 field_name 对应多个标签的（parcel_relation），按"可逆解码结果"落回
+#     白名单里的那一个值，绝不凭猜测改写。
+_CHANGE_DIFF_FIELD_LABELS: dict[str, str] = {
+    "cybzsm": "成员备注说明",
+    "gsjs": "公示记事",
+    "is_deceased": "是否死亡",
+    "is_five_guarantees": "是否五保",
+    "is_urban_settled": "是否进城落户",
+}
+
+_CHANGE_DIFF_MULTI_LABELS: dict[str, set[str]] = {
+    "parcel_relation": {"新增地块关联", "移除地块关联"},
+}
+
+
+def _repair_mojibake_label(value: str, allowed: set[str]) -> str | None:
+    """链式 `gbk -> utf-8` 还原；仅当结果命中白名单时返回（避免误改正常中文）。"""
+    current = value
+    for _ in range(4):
+        decoded: str | None = None
+        for encoding in ("gb18030", "gbk"):
+            try:
+                decoded = current.encode(encoding).decode("utf-8")
+                break
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                continue
+        if not decoded or decoded == current:
+            return None
+        current = decoded
+        if current in allowed:
+            return current
+    return None
+
+
+def _backfill_change_diff_field_label(engine: Engine) -> None:
+    """把 survey_change_diffs 中历史乱码 field_label 还原成正确中文（幂等）。
+
+    只改写"当前值确实需要变"的行，正常中文标签不受影响；重复执行无副作用。
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("survey_change_diffs"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("survey_change_diffs")}
+    if not {"field_name", "field_label"}.issubset(columns):
+        return
+    with engine.begin() as connection:
+        rows = connection.exec_driver_sql(
+            "SELECT DISTINCT field_name, field_label FROM survey_change_diffs"
+        ).fetchall()
+        for field_name, field_label in rows:
+            if not field_label:
+                continue
+            correct = _CHANGE_DIFF_FIELD_LABELS.get(field_name)
+            if correct is None:
+                allowed = _CHANGE_DIFF_MULTI_LABELS.get(field_name)
+                correct = _repair_mojibake_label(field_label, allowed) if allowed else None
+            if not correct or correct == field_label:
+                continue
+            connection.exec_driver_sql(
+                "UPDATE survey_change_diffs SET field_label = %s "
+                "WHERE field_name = %s AND field_label = %s",
+                (correct, field_name, field_label),
+            )
+
+
 def _migrate_legacy_cbf_tables_to_survey(engine: Engine) -> None:
     inspector = inspect(engine)
     if not inspector.has_table("cbf"):
@@ -623,7 +882,7 @@ def _migrate_legacy_cbf_tables_to_survey(engine: Engine) -> None:
                     mb.tenant_code, mb.region_code, mb.contractor_uid, mb.member_uid, mb.id,
                     mb.cbfbm, mb.cyxm, mb.cyzjlx, mb.cyzjhm, mb.cyxb, mb.yhzgx, mb.cybz, mb.sfgyr, mb.cybzsm,
                     'normal', 'not_surveyed', FALSE,
-                    CASE WHEN mb.yhzgx = '01' THEN TRUE ELSE FALSE END,
+                    CASE WHEN mb.yhzgx = '02' THEN TRUE ELSE FALSE END,
                     FALSE, FALSE, FALSE, FALSE,
                     mb.source_import_batch_id, mb.source_import_row_id, mb.last_import_batch_id, mb.last_import_row_id,
                     mb.id, mb.initialized_at, NOW(), NOW()
@@ -651,6 +910,10 @@ def _drop_survey_result_batch_ids(engine: Engine) -> None:
     existing_tables = [table_name for table_name in result_tables if inspector.has_table(table_name)]
     if not existing_tables:
         return
+    # Pre-compute columns BEFORE the transaction to avoid deadlock with inspector
+    table_columns = {}
+    for table_name in existing_tables:
+        table_columns[table_name] = {column["name"] for column in inspector.get_columns(table_name)}
     with engine.begin() as connection:
         legacy_indexes = (
             "ix_survey_cbf_result_batch_id",
@@ -669,7 +932,7 @@ def _drop_survey_result_batch_ids(engine: Engine) -> None:
         for index_name in legacy_indexes:
             connection.exec_driver_sql(f"DROP INDEX IF EXISTS {index_name}")
         for table_name in existing_tables:
-            columns = {column["name"] for column in inspector.get_columns(table_name)}
+            columns = table_columns[table_name]
             if "batch_id" in columns:
                 connection.exec_driver_sql(f"ALTER TABLE {table_name} DROP COLUMN IF EXISTS batch_id")
         if "survey_cbf_result" in existing_tables:
@@ -1572,3 +1835,106 @@ def _upgrade_survey_parcel_uniqueness(engine: Engine) -> None:
                 connection.exec_driver_sql(
                     f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} ON {table_name} ({columns})"
                 )
+
+
+def _upgrade_survey_boundary_uniqueness(engine: Engine) -> None:
+    """界址点/界址线的业务键：两者都是"共享实体"，判重范围是全租户而非单个地块。
+
+    - 界址点：``(tenant_code, x, y)`` 保证**共点只存一条**（坐标毫米对齐），
+      ``(tenant_code, jzdh)`` 保证全库唯一编号不重复。
+    - 界址线：``(tenant_code, qdjzdh, zdjzdh)`` 保证**共线只存一条**；两端在
+      写入时已按字典序规范化，所以 A→B 与 B→A 会命中同一行。
+
+    这样相邻地块共用界址点/界址线时不会各存一份，正是"共点共线不重复生成"。
+    """
+    inspector = inspect(engine)
+    specs = (
+        ("survey_jzd_result", "uq_survey_jzd_result_tenant_jzdh", "tenant_code, jzdh"),
+        ("survey_jzd_result", "uq_survey_jzd_result_tenant_xy", "tenant_code, x, y"),
+        ("survey_jzx_result", "uq_survey_jzx_result_tenant_points", "tenant_code, qdjzdh, zdjzdh"),
+    )
+    with engine.begin() as connection:
+        for table_name, index_name, columns in specs:
+            if inspector.has_table(table_name):
+                connection.exec_driver_sql(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} ON {table_name} ({columns})"
+                )
+
+
+def _upgrade_cbht_contract_columns(engine: Engine) -> None:
+    """延包业务：给 cbht 补"合同版本"相关列（幂等）。
+
+    一条承包方在同一批次里可以有多份合同：
+    - ``contract_status``：``active`` 现行 / ``history`` 历史（历史合同仍可查看、打印）；
+    - ``contract_source``：``imported`` 导入的原始承包合同 / ``generated`` 平台生成的延包合同；
+    - ``survey_batch_id`` + ``contractor_uid``：生成合同归属的调查批次与承包方；
+    - ``ycbhtbm`` 已有列沿用为"上一份合同编码"，串起延包链路。
+
+    历史数据（导入的合同）默认视为 ``active`` + ``imported``；
+    有多个合同并存时由业务侧把旧合同改成 ``history``。
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("cbht"):
+        return
+    columns = {c["name"] for c in inspector.get_columns("cbht")}
+    with engine.begin() as connection:
+        if "contract_status" not in columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE cbht ADD COLUMN contract_status VARCHAR(16) NOT NULL DEFAULT 'active'"
+            )
+            print("  Added contract_status to cbht")
+        if "contract_source" not in columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE cbht ADD COLUMN contract_source VARCHAR(16) NOT NULL DEFAULT 'imported'"
+            )
+            print("  Added contract_source to cbht")
+        if "survey_batch_id" not in columns:
+            connection.exec_driver_sql("ALTER TABLE cbht ADD COLUMN survey_batch_id INTEGER")
+            print("  Added survey_batch_id to cbht")
+        if "contractor_uid" not in columns:
+            connection.exec_driver_sql("ALTER TABLE cbht ADD COLUMN contractor_uid VARCHAR(36)")
+            print("  Added contractor_uid to cbht")
+        if "generated_at" not in columns:
+            connection.exec_driver_sql("ALTER TABLE cbht ADD COLUMN generated_at TIMESTAMPTZ")
+            print("  Added generated_at to cbht")
+        if "generated_by" not in columns:
+            connection.exec_driver_sql("ALTER TABLE cbht ADD COLUMN generated_by VARCHAR(50)")
+            print("  Added generated_by to cbht")
+        connection.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_cbht_cbfbm_contract_status ON cbht (cbfbm, contract_status)"
+        )
+        connection.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_cbht_survey_contractor ON cbht (survey_batch_id, contractor_uid)"
+        )
+
+
+def _seed_survey_org_setting(engine: Engine) -> None:
+    """预置「调查单位（机构）」字典项（幂等）。
+
+    地籍调查表封面上的调查单位原先写死在渲染代码里。改为从字典项
+    ``survey_org`` 读取后，这里补一条与旧写死值完全一致的种子数据：
+    升级后打印结果保持不变，同时运维可以在「字典管理」页自行修改，无需改代码。
+
+    只在库中不存在任何 ``survey_org`` 条目时插入，绝不覆盖人工维护的值。
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("dictionary_items"):
+        return
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            """
+            INSERT INTO dictionary_items
+                (dict_type, dict_name, item_value, item_name, sort_order, enabled, remark)
+            SELECT
+                'survey_org',
+                '调查单位（机构）',
+                'default',
+                '江苏中天吉奥信息技术股份有限公司',
+                0,
+                TRUE,
+                '打印模板（地籍调查表等）封面「调查单位（机构）」显示的名称，改完重新打印即生效。'
+            WHERE NOT EXISTS (
+                SELECT 1 FROM dictionary_items WHERE dict_type = 'survey_org'
+            )
+            """
+        )

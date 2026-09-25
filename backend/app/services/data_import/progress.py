@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal, set_current_user
 from app.models.data_import import DataImportBatch, DataImportFile
 from app.models.user import User
+from app.services.data_access_service import data_access_service
 from app.services.data_import_progress import data_import_progress
 from app.services.geoserver_service import geoserver_service
 
@@ -175,6 +176,11 @@ def run_gdb_import_job(
             data_import_progress.update(batch_id, status="failed", message="import context not found")
             return
         set_current_user(db, current_user)
+        data_access_service.ensure_region_in_scope(
+            current_user,
+            batch.region_code,
+            detail="import batch is outside the current authorized scope",
+        )
         data_import_progress.update(batch_id, status="running", message="background import started")
         content = Path(stored_path).read_bytes()
         process_gdb_archive_content(db, batch, filename, content, content_type, current_user, job_id=job_id)
@@ -227,6 +233,8 @@ def process_gdb_archive_content(
     now = datetime.now(timezone.utc)
     batch.source_type = "gdb"
     archive_file = DataImportFile(
+        tenant_code=batch.tenant_code,
+        region_code=batch.region_code,
         import_batch_id=batch.id,
         file_type="gdb_archive",
         original_name=filename,
@@ -343,6 +351,8 @@ def process_gdb_layer(
 ) -> dict:
     fm = field_map_for(file_type)
     import_file = DataImportFile(
+        tenant_code=batch.tenant_code,
+        region_code=batch.region_code,
         import_batch_id=batch.id,
         file_type=file_type,
         original_name=layer_name,
@@ -391,6 +401,8 @@ def process_gdb_layer(
             from app.models.data_import import DataImportRow
 
             row_record = DataImportRow(
+                tenant_code=batch.tenant_code,
+                region_code=batch.region_code,
                 import_batch_id=batch.id,
                 import_file_id=import_file.id,
                 row_no=item["row_no"],

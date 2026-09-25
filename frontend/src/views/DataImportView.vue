@@ -96,6 +96,21 @@
         :closable="false"
         title="请上传包含 FileGDB（.gdb 目录）的 ZIP 压缩包，系统会自动导入 FBF、CBF、CBF_JTCY、CBDKXX、DK 图层。"
       />
+      <el-alert
+        class="upload-tip"
+        type="warning"
+        show-icon
+        :closable="false"
+      >
+        <template #title>
+          <div style="font-weight:600;margin-bottom:4px;">区域导入规则</div>
+          <div style="line-height:1.6;font-weight:normal;">
+            ① 同级相同区域不能重复导入<br/>
+            ② 上级区域已有导入数据时，下级区域不能再导入<br/>
+            ③ 下级区域已有导入数据时，导入上级区域会覆盖下级数据
+          </div>
+        </template>
+      </el-alert>
       <el-form-item label="GDB ZIP 文件">
         <input type="file" :accept="uploadAccept" :disabled="uploading" @change="handleFileChange" />
       </el-form-item>
@@ -314,18 +329,36 @@ function handleRegionFilter(keyword) {
   }, 250);
 }
 
-function openUploadDialog(row) {
+async function openUploadDialog(row) {
   stopProgressPolling();
   activeBatch.value = row;
   selectedFile.value = null;
   importProgress.value = null;
-  uploadVisible.value = true;
   uploading.value = false;
-  if (isActiveImportBatch(row)) {
-    importProgress.value = buildProgressFromBatch(row);
-    uploading.value = true;
-    startProgressPolling();
+
+  // Always fetch latest progress from backend to check for active uploads
+  try {
+    const { data } = await fetchImportProgress(row.id);
+    const progress = data.data;
+    if (progress && ["queued", "running", "processing", "cancel_requested"].includes(progress.status)) {
+      importProgress.value = progress;
+      uploading.value = true;
+      uploadVisible.value = true;
+      startProgressPolling();
+      ElMessage.warning("该批次正在导入中，请等待完成后再上传新数据");
+      return;
+    }
+    if (progress && importDoneStatuses.includes(progress.status)) {
+      row.status = progress.status;
+      row.totalCount = progress.totalRows;
+      row.successCount = progress.successRows;
+      row.failedCount = progress.failedRows;
+    }
+  } catch {
+    // If progress fetch fails, fall through to open dialog normally
   }
+
+  uploadVisible.value = true;
 }
 
 function buildProgressFromBatch(row) {

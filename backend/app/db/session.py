@@ -32,42 +32,30 @@ def _add_tenant_scope(execute_state):
     if not execute_state.is_select or execute_state.execution_options.get("skip_tenant_scope"):
         return
     
-    # ===== 系统级授权检查（优先级最高）=====
-    authorized_region = license_validator.get_authorized_region_code()
+    authorized_region = data_access_service.normalize_region_code(license_validator.get_authorized_region_code())
     if authorized_region:
-        # 有授权文件：强制过滤到授权区域
-        tenant_code = authorized_region[:6]
-        region_pattern = authorized_region + "%"
-        
-        # 创建绑定参数
-        tenant_param = bindparam("sys_tenant_code", value=tenant_code)
-        region_pattern_param = bindparam("sys_region_pattern", value=region_pattern)
-        
-        # 定义过滤条件
-        criteria = lambda cls: and_(
-            cls.tenant_code == tenant_param,
-            cls.region_code.like(region_pattern_param),
+        system_tenant_param = bindparam("sys_tenant_code", value=authorized_region[:6])
+        system_region_param = bindparam("sys_region_pattern", value=authorized_region + "%")
+        system_criteria = lambda cls: and_(
+            cls.tenant_code == system_tenant_param,
+            cls.region_code.like(system_region_param),
         )
-        
         execute_state.statement = execute_state.statement.options(
             with_loader_criteria(
                 TenantScopedMixin,
-                criteria,
+                system_criteria,
                 include_aliases=True,
             )
         )
-        return
-    
-    # ===== 原有用户级权限逻辑 =====
+
+    # 系统授权和用户数据权限取交集。data_scope=all 只跳过用户层，不跳过系统授权。
     data_scope = execute_state.session.info.get("current_user_data_scope")
-    if data_scope is None:
-        return
-    if data_scope == "all":
+    if data_scope is None or data_scope == "all":
         return
     tenant_code = execute_state.session.info.get("current_user_tenant_code")
     permissions = execute_state.session.info.get("current_user_region_permissions") or ()
     if not tenant_code or not permissions:
-        criteria = lambda cls: false()
+        user_criteria = lambda cls: false()
     else:
         tenant_param = bindparam("tenant_scope_code", value=tenant_code)
         region_patterns_param = bindparam(
@@ -75,11 +63,11 @@ def _add_tenant_scope(execute_state):
             value=[permission[1] + "%" for permission in permissions],
             type_=ARRAY(String),
         )
-        criteria = lambda cls: and_(cls.tenant_code == tenant_param, cls.region_code.like(any_(region_patterns_param)))
+        user_criteria = lambda cls: and_(cls.tenant_code == tenant_param, cls.region_code.like(any_(region_patterns_param)))
     execute_state.statement = execute_state.statement.options(
         with_loader_criteria(
             TenantScopedMixin,
-            criteria,
+            user_criteria,
             include_aliases=True,
         )
     )
@@ -88,7 +76,7 @@ def _add_tenant_scope(execute_state):
 @event.listens_for(Session, "before_flush")
 def _fill_tenant_scope(session, _flush_context, _instances):
     # ===== 系统级授权检查 =====
-    authorized_region = license_validator.get_authorized_region_code()
+    authorized_region = data_access_service.normalize_region_code(license_validator.get_authorized_region_code())
     
     data_scope = session.info.get("current_user_data_scope")
     tenant_scope = session.info.get("current_user_tenant_code")
@@ -99,12 +87,18 @@ def _fill_tenant_scope(session, _flush_context, _instances):
         if not isinstance(item, TenantScopedMixin):
             continue
         
-        region_code = getattr(item, "region_code", None)
-        if not region_code:
-            region_code = _derive_region_code(item)
-        if not region_code and current_user is not None:
-            region_code = getattr(getattr(current_user, "region", None), "code", None)
-        
+        # 业务编码（dkbm/fbfbm/cbfbm/...）是区域归属的权威来源。
+        # 只要该表能从业务编码推出区域，就一律以它为准覆盖传入值——否则调用方
+        # 若传了较粗的区域码（例如导入批次选定的县码），会把 region_code 写死成
+        # 6 位，导致「授权到镇/村」时前缀匹配 region_code LIKE '<授权码>%' 全部落空。
+        derived_region = _derive_region_code(item)
+        if derived_region:
+            region_code = derived_region
+        else:
+            region_code = getattr(item, "region_code", None)
+            if not region_code and current_user is not None:
+                region_code = getattr(getattr(current_user, "region", None), "code", None)
+
         region_code = data_access_service.normalize_region_code(region_code)
         if region_code:
             item.region_code = region_code
@@ -113,14 +107,13 @@ def _fill_tenant_scope(session, _flush_context, _instances):
         if tenant_code:
             item.tenant_code = tenant_code
         
-        # 系统级授权校验
-        if authorized_region:
-            if region_code and not str(region_code).startswith(authorized_region):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="系统授权范围为 {}，无法操作区域 {} 的数据".format(authorized_region, region_code)
-                )
-        elif data_scope is not None:
+        # 写入同时受系统授权和用户数据权限限制。
+        if authorized_region and region_code and not str(region_code).startswith(authorized_region):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="系统授权范围为 {}，无法操作区域 {} 的数据".format(authorized_region, region_code)
+            )
+        if data_scope is not None:
             _validate_scope(data_scope, tenant_scope, permissions, item)
 
 

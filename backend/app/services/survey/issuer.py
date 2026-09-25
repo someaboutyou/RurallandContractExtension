@@ -31,7 +31,7 @@ class SurveyServiceIssuerMixin:
         batch = self._ensure_batch(db, batch_id)
         normalized_region_code = data_access_service.normalize_region_code(region_code) or data_access_service.normalize_region_code(batch.region_code)
         if normalized_region_code:
-            data_access_service.ensure_region_in_scope(current_user, normalized_region_code)
+            data_access_service.ensure_region_filter_in_scope(current_user, normalized_region_code)
 
         filters = self._tenant_filters(SurveyFbfResult, current_user)
         if normalized_region_code:
@@ -104,7 +104,7 @@ class SurveyServiceIssuerMixin:
     def create_issuer(self, db: Session, batch_id: int, payload: dict, current_user: User) -> dict:
         batch = self._ensure_batch(db, batch_id)
         if batch.status == "finished":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鐠嬪啯鐓￠幍瑙勵偧瀹歌尙绮ㄩ弶鐕傜礉娑撳秷鍏橀弬鏉款杻")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="调查批次已结束，不能新增")
         code = payload["code"].strip()
         data_access_service.ensure_code_in_scope(current_user, code, detail="issuer is out of scope")
         if batch.region_code:
@@ -160,7 +160,7 @@ class SurveyServiceIssuerMixin:
 
     def get_issuer(self, db: Session, batch_id: int, issuer_uid: str, current_user: User) -> dict:
         issuer = self._get_issuer(db, batch_id, issuer_uid)
-        data_access_service.ensure_code_in_scope(current_user, issuer.fbfbm, detail="閸欐垵瀵橀弬閫涚瑝閸︺劌缍嬮崜宥嗘殶閹诡喗娼堥梽鎰瘱閸ユ潙鍞?")
+        data_access_service.ensure_code_in_scope(current_user, issuer.fbfbm, detail="发包方不在当前数据权限范围内")
         base = db.scalars(
             select(SurveyFbfBase)
             .where(SurveyFbfBase.tenant_code == issuer.tenant_code, SurveyFbfBase.result_id == issuer.id)
@@ -174,7 +174,7 @@ class SurveyServiceIssuerMixin:
     def update_issuer(self, db: Session, batch_id: int, issuer_uid: str, payload: dict, current_user: User) -> dict:
         batch = self._ensure_batch(db, batch_id)
         if batch.status == "finished":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鐠嬪啯鐓￠幍瑙勵偧瀹歌尙绮ㄩ弶鐕傜礉娑撳秷鍏樼紒褏鐢荤紓鏍帆")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="调查批次已结束，不能继续编辑")
         issuer = self._get_issuer(db, batch_id, issuer_uid)
         if issuer.survey_status == "confirmed":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="issuer survey result already confirmed")
@@ -250,7 +250,7 @@ class SurveyServiceIssuerMixin:
             .execution_options(skip_tenant_scope=True)
         ).first()
         if issuer is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="閸欐垵瀵橀弬纭呯殶閺屻儲鍨氶弸婊€绗夌€涙ê婀?")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="发包方调查成果不存在")
         return issuer
 
 

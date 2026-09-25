@@ -171,68 +171,179 @@
     margin-top: 6mm;
     line-height: 10mm;
   }
-  .attachment-title {
-    margin-top: 10mm;
-    text-align: center;
-    font-size: 18px;
-    font-weight: bold;
-  }
-  .sketch-meta {
-    position: absolute;
-    left: 12mm;
-    bottom: 23mm;
-    width: 68mm;
-    font-size: 10px;
-    line-height: 9mm;
-  }
-  .sketch-meta span {
-    display: inline-block;
-    min-width: 30mm;
-    border-bottom: 1px solid #000;
-    text-align: center;
-  }
-  .sketch-list {
-    margin: 18mm 8mm 0 78mm;
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14mm 16mm;
-  }
-  .sketch-card {
-    min-height: 42mm;
-    border: 1px solid #000;
+  /* ── 附件：承包地块示意图（横排页） ─────────────────────────
+     版式照搬「/surveys → 承包方调查录入 → 承包地块示意图」那个 tab 的打印件
+     （backend/app/templates/poltsketchmap.html）：
+       首页 = 左侧总览图（含指北针）+ 承包方信息表，右侧 2×3 个地块小图；
+       续页 = 2×4 个地块小图；每页底部页脚（审核者 / 制图者 / 编制单位 / 页码 i-n）。
+     ⚠️ 这两份版式是**有意重复**的（两份模板都要能在「打印模板管理」里独立编辑），
+        改这里时请把 poltsketchmap.html 一起改，别只改一边。
+     类名统一加 sketch- 前缀，避免与合同正文本来的 .page / table 规则打架。 */
+  .sketch-page {
     position: relative;
-    padding: 14mm 8mm;
-    text-align: center;
-    font-size: 10px;
+    width: 297mm;
+    height: 210mm;
+    margin: 0 auto 12px auto;
+    padding: 100px 50px 0;
+    background: #fff;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+    overflow: hidden;
+    page-break-after: always;
+    page: contract-landscape;
   }
-  .sketch-card .east,
-  .sketch-card .west,
-  .sketch-card .south,
-  .sketch-card .north {
-    position: absolute;
-    font-size: 10px;
-  }
-  .sketch-card .north { top: 2mm; left: 50%; transform: translateX(-50%); }
-  .sketch-card .south { bottom: 2mm; left: 50%; transform: translateX(-50%); }
-  .sketch-card .west { left: 2mm; top: 50%; transform: translateY(-50%); }
-  .sketch-card .east { right: 2mm; top: 50%; transform: translateY(-50%); }
-  .sketch-footer {
-    position: absolute;
-    left: 12mm;
-    right: 12mm;
-    bottom: 12mm;
+  .sketch-page:last-child { page-break-after: auto; }
+  .sketch-sheet {
+    position: relative;
     display: grid;
-    grid-template-columns: 1fr 1fr 1.1fr 16mm;
-    gap: 5mm;
-    font-size: 8px;
-    align-items: end;
+    grid-template-rows: 48px 530px 22px;
+    width: 100%;
+    height: 600px;
+    border: 1px solid #000;
   }
+  .sketch-title {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-bottom: 1px solid #000;
+    font-family: "SimHei", "黑体", sans-serif;
+    font-size: 24px;
+    font-weight: 700;
+  }
+  .sketch-content { min-height: 0; display: grid; }
+  .sketch-content.first { grid-template-columns: 90mm 1fr; }
+  .sketch-content.continuation { grid-template-columns: 1fr; }
+  .overview-column {
+    display: grid;
+    grid-template-rows: 1fr 44mm;
+    min-width: 0;
+    border-right: 1px solid #000;
+  }
+  .overview-map { position: relative; min-height: 0; padding: 6mm 5mm; }
+  .north-arrow { position: absolute; right: 4mm; bottom: 5mm; width: 9mm; height: 15mm; }
+  .info-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    border-top: 1px solid #000;
+    font-size: 14px;
+  }
+  .info-table th,
+  .info-table td {
+    height: 11mm;
+    border-right: 1px solid #000;
+    border-bottom: 1px solid #000;
+    padding: 0 2mm;
+    text-align: left;
+    vertical-align: middle;
+    font-weight: 400;
+    word-break: break-all;
+  }
+  .info-table tr:last-child th,
+  .info-table tr:last-child td { border-bottom: 0; }
+  .info-table th { width: 37mm; font-weight: 700; }
+  .info-table td:last-child { border-right: 0; }
+  .unit-cell { text-align: right; font-weight: 700; }
+  .plots-grid { display: grid; min-height: 0; }
+  .plots-grid.first-page {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+  .plots-grid.next-page {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+  .plot-cell {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    border-right: 1px solid #000;
+    border-bottom: 1px solid #000;
+    overflow: hidden;
+  }
+  .plots-grid.first-page .plot-cell:nth-child(3n),
+  .plots-grid.next-page .plot-cell:nth-child(4n) { border-right: 0; }
+  .plots-grid.first-page .plot-cell:nth-child(n + 4),
+  .plots-grid.next-page .plot-cell:nth-child(n + 5) { border-bottom: 0; }
+  .neighbor {
+    position: absolute;
+    z-index: 2;
+    max-width: 43%;
+    line-height: 1.15;
+    text-align: center;
+    word-break: break-all;
+  }
+  .neighbor.north { top: 4mm; left: 50%; transform: translateX(-50%); }
+  .neighbor.south { bottom: 3.5mm; left: 50%; transform: translateX(-50%); }
+  .neighbor.west {
+    left: 2mm;
+    top: 50%;
+    max-width: 17mm;
+    transform: translateY(-50%);
+    writing-mode: vertical-rl;
+    text-orientation: upright;
+  }
+  .neighbor.east {
+    right: 2mm;
+    top: 50%;
+    max-width: 17mm;
+    transform: translateY(-50%);
+    writing-mode: vertical-rl;
+    text-orientation: upright;
+  }
+  .plot-map { position: absolute; inset: 8mm 8mm 8mm 8mm; z-index: 1; }
+  .plot-label {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    z-index: 3;
+    transform: translate(-50%, -50%);
+    font-family: "Courier New", monospace;
+    font-size: 13px;
+    white-space: nowrap;
+    background: rgba(255, 255, 255, 0.65);
+  }
+  .empty-cell { display: flex; align-items: center; justify-content: center; color: transparent; }
+  .map-svg { width: 100%; height: 100%; display: block; }
+  .overview-svg .parcel-line,
+  .plot-svg .parcel-line {
+    fill: none;
+    stroke: #0000ff;
+    stroke-width: 1.6;
+    vector-effect: non-scaling-stroke;
+  }
+  .overview-svg .parcel-line { stroke: #58b7ff; stroke-width: 0.75; }
+  .overview-svg .highlight-line {
+    fill: none;
+    stroke: #ff2d2d;
+    stroke-width: 1.4;
+    vector-effect: non-scaling-stroke;
+  }
+  .sketch-footer {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1.15fr 14mm;
+    border-top: 1px solid #000;
+    font-size: 11px;
+    line-height: 22px;
+  }
+  .sketch-footer > div {
+    min-width: 0;
+    padding: 0 1.5mm;
+    border-right: 1px solid #000;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: clip;
+  }
+  .sketch-footer > div:last-child { border-right: 0; text-align: center; }
   @media print {
     html, body { background: #fff; }
     .page {
       margin: 0;
       box-shadow: none;
       min-height: auto;
+    }
+    .sketch-page {
+      margin: 0;
+      box-shadow: none;
     }
     .no-print { display: none; }
   }
@@ -402,32 +513,233 @@
   <p style="margin: 11mm 0 0 11mm;">附件：承包地地块示意图</p>
 </section>
 
-<section class="page landscape">
-  <div class="attachment-title">承包地块示意图</div>
-  <div class="sketch-list">
-    {% for dk in parcels %}
-    <div class="sketch-card">
-      <div class="north">{{ dk.dkbz }}</div>
-      <div class="west">{{ dk.dkxz }}</div>
-      <div class="east">{{ dk.dkdz }}</div>
-      <div class="south">{{ dk.dknz }}</div>
-      <strong>{{ dk.dkbm_suffix or dk.dkbm }}: {{ dk.scmj_mu }}亩</strong>
-    </div>
-    {% endfor %}
+{# ── 附件末页：承包地块示意图 ──────────────────────────────
+   版式与「承包方调查录入 → 承包地块示意图」tab 的打印件一致（见 poltsketchmap.html）。
+   数据来自 contract_template_service.build_plot_sketch_data()：
+   首页 6 格（左侧总览图 + 信息表），其后每页 8 格，页脚页码 i-n。 #}
+{% if sketch %}
+{% set first_sketch_plots = sketch.plots[:6] %}
+{% set remaining_sketch_plots = sketch.plots[6:] %}
+{% set sketch_total_pages = 1 + ((remaining_sketch_plots | length + 7) // 8) %}
+{% set sketch_audit_text = sketch.auditor if sketch.auditor else ("审核者：" ~ sketch.village_name ~ "　" ~ sketch.audit_date) if sketch.village_name and sketch.audit_date else "" %}
+{% set sketch_mapper_text = sketch.mapper if sketch.mapper else ("制图者：" ~ sketch.village_name ~ "　" ~ sketch.map_date) if sketch.village_name and sketch.map_date else "" %}
+{% set sketch_publisher_text = ("编制单位：" ~ sketch.compile_unit) if sketch.compile_unit else "" %}
+
+{% macro sketch_plot_cell(plot) -%}
+  <div class="plot-cell">
+    <div class="neighbor north">{{ plot.north }}</div>
+    <div class="neighbor south">{{ plot.south }}</div>
+    <div class="neighbor west">{{ plot.west }}</div>
+    <div class="neighbor east">{{ plot.east }}</div>
+    <div
+      class="plot-map js-geo-map"
+      data-map-kind="plot"
+      data-geometry='{{ plot.geometry | tojson }}'
+    ></div>
+    <div class="plot-label">{{ plot.code }}：{{ plot.area }}亩</div>
   </div>
-  <div class="sketch-meta">
-    <div>承包方代表姓名 <span>{{ cbfmc }}</span></div>
-    <div>承包方编码 <span>{{ cbfbm }}</span></div>
-    <div>承包地块总数 <span>{{ cbdkzs }}</span> 块</div>
-    <div>承包地块总面积 <span>{{ htzmjm }}</span> 亩</div>
-  </div>
+{%- endmacro %}
+
+{% macro sketch_footer(page_index) -%}
   <div class="sketch-footer">
-    <div>审核者：{{ group_region_name or "" }}&nbsp;&nbsp;{{ qdsj_cn }}</div>
-    <div>制图者：{{ group_region_name or "" }}&nbsp;&nbsp;{{ qdsj_cn }}</div>
-    <div>编制单位：四川凯普顿信息技术股份有限公司</div>
-    <div>1-1</div>
+    <div>{{ sketch_audit_text }}</div>
+    <div>{{ sketch_mapper_text }}</div>
+    <div>{{ sketch_publisher_text }}</div>
+    <div>{{ page_index }}-{{ sketch_total_pages }}</div>
+  </div>
+{%- endmacro %}
+
+<section class="sketch-page">
+  <div class="sketch-sheet">
+    <header class="sketch-title">承包地块示意图</header>
+    <main class="sketch-content first">
+      <aside class="overview-column">
+        <div class="overview-map">
+          <div
+            class="map-svg js-geo-map"
+            data-map-kind="overview"
+            data-plots='{{ sketch.overview | tojson }}'
+            data-highlight-plots='{{ sketch.highlight | tojson }}'
+          ></div>
+          <svg class="north-arrow" viewBox="0 0 40 66" aria-hidden="true">
+            <circle cx="20" cy="43" r="16" fill="none" stroke="#000" stroke-width="2"/>
+            <path d="M20 2 L31 57 L20 47 L9 57 Z" fill="none" stroke="#000" stroke-width="2"/>
+            <path d="M20 8 L20 47" stroke="#000" stroke-width="2"/>
+            <text x="20" y="13" text-anchor="middle" font-size="12" font-family="serif">N</text>
+          </svg>
+        </div>
+        <table class="info-table">
+          <tbody>
+            <tr>
+              <th>承包方代表姓名</th>
+              <td colspan="2">{{ cbfmc }}</td>
+            </tr>
+            <tr>
+              <th>承包方编码</th>
+              <td colspan="2">{{ cbfbm }}</td>
+            </tr>
+            <tr>
+              <th>承包地块总数</th>
+              <td>{{ cbdkzs }}</td>
+              <td class="unit-cell">块</td>
+            </tr>
+            <tr>
+              <th>承包地块总面积</th>
+              <td>{{ htzmjm }}</td>
+              <td class="unit-cell">亩</td>
+            </tr>
+          </tbody>
+        </table>
+      </aside>
+      <section class="plots-grid first-page">
+        {% for plot in first_sketch_plots %}
+          {{ sketch_plot_cell(plot) }}
+        {% endfor %}
+        {% for _ in range(6 - (first_sketch_plots | length)) %}
+          <div class="plot-cell empty-cell"></div>
+        {% endfor %}
+      </section>
+    </main>
+    {{ sketch_footer(1) }}
   </div>
 </section>
+
+{% for page_plots in remaining_sketch_plots | batch(8, none) %}
+<section class="sketch-page">
+  <div class="sketch-sheet">
+    <header class="sketch-title">承包地块示意图</header>
+    <main class="sketch-content continuation">
+      <section class="plots-grid next-page">
+        {% for plot in page_plots %}
+          {% if plot %}
+            {{ sketch_plot_cell(plot) }}
+          {% else %}
+            <div class="plot-cell empty-cell"></div>
+          {% endif %}
+        {% endfor %}
+      </section>
+    </main>
+    {{ sketch_footer(loop.index + 1) }}
+  </div>
+</section>
+{% endfor %}
+{% endif %}
+
+<script>
+(function () {
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  function parseData(value, fallback) {
+    if (!value || value === 'null') return fallback;
+    try {
+      const parsed = JSON.parse(value);
+      if (typeof parsed === 'string' && parsed.trim().startsWith('{')) {
+        return JSON.parse(parsed);
+      }
+      return parsed;
+    } catch (error) {
+      return fallback;
+    }
+  }
+
+  function collectRings(geometry, rings) {
+    if (!geometry) return rings;
+    if (geometry.type === 'Feature') return collectRings(geometry.geometry, rings);
+    if (geometry.type === 'FeatureCollection') {
+      (geometry.features || []).forEach((feature) => collectRings(feature, rings));
+      return rings;
+    }
+    if (geometry.type === 'GeometryCollection') {
+      (geometry.geometries || []).forEach((item) => collectRings(item, rings));
+      return rings;
+    }
+    if (geometry.type === 'Polygon') {
+      (geometry.coordinates || []).forEach((ring) => rings.push(ring));
+      return rings;
+    }
+    if (geometry.type === 'MultiPolygon') {
+      (geometry.coordinates || []).forEach((polygon) => {
+        (polygon || []).forEach((ring) => rings.push(ring));
+      });
+      return rings;
+    }
+    return rings;
+  }
+
+  function boundsFor(rings) {
+    const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+    rings.forEach((ring) => {
+      (ring || []).forEach((point) => {
+        const x = Number(point[0]);
+        const y = Number(point[1]);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        bounds.minX = Math.min(bounds.minX, x);
+        bounds.minY = Math.min(bounds.minY, y);
+        bounds.maxX = Math.max(bounds.maxX, x);
+        bounds.maxY = Math.max(bounds.maxY, y);
+      });
+    });
+    if (!Number.isFinite(bounds.minX)) return null;
+    if (bounds.maxX === bounds.minX) bounds.maxX += 1;
+    if (bounds.maxY === bounds.minY) bounds.maxY += 1;
+    return bounds;
+  }
+
+  function pathForRing(ring, bounds, width, height, padding) {
+    const dx = bounds.maxX - bounds.minX;
+    const dy = bounds.maxY - bounds.minY;
+    const scale = Math.min((width - padding * 2) / dx, (height - padding * 2) / dy);
+    const offsetX = (width - dx * scale) / 2;
+    const offsetY = (height - dy * scale) / 2;
+    return (ring || []).map((point, index) => {
+      const x = offsetX + (Number(point[0]) - bounds.minX) * scale;
+      const y = height - (offsetY + (Number(point[1]) - bounds.minY) * scale);
+      return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+    }).join(' ') + ' Z';
+  }
+
+  function appendGeometry(svg, geometry, className, sharedBounds, padding) {
+    const rings = collectRings(geometry, []);
+    const bounds = sharedBounds || boundsFor(rings);
+    if (!bounds) return bounds;
+    rings.forEach((ring) => {
+      const path = document.createElementNS(SVG_NS, 'path');
+      path.setAttribute('class', className);
+      path.setAttribute('d', pathForRing(ring, bounds, 1000, 1000, padding));
+      svg.appendChild(path);
+    });
+    return bounds;
+  }
+
+  function renderMap(node) {
+    const kind = node.dataset.mapKind || 'plot';
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('class', `map-svg ${kind === 'overview' ? 'overview-svg' : 'plot-svg'}`);
+    svg.setAttribute('viewBox', '0 0 1000 1000');
+    svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+
+    if (kind === 'overview') {
+      const plots = parseData(node.dataset.plots, []);
+      const highlightPlots = parseData(node.dataset.highlightPlots, []);
+      const geometries = plots.map((plot) => plot.geometry || plot.geojson).filter(Boolean);
+      const highlightGeometries = highlightPlots.map((plot) => plot.geometry || plot.geojson).filter(Boolean);
+      const allRings = [];
+      geometries.forEach((item) => collectRings(item, allRings));
+      highlightGeometries.forEach((item) => collectRings(item, allRings));
+      const sharedBounds = boundsFor(allRings);
+      geometries.forEach((item) => appendGeometry(svg, item, 'parcel-line', sharedBounds, 28));
+      highlightGeometries.forEach((item) => appendGeometry(svg, item, 'highlight-line', sharedBounds, 28));
+    } else {
+      const geometry = parseData(node.dataset.geometry, null);
+      appendGeometry(svg, geometry, 'parcel-line', null, 10);
+    }
+
+    node.appendChild(svg);
+  }
+
+  document.querySelectorAll('.js-geo-map').forEach(renderMap);
+})();
+</script>
 
 </body>
 </html>

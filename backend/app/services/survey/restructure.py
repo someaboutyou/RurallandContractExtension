@@ -28,7 +28,7 @@ class SurveyServiceRestructureMixin:
 
     def save_restructure(self, db: Session, batch_id: int, contractor_uid: str, payload: dict, current_user: User, item_id: int | None = None) -> dict:
         result = self._get_result(db, batch_id, contractor_uid)
-        self._ensure_editable_batch_and_result(db, result)
+        self._ensure_editable_batch_and_result(db, result, current_user)
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="survey result out of scope")
         item = db.get(SurveyHouseholdRestructure, item_id) if item_id else None
         if item_id and item is None:
@@ -93,7 +93,7 @@ class SurveyServiceRestructureMixin:
         if item is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="restructure record not found")
         result = self._get_result(db, item.batch_id, item.contractor_uid)
-        self._ensure_editable_batch_and_result(db, result)
+        self._ensure_editable_batch_and_result(db, result, current_user)
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="survey result out of scope")
         db.execute(delete(SurveyHouseholdRestructureMember).where(SurveyHouseholdRestructureMember.restructure_id == item.id))
         db.delete(item)

@@ -3,10 +3,10 @@
     <el-alert title="选择两个或多个原承包方，系统将注销全部原户并创建一个全新的承包方。" type="warning" :closable="false" show-icon />
     <el-form label-position="top" class="form">
       <el-form-item label="参与合户的原承包方" required>
-        <el-select v-model="form.sourceContractorUids" multiple filterable style="width:100%" @change="loadSelectedMembers">
-          <el-option v-for="t in availableTasks" :key="t.contractorUid" :label="`${t.cbfbm} - ${t.cbfmc}`" :value="t.contractorUid" :disabled="t.contractorUid === currentUid" />
+        <el-select v-model="form.sourceContractorUids" multiple filterable :loading="loadingCandidates" style="width:100%" @change="loadSelectedMembers">
+          <el-option v-for="t in availableTasks" :key="t.contractorUid" :label="optionLabel(t)" :value="t.contractorUid" :disabled="t.contractorUid === currentUid" />
         </el-select>
-        <div class="hint">当前户已固定参与，请再选择至少一个原承包方。</div>
+        <div class="hint">当前户已固定参与，请再选择至少一个原承包方。候选为该批次内同一村组可合户的承包方（{{ availableTasks.length }} 户），不受上方任务列表的搜索条件影响。</div>
       </el-form-item>
       <el-divider content-position="left">新承包方信息</el-divider>
       <div class="grid">
@@ -33,20 +33,32 @@
 <script setup>
 import { computed, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { fetchSurveyResult } from "../../api/survey";
+import { fetchContractorCodes, fetchMergeCandidates, fetchSurveyResult } from "../../api/survey";
+import { collectContractorCodes, fallbackSameGroupTasks, fetchAllBatchTasks } from "../../utils/surveyCandidates";
 
 const emit = defineEmits(["done"]);
 const visible = ref(false);
 const loading = ref(false);
+const loadingCandidates = ref(false);
 const batchId = ref(null);
 const currentUid = ref("");
 const tasks = ref([]);
+const candidates = ref([]);
 const mergedMembers = ref([]);
 const resultCache = new Map();
 const existingCodes = ref(new Set());
 const codePrefix = ref("");
 const form = reactive({ sourceContractorUids: [], newCbfbm: "", newCbfmc: "", householdHeadMemberUid: "", newAddress: "", reason: "" });
-const availableTasks = computed(() => tasks.value.filter(t => !["deregistered", "finished"].includes(t.taskStatus)));
+const taskStatusText = { not_started: "未调查", not_surveyed: "未调查", in_progress: "调查中", surveyed: "已调查", changed: "有变化", unchanged: "无变化", confirmed: "已确认", skipped: "已跳过", deregistered: "已注销" };
+const availableTasks = computed(() => {
+  const rows = candidates.value.filter(t => !["deregistered", "finished", "confirmed"].includes(t.taskStatus));
+  const current = candidates.value.find(t => t.contractorUid === currentUid.value);
+  return current && !rows.some(t => t.contractorUid === currentUid.value) ? [current, ...rows] : rows;
+});
+function optionLabel(t) {
+  const status = taskStatusText[t.taskStatus];
+  return `${t.cbfbm} - ${t.cbfmc}${status && status !== "未调查" ? `（${status}）` : ""}`;
+}
 const canSubmit = computed(() => form.sourceContractorUids.length >= 2 && /^\d{18}$/.test(form.newCbfbm) && form.newCbfmc.trim() && form.newAddress.trim() && form.householdHeadMemberUid && !loading.value);
 
 async function getResult(uid) {
@@ -79,15 +91,65 @@ function generateCode() {
   const next = Math.max(0, ...used.map(code => Number(code.slice(prefix.length))).filter(Number.isFinite)) + 1;
   return `${prefix}${String(next).padStart(suffixLength, "0")}`.slice(0, 18);
 }
+function fallbackCandidates(name, code, includeTaskList = false) {
+  const rows = includeTaskList ? (tasks.value || []) : [];
+  const current = rows.find(t => t.contractorUid === currentUid.value)
+    || { contractorUid: currentUid.value, cbfbm: code || "", cbfmc: name || "", taskStatus: "unknown" };
+  return [current, ...rows.filter(t => t.contractorUid !== currentUid.value)];
+}
+async function refreshExistingCodes() {
+  existingCodes.value = new Set(collectContractorCodes(candidates.value));
+  if (!batchId.value || !codePrefix.value) return;
+  let codes = [];
+  try {
+    const { data } = await fetchContractorCodes(batchId.value, { prefix: codePrefix.value });
+    codes = collectContractorCodes(data.data);
+  } catch {
+    try {
+      codes = collectContractorCodes(await fetchAllBatchTasks(batchId.value));
+    } catch {
+      return;
+    }
+  }
+  if (codes.length) existingCodes.value = new Set(codes);
+}
+async function loadCandidates(name, code) {
+  loadingCandidates.value = true;
+  try {
+    const { data } = await fetchMergeCandidates(batchId.value, currentUid.value);
+    const list = data.data || [];
+    candidates.value = list.length ? list : fallbackCandidates(name, code);
+  } catch (e) {
+    try {
+      const rows = await fallbackSameGroupTasks(batchId.value, currentUid.value);
+      candidates.value = rows.length ? rows : fallbackCandidates(name, code, true);
+    } catch (inner) {
+      candidates.value = fallbackCandidates(name, code, true);
+      ElMessage.warning("候选承包方加载失败，已回退为当前列表数据");
+    }
+  } finally {
+    loadingCandidates.value = false;
+    await refreshExistingCodes();
+    form.newCbfbm = generateCode();
+  }
+}
 async function open(bid, cuid, name, code, members, parcels, taskList, address = "") {
   batchId.value = bid; currentUid.value = cuid; tasks.value = taskList || [];
   resultCache.clear(); resultCache.set(cuid, { familyMembers: members || [] });
   const digits = String(code || "").replace(/\D/g, "");
   codePrefix.value = digits.slice(0, Math.min(14, digits.length));
-  existingCodes.value = new Set((taskList || []).map(item => String(item.cbfbm || "").replace(/\D/g, "")).filter(Boolean));
-  const currentHead = (members || []).find(item => item.isHouseholdHead) || (members || []).find(item => item.relationToHead === "01" || item.yhzgx === "01") || (members || [])[0];
+  candidates.value = fallbackCandidates(name, code, true);
+  existingCodes.value = new Set(collectContractorCodes(tasks.value));
+  // 户主判定与后端同源：优先显式标记 → 户主(02) → 本人(01) → 兜底第一条。
+  // ⛔ 旧实现按 relationToHead === "01" 找，而字典与真实数据里户主是 "02"，
+  // 导致默认户主恒落空、退化成"随便挑第一个成员"（2026-09-25 修）。
+  const currentHead = (members || []).find(item => item.isHouseholdHead)
+    || (members || []).find(item => item.relationToHead === "02" || item.yhzgx === "02")
+    || (members || []).find(item => item.relationToHead === "01" || item.yhzgx === "01")
+    || (members || [])[0];
   Object.assign(form, { sourceContractorUids: [cuid], newCbfbm: generateCode(), newCbfmc: currentHead?.name || currentHead?.cyxm || name || "", householdHeadMemberUid: memberUid(currentHead), newAddress: address || "", reason: "" });
   mergedMembers.value = members || []; visible.value = true;
+  await loadCandidates(name, code);
 }
 async function submit() {
   if (!canSubmit.value) { ElMessage.warning("请完整填写合户和新承包方信息"); return; }

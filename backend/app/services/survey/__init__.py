@@ -9,13 +9,16 @@ them so every method is available via ``self`` as before.  The singleton
 from app.services.survey.base import SurveyServiceBase
 from app.services.survey.batch import SurveyServiceBatchMixin
 from app.services.survey.task import SurveyServiceTaskMixin
+from app.services.survey.assignment import SurveyServiceAssignmentMixin
 from app.services.survey.issuer import SurveyServiceIssuerMixin
 from app.services.survey.result import SurveyServiceResultMixin
+from app.services.survey.boundary import SurveyServiceBoundaryMixin
 from app.services.survey.changes import SurveyServiceChangesMixin
 from app.services.survey.tags import SurveyServiceTagsMixin
 from app.services.survey.restructure import SurveyServiceRestructureMixin
 from app.services.survey.authorization import SurveyServiceAuthorizationMixin
 from app.services.survey.attachments import SurveyServiceAttachmentsMixin
+from app.services.survey.contract import SurveyServiceContractMixin
 from app.services.survey.exports import SurveyServiceExportsMixin
 from app.services.survey.parcel_ops import SurveyServiceParcelOpsMixin
 from app.services.survey.parcel_geometry import SurveyServiceParcelGeometryMixin
@@ -26,13 +29,16 @@ class SurveyService(
     SurveyServiceBase,
     SurveyServiceBatchMixin,
     SurveyServiceTaskMixin,
+    SurveyServiceAssignmentMixin,
     SurveyServiceIssuerMixin,
     SurveyServiceResultMixin,
+    SurveyServiceBoundaryMixin,
     SurveyServiceChangesMixin,
     SurveyServiceTagsMixin,
     SurveyServiceRestructureMixin,
     SurveyServiceAuthorizationMixin,
     SurveyServiceAttachmentsMixin,
+    SurveyServiceContractMixin,
     SurveyServiceExportsMixin,
     SurveyServiceParcelOpsMixin,
     SurveyServiceParcelGeometryMixin,

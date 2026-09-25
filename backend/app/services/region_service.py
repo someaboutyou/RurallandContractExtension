@@ -1,3 +1,4 @@
+import re
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -329,4 +330,282 @@ class RegionService:
         return {row.region_code: row.user_id for row in rows}
 
 
+
+    def derive_regions_from_fbf(self, db: Session, current_user: User) -> dict:
+        """从 fbf 表中派生出镇、村、组行政区域数据。"""
+        # 检查权限
+        from app.api.deps import has_permission
+        if not has_permission(current_user, "regions.manage"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要区域管理权限")
+        
+        # 获取所有不同的 region_code 和对应的 fbfmc
+        rows = db.execute(
+            select(Fbf.region_code, Fbf.fbfmc)
+            .where(Fbf.region_code.isnot(None))
+            .distinct()
+        ).fetchall()
+        
+        if not rows:
+            return {"created": 0, "message": "没有找到区域数据"}
+        
+        created_count = 0
+        # 缓存已存在的区域代码
+        existing_codes = set()
+        for region in db.execute(select(Region.code)).scalars():
+            existing_codes.add(region)
+        
+        # 处理每个区域代码
+        for region_code, fbfmc in rows:
+            if region_code in existing_codes:
+                continue
+            
+            # 解析区域代码，确定级别
+            code_len = len(region_code)
+            if code_len == 14:
+                level = "group"
+                parent_code_len = 12
+            elif code_len == 12:
+                level = "village"
+                parent_code_len = 9
+            elif code_len == 9:
+                level = "town"
+                parent_code_len = 6
+            elif code_len == 6:
+                level = "county"
+                parent_code_len = None
+            else:
+                continue  # 忽略无效代码
+            
+            # 提取父级代码
+            parent_code = region_code[:parent_code_len] if parent_code_len else None
+            
+            # 解析名称
+            name = self._parse_region_name(fbfmc, level)
+            
+            # 确保父级区域存在
+            if parent_code and parent_code not in existing_codes:
+                self._ensure_parent_region(db, parent_code, existing_codes)
+            
+            # 创建区域记录
+            parent_id = None
+            if parent_code:
+                parent = db.execute(select(Region).where(Region.code == parent_code)).scalar()
+                if parent:
+                    parent_id = parent.id
+            
+            region = Region(
+                name=name,
+                code=region_code,
+                level=level,
+                parent_id=parent_id,
+                tenant_code=self._derive_tenant_code(region_code, level),
+                full_name=self._build_full_name_from_code(db, region_code, name),
+                status="active",
+                sort_order=0
+            )
+            db.add(region)
+            existing_codes.add(region_code)
+            created_count += 1
+        
+        db.commit()
+        return {"created": created_count, "message": f"成功创建 {created_count} 个区域记录"}
+    
+    def _parse_region_name(self, fbfmc: str, level: str) -> str:
+        """从 fbfmc 中解析出指定级别的名称。"""
+        # 简单实现：根据级别返回相应部分
+        # 假设格式为 "县名镇名村名组名"
+        # 这里先返回整个 fbfmc，后续可以优化
+        return fbfmc
+    
+    def _ensure_parent_region(self, db: Session, parent_code: str, existing_codes: set) -> None:
+        """确保父级区域存在，如果不存在则创建。"""
+        if parent_code in existing_codes:
+            return
+        
+        # 递归创建父级
+        code_len = len(parent_code)
+        if code_len == 12:
+            level = "village"
+            parent_code_len = 9
+        elif code_len == 9:
+            level = "town"
+            parent_code_len = 6
+        elif code_len == 6:
+            level = "county"
+            parent_code_len = None
+        else:
+            return
+        
+        parent_code_of_parent = parent_code[:parent_code_len] if parent_code_len else None
+        if parent_code_of_parent and parent_code_of_parent not in existing_codes:
+            self._ensure_parent_region(db, parent_code_of_parent, existing_codes)
+        
+        # 创建父级记录
+        parent_id = None
+        if parent_code_of_parent:
+            parent = db.execute(select(Region).where(Region.code == parent_code_of_parent)).scalar()
+            if parent:
+                parent_id = parent.id
+        
+        region = Region(
+            name=parent_code,  # 暂时使用代码作为名称
+            code=parent_code,
+            level=level,
+            parent_id=parent_id,
+            tenant_code=self._derive_tenant_code(parent_code, level),
+            full_name=self._build_full_name_from_code(db, parent_code, parent_code),
+            status="active",
+            sort_order=0
+        )
+        db.add(region)
+        existing_codes.add(parent_code)
+    
+    def _build_full_name_from_code(self, db: Session, code: str, name: str) -> str:
+        """根据代码构建完整名称。"""
+        # 获取父级完整名称
+        parent_code = None
+        if len(code) == 14:
+            parent_code = code[:12]
+        elif len(code) == 12:
+            parent_code = code[:9]
+        elif len(code) == 9:
+            parent_code = code[:6]
+        
+        if parent_code:
+            parent = db.execute(select(Region).where(Region.code == parent_code)).scalar()
+            if parent:
+                return f"{parent.full_name} / {name}"
+        return name
+
+    def sync_regions_from_fbf(self, db: Session, current_user: User, overwrite: bool = False) -> dict:
+        """从 fbf 表同步区域数据到 regions 表。overwrite=True 时覆盖已有记录的名称。"""
+        from app.api.deps import has_permission
+        if not has_permission(current_user, "regions.manage"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要区域管理权限")
+        
+        group_rows = db.execute(
+            select(Fbf.fbfbm, func.min(Fbf.fbfmc))
+            .where(func.length(Fbf.fbfbm) >= 12)
+            .group_by(Fbf.fbfbm)
+            .order_by(Fbf.fbfbm)
+        ).all()
+        if not group_rows:
+            return {"created": 0, "updated": 0, "message": "fbf 表中没有找到业务数据"}
+        
+        def _parse_name(fbfmc, level):
+            if level == "county":
+                m = re.search(r"^(.*?县)", fbfmc)
+                return m.group(1) if m else fbfmc
+            elif level == "town":
+                s = re.sub(r"^.*?县", "", fbfmc)
+                m = re.search(r"^(.*?(?:镇|乡|开发区))", s)
+                return m.group(1) if m else s
+            elif level == "village":
+                s = re.sub(r"^.*?(?:镇|乡|开发区)", "", fbfmc)
+                m = re.search(r"^(.*?(?:村|居|社区))", s)
+                return m.group(1) if m else s
+            elif level == "group":
+                s = re.sub(r"^.*?(?:村|居|社区)", "", fbfmc)
+                m = re.search(r"([一二三四五六七八九十百零\d]+组)", s)
+                return m.group(1) if m else s.strip()
+            return fbfmc
+        
+        created = 0
+        updated = 0
+        
+        # 确保省级占位存在
+        province_code = "auto-province"
+        province = db.scalar(select(Region).where(Region.code == province_code))
+        if province is None:
+            province = Region(
+                name="导入数据省级占位", code=province_code, level="province",
+                full_name="导入数据省级占位", parent_id=None, tenant_code=None,
+            )
+            db.add(province)
+            db.flush()
+            created += 1
+        
+        for raw_group_code, raw_group_name in group_rows:
+            if not raw_group_code:
+                continue
+            group_code = raw_group_code[:14] if len(raw_group_code) >= 14 else None
+            village_code = raw_group_code[:12]
+            county_code = village_code[:6]
+            town_code = village_code[:9]
+            
+            # 县级 —— 直接从 raw_group_name（fbfmc）解析各级名称
+            # 不再按 Fbf.region_code 查询，因为该字段存的是14位 fbfbm 而非截断后的区域代码子串
+            county_name = _parse_name(raw_group_name, "county") if raw_group_name else f"{county_code} 县域"
+            county = db.scalar(select(Region).where(Region.code == county_code))
+            if county is None:
+                county = Region(
+                    name=county_name, code=county_code, level="county",
+                    full_name=f"导入数据 / {county_name}", parent_id=province.id, tenant_code=county_code,
+                )
+                db.add(county)
+                db.flush()
+                created += 1
+            elif overwrite:
+                county.name = county_name
+                county.full_name = f"导入数据 / {county_name}"
+                updated += 1
+
+            # 镇级
+            town_name = _parse_name(raw_group_name, "town") if raw_group_name else f"{town_code} 镇级区域"
+            town = db.scalar(select(Region).where(Region.code == town_code))
+            if town is None:
+                town = Region(
+                    name=town_name, code=town_code, level="town",
+                    full_name=f"{county.full_name} / {town_name}", parent_id=county.id, tenant_code=county_code,
+                )
+                db.add(town)
+                db.flush()
+                created += 1
+            elif overwrite:
+                town.name = town_name
+                town.full_name = f"{county.full_name} / {town_name}"
+                updated += 1
+
+            # 村级
+            village_name = _parse_name(raw_group_name, "village") if raw_group_name else f"{village_code} 村级区域"
+            village = db.scalar(select(Region).where(Region.code == village_code))
+            if village is None:
+                village = Region(
+                    name=village_name, code=village_code, level="village",
+                    full_name=f"{town.full_name} / {village_name}", parent_id=town.id, tenant_code=county_code,
+                )
+                db.add(village)
+                db.flush()
+                created += 1
+            elif overwrite:
+                village.name = village_name
+                village.full_name = f"{town.full_name} / {village_name}"
+                updated += 1
+            # 组级
+            if group_code:
+                group = db.scalar(select(Region).where(Region.code == group_code))
+                group_name = _parse_name(raw_group_name, "group") if raw_group_name else f"{group_code} 组级区域"
+                if group is None:
+                    group = Region(
+                        name=group_name, code=group_code, level="group",
+                        full_name=f"{village.full_name} / {group_name}", parent_id=village.id, tenant_code=county_code,
+                    )
+                    db.add(group)
+                    created += 1
+                elif overwrite:
+                    group.name = group_name
+                    group.full_name = f"{village.full_name} / {group_name}"
+                    updated += 1
+        
+        db.commit()
+        return {"created": created, "updated": updated, "message": f"同步完成：新增 {created} 个，更新 {updated} 个区域记录"}
+
+
 region_service = RegionService()
+
+
+
+
+
+
+

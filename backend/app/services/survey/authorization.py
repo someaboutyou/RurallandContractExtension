@@ -27,7 +27,7 @@ class SurveyServiceAuthorizationMixin:
 
     def save_authorization(self, db: Session, batch_id: int, contractor_uid: str, payload: dict, current_user: User, item_id: int | None = None) -> dict:
         result = self._get_result(db, batch_id, contractor_uid)
-        self._ensure_editable_batch_and_result(db, result)
+        self._ensure_editable_batch_and_result(db, result, current_user)
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="survey result out of scope")
         item = db.get(SurveyAuthorization, item_id) if item_id else None
         if item_id and item is None:
@@ -69,7 +69,7 @@ class SurveyServiceAuthorizationMixin:
         if item is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="authorization not found")
         result = self._get_result(db, item.batch_id, item.contractor_uid)
-        self._ensure_editable_batch_and_result(db, result)
+        self._ensure_editable_batch_and_result(db, result, current_user)
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="survey result out of scope")
         storage_path, file_size = await self._store_upload(self.authorization_root / str(item.batch_id), upload_file)
         item.original_name = upload_file.filename or "authorization"
@@ -97,7 +97,7 @@ class SurveyServiceAuthorizationMixin:
         result = self._get_result(db, item.batch_id, item.contractor_uid)
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
         content = item.generated_content or self._build_authorization_text(result, item)
-        return f"{item.authorization_no}_閹哄牊娼堟慨鏃€澧稊?txt", content.encode("utf-8-sig")
+        return f"{item.authorization_no}_授权委托书.txt", content.encode("utf-8-sig")
 
 
     def revoke_authorization(self, db: Session, authorization_id: int, revoke_reason: str, current_user: User) -> dict:
@@ -105,7 +105,7 @@ class SurveyServiceAuthorizationMixin:
         if item is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="request failed")
         result = self._get_result(db, item.batch_id, item.contractor_uid)
-        self._ensure_editable_batch_and_result(db, result)
+        self._ensure_editable_batch_and_result(db, result, current_user)
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
         item.status = "revoked"
         item.revoke_reason = revoke_reason

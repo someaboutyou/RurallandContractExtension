@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">延包调查</string>
+    <string name="title_activity_main">延包调查</string>
+    <string name="package_name">com.ztgeo.ruralland.survey</string>
+    <string name="custom_url_scheme">com.ztgeo.ruralland.survey</string>
+</resources>

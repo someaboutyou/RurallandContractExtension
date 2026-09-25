@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -58,6 +59,9 @@ class LandParcelService:
                     {
                         "changeType": item.change_type,
                         "changeReason": item.change_reason,
+                        # P1-5：带上原始快照。当源关联行/地块行已被物理删除时，
+                        # 兜底分支需要靠它还原出 split_source 条目。
+                        "beforeSummary": before_summary,
                     },
                 )
         return change_map
@@ -66,7 +70,7 @@ class LandParcelService:
         self, db: Session, cbfbm: str, current_user: User
     ) -> list[dict]:
         data_access_service.ensure_code_in_scope(
-            current_user, cbfbm, detail="鎵垮寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴"
+            current_user, cbfbm, detail="承包方不在当前数据权限范围内"
         )
 
         cbdkxx_rows = land_parcel_repository.get_cbdkxx_by_cbfbm(db, cbfbm)
@@ -104,7 +108,7 @@ class LandParcelService:
         self, db: Session, fbfbm: str, current_user: User
     ) -> list[dict]:
         data_access_service.ensure_code_in_scope(
-            current_user, fbfbm, detail="鍙戝寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴"
+            current_user, fbfbm, detail="发包方不在当前数据权限范围内"
         )
 
         cbdkxx_rows = land_parcel_repository.get_cbdkxx_by_fbfbm(db, fbfbm)
@@ -143,7 +147,7 @@ class LandParcelService:
         self, db: Session, batch_id: int, cbfbm: str, current_user: User
     ) -> list[dict]:
         data_access_service.ensure_code_in_scope(
-            current_user, cbfbm, detail="鎵垮寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴"
+            current_user, cbfbm, detail="承包方不在当前数据权限范围内"
         )
 
         cbdkxx_result_rows = db.scalars(
@@ -283,14 +287,30 @@ class LandParcelService:
         for dkbm in sorted(removed_candidate_dkbms):
             base_relation = base_relations_by_dkbm.get(dkbm)
             fallback_relation = fallback_relations_by_dkbm.get(dkbm)
+            change_meta = change_map.get(dkbm, {})
             relation_source = base_relation or fallback_relation
-            if relation_source is None:
-                continue
             dk_result = dk_result_map.get(dkbm)
             dk_base = dk_base_map.get(dkbm)
             dk_source = dk_result or dk_base
+            geometry = dk_geometry_map.get(dkbm)
+            if relation_source is None:
+                # P1-5：切割“本批次新增的地块”时，源关联行与源地块行都被 split_parcel 收尾
+                # 物理删除，基线里也没有它 ⇒ 只剩变更快照。此处用快照补出 split_source 条目，
+                # 否则前端 find(resultStatus === "split_source") 落空，撤回已保存切割失效。
+                # 其余场景（如移除新增地块）保持原有 continue 行为，不改变列表语义。
+                if change_meta.get("changeType") != "split_parcel":
+                    continue
+                snapshot = change_meta.get("beforeSummary") or {}
+                snapshot_relation = snapshot.get("source_relation")
+                if not snapshot_relation:
+                    continue
+                relation_source = SimpleNamespace(**snapshot_relation)
+                snapshot_parcel = snapshot.get("source_parcel")
+                if dk_source is None and snapshot_parcel:
+                    dk_source = SimpleNamespace(**snapshot_parcel)
+                if geometry is None:
+                    geometry = snapshot.get("source_geometry")
             fbf = fbf_map.get(relation_source.fbfbm)
-            change_meta = change_map.get(dkbm, {})
             result.append({
                 "dkbm": relation_source.dkbm,
                 "dkmc": dk_source.dkmc if dk_source else None,
@@ -324,7 +344,7 @@ class LandParcelService:
                 "isChanged": True,
                 "changeType": change_meta.get("changeType") or "remove_parcel",
                 "changeReason": change_meta.get("changeReason"),
-                "geometry": dk_geometry_map.get(dkbm),
+                "geometry": geometry,
             })
 
         result.sort(key=lambda item: (item.get("dkbm") or "", 1 if item.get("resultStatus") in {"removed", "split_source"} else 0))

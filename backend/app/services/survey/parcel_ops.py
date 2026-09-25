@@ -88,6 +88,8 @@ class SurveyServiceParcelOpsMixin:
         if result.survey_status == "confirmed":
             raise HTTPException(400, "invalid operation")
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
+        # 任务归属：只有名下有这一户的人（或批次创建人 / 管理员）能改。
+        self.ensure_task_write_permission(db, batch, result, current_user)
         now = datetime.now(timezone.utc)
 
         # 閺屻儲澹橀崣鎴濆瘶閺傜櫢绱欐禒搴″嚒閺堝婀撮崸妤€鍙х化璁宠厬閼惧嘲褰囬敍灞惧灗娴犲孩澹欓崠鍛煙娴狅絿鐖滈幒銊ヮ嚤閿?
@@ -302,6 +304,8 @@ class SurveyServiceParcelOpsMixin:
         if result.survey_status == "confirmed":
             raise HTTPException(400, "invalid operation")
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
+        # 任务归属：只有名下有这一户的人（或批次创建人 / 管理员）能改。
+        self.ensure_task_write_permission(db, batch, result, current_user)
         now = datetime.now(timezone.utc)
 
         # 閺屻儲澹橀崢鐔锋勾閸ф鍙ч懕?
@@ -314,7 +318,7 @@ class SurveyServiceParcelOpsMixin:
             )
         ).first()
         if old_relation is None:
-            raise HTTPException(404, "閸樼喎婀撮崸妤€鍙ч懕鏂剧瑝鐎涙ê婀?")
+            raise HTTPException(404, "原地块关联不存在")
 
         # 閺屻儲澹橀崢鐔锋勾閸?
         old_parcel = db.scalars(
@@ -326,7 +330,7 @@ class SurveyServiceParcelOpsMixin:
             .order_by(SurveyDkResult.id.desc())
         ).first()
         if old_parcel is None:
-            raise HTTPException(404, "閸樼喎婀撮崸妞剧瑝鐎涙ê婀?")
+            raise HTTPException(404, "原地块不存在")
 
         split_mode = str(payload.get("splitMode") or "area").strip().lower()
         old_area = float(old_parcel.scmj or 0)
@@ -351,7 +355,7 @@ class SurveyServiceParcelOpsMixin:
                 )
             else:
                 if new_scmj >= old_area:
-                    raise HTTPException(400, f"閸掑洤澹婇棃銏⑿?{new_scmj})娑撳秷鍏樻径褌绨粵澶夌艾閸樼喎婀撮崸妤呮桨缁?{old_area})")
+                    raise HTTPException(400, f"切割面积({new_scmj})不能大于等于原地块面积({old_area})")
         split_parts = split_preview["parts"] if split_preview else []
         generated_parcels = self._prepare_split_generated_parcels(
             db,
@@ -497,25 +501,29 @@ class SurveyServiceParcelOpsMixin:
         if result.survey_status == "confirmed":
             raise HTTPException(400, "invalid operation")
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
+        # 任务归属：只有名下有这一户的人（或批次创建人 / 管理员）能改。
+        self.ensure_task_write_permission(db, batch, result, current_user)
         now = datetime.now(timezone.utc)
 
         target_uid = payload["targetContractorUid"]
         target_result = self._get_result(db, batch_id, target_uid)
         if target_result.survey_status == "confirmed":
-            raise HTTPException(400, "閻╊喗鐖ｉ幍鍨瘶閺傜懓鍑＄涵顔款吇")
+            raise HTTPException(400, "目标承包方已确认")
         if target_uid == contractor_uid:
             raise HTTPException(400, "invalid operation")
         data_access_service.ensure_code_in_scope(current_user, target_result.cbfbm, detail="out of scope")
+        # 互换是**两户同时被改**：只校验本户会留下「把别人家的地块换走」的越权口子。
+        self.ensure_task_write_permission(db, batch, target_result, current_user)
         source_group = result.group_region_code or (result.cbfbm[:14] if result.cbfbm else "")
         target_group = target_result.group_region_code or (target_result.cbfbm[:14] if target_result.cbfbm else "")
         if source_group and target_group and source_group != target_group:
-            raise HTTPException(400, "鐩爣鎵垮寘鏂瑰彧鑳介€夋嫨鏈粍鎵垮寘鏂?")
+            raise HTTPException(400, "目标承包方只能选择本组承包方")
 
         source_dkbms = payload["sourceDkbms"]
         target_dkbms = payload["targetDkbms"]
         reason = payload.get("reason")
         if len(source_dkbms) != len(set(source_dkbms)) or len(target_dkbms) != len(set(target_dkbms)):
-            raise HTTPException(400, "浜掓崲鍦板潡涓嶈兘閲嶅閫夋嫨")
+            raise HTTPException(400, "互换地块不能重复选择")
 
         def load_active_relations(dkbms: list[str], cbfbm: str, side: str) -> list[SurveyCbdkxxResult]:
             rows = db.scalars(
@@ -528,20 +536,20 @@ class SurveyServiceParcelOpsMixin:
             by_code = {row.dkbm: row for row in rows}
             missing = [dkbm for dkbm in dkbms if dkbm not in by_code]
             if missing:
-                raise HTTPException(404, f"{side}鍦板潡 {missing[0]} 涓嶅睘浜庡搴旀壙鍖呮柟")
+                raise HTTPException(404, f"{side}地块 {missing[0]} 不属于对应承包方")
             return [by_code[dkbm] for dkbm in dkbms]
 
-        source_relations = load_active_relations(source_dkbms, result.cbfbm, "鏈柟")
-        target_relations = load_active_relations(target_dkbms, target_result.cbfbm, "鐩爣鏂?")
+        source_relations = load_active_relations(source_dkbms, result.cbfbm, "本方")
+        target_relations = load_active_relations(target_dkbms, target_result.cbfbm, "目标方")
 
         relation_fields = (
-            ("cbfbm", "鎵垮寘鏂逛唬鐮?",),
-            ("fbfbm", "鍙戝寘鏂逛唬鐮?",),
-            ("cbjyqqdfs", "鎵垮寘缁忚惀鏉冨彇寰楁柟寮?",),
-            ("cbhtbm", "鎵垮寘鍚堝悓缂栫爜"),
-            ("lzhtbm", "娴佽浆鍚堝悓缂栫爜"),
-            ("cbjyqzbm", "鎵垮寘缁忚惀鏉冭瘉缂栫爜"),
-            ("sfqqqg", "鏄惁纭潈纭偂"),
+            ("cbfbm", "承包方代码",),
+            ("fbfbm", "发包方代码",),
+            ("cbjyqqdfs", "承包经营权取得方式",),
+            ("cbhtbm", "承包合同编码"),
+            ("lzhtbm", "流转合同编码"),
+            ("cbjyqzbm", "承包经营权证编码"),
+            ("sfqqqg", "是否确权确股"),
         )
         source_contract = {
             field_name: getattr(source_relations[0], field_name)
@@ -649,7 +657,7 @@ class SurveyServiceParcelOpsMixin:
     ) -> dict:
         batch = self._ensure_batch(db, batch_id)
         result = self._get_result(db, batch_id, contractor_uid)
-        self._ensure_editable_batch_and_result(db, result)
+        self._ensure_editable_batch_and_result(db, result, current_user)
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
 
         change = db.scalars(
@@ -720,7 +728,9 @@ class SurveyServiceParcelOpsMixin:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="the counterparty of this parcel swap could not be found")
         target_result = self._get_result(db, batch_id, target_task.contractor_uid)
 
-        self._ensure_editable_batch_and_result(db, target_result)
+        # 互换要动两户，所以两户都得过归属校验：只查本户会留下
+        # 「把别人家的地块换回来」这个越权口子。
+        self._ensure_editable_batch_and_result(db, target_result, current_user)
         data_access_service.ensure_code_in_scope(current_user, target_result.cbfbm, detail="out of scope")
 
         rollback_reason = (payload.get("reason") or "").strip() or f"鎾ゅ洖浜掓崲 {change.change_no}"
@@ -791,7 +801,7 @@ class SurveyServiceParcelOpsMixin:
     ) -> dict:
         batch = self._ensure_batch(db, batch_id)
         result = self._get_result(db, batch_id, contractor_uid)
-        self._ensure_editable_batch_and_result(db, result)
+        self._ensure_editable_batch_and_result(db, result, current_user)
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
 
         change = db.scalars(
@@ -916,6 +926,8 @@ class SurveyServiceParcelOpsMixin:
         if result.survey_status == "confirmed":
             raise HTTPException(400, "invalid operation")
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
+        # 任务归属：只有名下有这一户的人（或批次创建人 / 管理员）能改。
+        self.ensure_task_write_permission(db, batch, result, current_user)
         now = datetime.now(timezone.utc)
 
         dkbm = payload["dkbm"]
@@ -1017,7 +1029,7 @@ class SurveyServiceParcelOpsMixin:
         """撤回已保存的地块移除操作"""
         batch = self._ensure_batch(db, batch_id)
         result = self._get_result(db, batch_id, contractor_uid)
-        self._ensure_editable_batch_and_result(db, result)
+        self._ensure_editable_batch_and_result(db, result, current_user)
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
 
         change = db.scalars(
@@ -1043,6 +1055,14 @@ class SurveyServiceParcelOpsMixin:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="saved removal data is incomplete and cannot be rolled back")
 
         before_summary = change.before_summary or {}
+        # 恢复值只能取自 remove_parcel 写进 before_summary 的 source_* 快照。
+        # 早期实现在下面的 before_summary / after_summary 里直接引用了
+        # previous_result_status 等四个本地变量，但它们在本函数里从未赋值
+        # ⇒ 每次撤销移除都 NameError ⇒ 整次保存 500 回滚，"撤销移除"100% 不可用。
+        previous_result_status = str(before_summary.get("source_result_status") or "normal").strip() or "normal"
+        previous_change_type = str(before_summary.get("source_change_type") or "none").strip() or "none"
+        previous_change_reason = before_summary.get("source_change_reason")
+        previous_is_changed = bool(before_summary.get("source_is_changed"))
         rollback_reason = (payload.get("reason") or "").strip() or f"撤回移除 {change.change_no}"
         relation_snapshot = before_summary.get("relation")
         if not relation_snapshot:

@@ -56,3 +56,13 @@ export function updateRegion(id, payload) {
 export function deleteRegion(id) {
   return http.delete(`/regions/${id}`);
 }
+
+
+export function deriveRegionsFromFbf() {
+  return http.post("/regions/derive-from-fbf");
+}
+
+export function syncRegionsFromFbf(overwrite = false) {
+  return http.post("/regions/sync-from-fbf", null, { params: { overwrite } });
+}
+

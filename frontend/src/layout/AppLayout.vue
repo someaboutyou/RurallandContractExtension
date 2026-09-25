@@ -153,9 +153,11 @@ const navItems = [
   },
   {
     key: "data-viz",
-    label: "数据可视化",
+    label: "工作进展大屏",
     to: "/dashboard",
-    permissions: ["dashboard.view"],
+    // 与路由 meta 同源：入口可见性必须和接口/路由的准入判据一致，
+    // 否则界面能点进去、进去却被踢回首页（体验事故）。
+    permissions: ["dashboard.bigscreen"],
   },
   {
     key: "archives",

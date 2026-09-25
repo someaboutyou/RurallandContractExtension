@@ -30,8 +30,8 @@ from .helpers import (
     parse_int,
     parse_datetime,
     record_operation,
-    resolve_code_region,
     resolve_group_region,
+    resolve_effective_import_region,
     resolve_import_region,
     snapshot_model,
 )
@@ -63,9 +63,10 @@ def _import_cbf_row(db, batch, survey_batch, row_record, data, current_user, now
     required = ["cbfbm", "region_code", "cbflx", "cbfmc", "cbfzjlx", "cbfzjhm", "cbfdz", "yzbm", "cbfdcy"]
     ensure_required(data, required)
     data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="out of scope")
-    region_code, _region_name = resolve_import_region(db, data, current_user)
-    tenant_code = data_access_service.derive_tenant_code(region_code)
+    declared_region_code, _region_name = resolve_import_region(db, data, current_user)
     group_region_code, group_region_name = resolve_group_region(db, data, current_user)
+    region_code = resolve_effective_import_region(batch, current_user, group_region_code, data["cbfbm"], declared_region_code)
+    tenant_code = data_access_service.derive_tenant_code(region_code)
     contractor_uid = str(uuid5(NAMESPACE_URL, f"survey:cbf:{data['cbfbm']}"))
     if context and "cbf_result_by_cbfbm" in context:
         result = context["cbf_result_by_cbfbm"].get(data["cbfbm"])
@@ -154,7 +155,7 @@ def _import_fbf_row(db, batch, survey_batch, row_record, data, current_user, now
     required = ["fbfbm", "fbfmc", "fbffzrxm", "fzrzjlx", "fzrzjhm", "fbfdz", "yzbm", "fbfdcy", "fbfdcrq"]
     ensure_required(data, required)
     data_access_service.ensure_code_in_scope(current_user, data["fbfbm"], detail="out of scope")
-    region_code = resolve_code_region(data.get("region_code") or batch.region_code or data["fbfbm"], current_user)
+    region_code = resolve_effective_import_region(batch, current_user, data["fbfbm"], data.get("region_code"), batch.region_code)
     tenant_code = data_access_service.derive_tenant_code(region_code)
     issuer_uid = str(uuid5(NAMESPACE_URL, f"survey:fbf:{data['fbfbm']}"))
     survey_date = parse_datetime(data.get("fbfdcrq")) or datetime.now()
@@ -195,7 +196,7 @@ def _import_cbdkxx_row(db, batch, survey_batch, row_record, data, current_user, 
     required = ["dkbm", "fbfbm", "cbfbm", "cbjyqqdfs", "htmj", "cbhtbm", "cbjyqzbm"]
     ensure_required(data, required)
     data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="out of scope")
-    region_code = resolve_code_region(data.get("region_code") or batch.region_code or data["cbfbm"], current_user)
+    region_code = resolve_effective_import_region(batch, current_user, data["cbfbm"], data.get("region_code"), batch.region_code)
     tenant_code = data_access_service.derive_tenant_code(region_code)
     parcel_info_uid = str(uuid5(NAMESPACE_URL, f"survey:cbdkxx:{data['dkbm']}:{data['cbfbm']}"))
     if context and "cbdkxx_result_by_key" in context:
@@ -236,7 +237,7 @@ def _import_dk_row(db, batch, survey_batch, row_record, data, current_user, now,
     required = ["ysdm", "dkbm", "dkmc", "dklb", "dldj", "tdyt", "sfjbnt", "scmj"]
     ensure_required(data, required)
     data_access_service.ensure_code_in_scope(current_user, data["dkbm"], detail="out of scope")
-    region_code = resolve_code_region(data.get("region_code") or batch.region_code or data["dkbm"], current_user)
+    region_code = resolve_effective_import_region(batch, current_user, data["dkbm"], data.get("region_code"), batch.region_code)
     tenant_code = data_access_service.derive_tenant_code(region_code)
     parcel_uid = str(uuid5(NAMESPACE_URL, f"survey:dk:{data['dkbm']}"))
     if context and "dk_result_by_dkbm" in context:
@@ -298,9 +299,10 @@ def _gdb_cbf(db, batch, row_record, data, current_user, now, chunk_no):
     required = ["cbfbm", "region_code", "cbflx", "cbfmc", "cbfzjlx", "cbfzjhm", "cbfdz", "yzbm", "cbfdcy"]
     ensure_required(data, required)
     data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="out of scope")
-    region_code, _region_name = resolve_import_region(db, data, current_user)
-    tenant_code = data_access_service.get_tenant_code(current_user) or data_access_service.derive_tenant_code(region_code)
+    declared_region_code, _region_name = resolve_import_region(db, data, current_user)
     group_region_code, group_region_name = resolve_group_region(db, data, current_user)
+    region_code = resolve_effective_import_region(batch, current_user, group_region_code, data["cbfbm"], declared_region_code)
+    tenant_code = data_access_service.get_tenant_code(current_user) or data_access_service.derive_tenant_code(region_code)
     contractor_uid = str(uuid5(NAMESPACE_URL, f"survey:cbf:{data['cbfbm']}"))
     result = db.scalar(select(SurveyCbfResult).where(SurveyCbfResult.tenant_code == tenant_code, SurveyCbfResult.cbfbm == data["cbfbm"]).order_by(SurveyCbfResult.id.desc()))
     operation = "update" if result else "insert"
@@ -378,7 +380,7 @@ def _gdb_fbf(db, batch, row_record, data, current_user, now, chunk_no):
     required = ["fbfbm", "fbfmc", "fbffzrxm", "fzrzjlx", "fzrzjhm", "fbfdz", "yzbm", "fbfdcy", "fbfdcrq"]
     ensure_required(data, required)
     data_access_service.ensure_code_in_scope(current_user, data["fbfbm"], detail="out of scope")
-    region_code = resolve_code_region(data.get("region_code") or batch.region_code or data["fbfbm"], current_user)
+    region_code = resolve_effective_import_region(batch, current_user, data["fbfbm"], data.get("region_code"), batch.region_code)
     tenant_code = data_access_service.get_tenant_code(current_user) or data_access_service.derive_tenant_code(region_code)
     issuer_uid = str(uuid5(NAMESPACE_URL, f"survey:fbf:{data['fbfbm']}"))
     result = db.scalar(select(SurveyFbfResult).where(SurveyFbfResult.tenant_code == tenant_code, SurveyFbfResult.fbfbm == data["fbfbm"]).order_by(SurveyFbfResult.id.desc()))
@@ -433,7 +435,7 @@ def _gdb_cbdkxx(db, batch, row_record, data, current_user, now, chunk_no):
     required = ["dkbm", "fbfbm", "cbfbm", "cbjyqqdfs", "htmj", "cbhtbm", "cbjyqzbm"]
     ensure_required(data, required)
     data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="out of scope")
-    region_code = resolve_code_region(data.get("region_code") or batch.region_code or data["cbfbm"], current_user)
+    region_code = resolve_effective_import_region(batch, current_user, data["cbfbm"], data.get("region_code"), batch.region_code)
     tenant_code = data_access_service.get_tenant_code(current_user) or data_access_service.derive_tenant_code(region_code)
     parcel_info_uid = str(uuid5(NAMESPACE_URL, f"survey:cbdkxx:{data['dkbm']}:{data['cbfbm']}"))
     result = db.scalar(select(SurveyCbdkxxResult).where(SurveyCbdkxxResult.tenant_code == tenant_code, SurveyCbdkxxResult.dkbm == data["dkbm"], SurveyCbdkxxResult.cbfbm == data["cbfbm"]).order_by(SurveyCbdkxxResult.id.desc()))
@@ -470,7 +472,7 @@ def _gdb_dk(db, batch, row_record, data, current_user, now, geometry, chunk_no):
     required = ["ysdm", "dkbm", "dkmc", "dklb", "dldj", "tdyt", "sfjbnt", "scmj"]
     ensure_required(data, required)
     data_access_service.ensure_code_in_scope(current_user, data["dkbm"], detail="out of scope")
-    region_code = resolve_code_region(data.get("region_code") or batch.region_code or data["dkbm"], current_user)
+    region_code = resolve_effective_import_region(batch, current_user, data["dkbm"], data.get("region_code"), batch.region_code)
     tenant_code = data_access_service.get_tenant_code(current_user) or data_access_service.derive_tenant_code(region_code)
     parcel_uid = str(uuid5(NAMESPACE_URL, f"survey:dk:{data['dkbm']}"))
     result = db.scalar(select(SurveyDkResult).where(SurveyDkResult.tenant_code == tenant_code, SurveyDkResult.dkbm == data["dkbm"]).order_by(SurveyDkResult.id.desc()))
@@ -515,7 +517,7 @@ def write_dk_geometries(db, table_name, geometries_by_id):
     stmt = text(f"""
         UPDATE {table_name}
         SET geom = CASE
-            WHEN :geojson IS NULL THEN NULL
+            WHEN CAST(:geojson AS text) IS NULL THEN NULL
             ELSE ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON(:geojson), 4527))
         END
         WHERE id = :row_id

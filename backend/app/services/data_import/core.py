@@ -26,6 +26,7 @@ from app.models.survey import (
     SurveyFbfResult,
 )
 from app.models.user import User
+from app.services.data_access_service import data_access_service
 
 from .constants import FIELD_MAPS
 from .helpers import (
@@ -43,6 +44,7 @@ from .core_helpers import ensure_import_survey_batch, finish_batch_import
 from .row_import import (
     import_row,
     recount_member_counts,
+    write_dk_geometries,
 )
 from . import attachments
 
@@ -69,6 +71,10 @@ class DataImportService:
         }
 
     def create_batch(self, db, payload, current_user):
+        region_code = data_access_service.normalize_region_code(payload.get("regionCode"))
+        if not region_code:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请选择导入区域")
+        data_access_service.ensure_region_in_scope(current_user, region_code, detail="导入区域不在当前授权范围内")
         now = datetime.now(timezone.utc)
         batch = DataImportBatch(
             import_no=next_no(db, "IMP", DataImportBatch.id),
@@ -76,7 +82,7 @@ class DataImportService:
             import_type=payload.get("importType") or "initial_build",
             source_type=payload.get("sourceType") or "csv",
             source_org=payload.get("sourceOrg"),
-            region_code=payload.get("regionCode"),
+            region_code=region_code,
             region_name=payload.get("regionName"),
             status="uploaded",
             imported_by=current_user.id,
@@ -135,7 +141,7 @@ class DataImportService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"archive missing {', '.join(missing)} CSV file")
         now = datetime.now(timezone.utc)
         batch.source_type = "zip"
-        archive_file = DataImportFile(import_batch_id=batch.id, file_type="archive", original_name=filename, content_type=upload_file.content_type, file_size=len(content), file_hash=hashlib.sha256(content).hexdigest(), parse_status="success", row_count=0, uploaded_by=current_user.id, uploaded_at=now, remark="contractor and member archive upload")
+        archive_file = DataImportFile(tenant_code=batch.tenant_code, region_code=batch.region_code, import_batch_id=batch.id, file_type="archive", original_name=filename, content_type=upload_file.content_type, file_size=len(content), file_hash=hashlib.sha256(content).hexdigest(), parse_status="success", row_count=0, uploaded_by=current_user.id, uploaded_at=now, remark="contractor and member archive upload")
         db.add(archive_file)
         db.flush()
         stats_list = []
@@ -167,7 +173,7 @@ class DataImportService:
         file_hash = hashlib.sha256(content).hexdigest()
         text = decode_csv(content)
         rows = list(csv.DictReader(io.StringIO(text)))
-        import_file = DataImportFile(import_batch_id=batch.id, file_type=file_type, original_name=original_name, content_type=content_type, file_size=len(content), file_hash=file_hash, parse_status="success", row_count=len(rows), uploaded_by=current_user.id, uploaded_at=now, remark=remark)
+        import_file = DataImportFile(tenant_code=batch.tenant_code, region_code=batch.region_code, import_batch_id=batch.id, file_type=file_type, original_name=original_name, content_type=content_type, file_size=len(content), file_hash=file_hash, parse_status="success", row_count=len(rows), uploaded_by=current_user.id, uploaded_at=now, remark=remark)
         db.add(import_file)
         db.flush()
         success_count = 0
@@ -181,7 +187,7 @@ class DataImportService:
         for index, raw in enumerate(rows, start=2):
             normalized = normalize_row(raw, fm)
             ek = entity_key(file_type, normalized)
-            row_record = DataImportRow(import_batch_id=batch.id, import_file_id=import_file.id, row_no=index, entity_type=file_type, entity_key=ek, operation_type="insert", status="pending", target_table=file_type, raw_data=raw, normalized_data=normalized)
+            row_record = DataImportRow(tenant_code=batch.tenant_code, region_code=batch.region_code, import_batch_id=batch.id, import_file_id=import_file.id, row_no=index, entity_type=file_type, entity_key=ek, operation_type="insert", status="pending", target_table=file_type, raw_data=raw, normalized_data=normalized)
             try:
                 if not ek:
                     raise ValueError("missing entity key")
@@ -246,40 +252,70 @@ class DataImportService:
         batch = db.get(DataImportBatch, batch_id)
         if batch is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="request failed")
-        operations = db.scalars(select(DataImportOperation).where(DataImportOperation.import_batch_id == batch_id).order_by(DataImportOperation.id.desc())).all()
-        if not operations:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="request failed")
+
         model_map = self._rollback_model_map()
-        restored = 0
         deleted = 0
+        restored = 0
         skipped = 0
+
+        # ── Part 1: Undo INSERTs ──────────────────────────────────────
+        # Rows created by this batch are identified via source_import_batch_id.
+        # No per-row operation log is needed for inserts.
+        for table_name, model in model_map.items():
+            if not hasattr(model, "source_import_batch_id"):
+                continue
+            rows = db.scalars(
+                select(model).where(model.source_import_batch_id == batch_id)
+                .execution_options(skip_tenant_scope=True)
+            ).all()
+            for row in rows:
+                db.delete(row)
+                deleted += 1
+
+        # ── Part 2: Undo UPDATEs ──────────────────────────────────────
+        # Update operations carry before_snapshot in data_import_operations.
+        operations = db.scalars(
+            select(DataImportOperation)
+            .where(DataImportOperation.import_batch_id == batch_id)
+            .order_by(DataImportOperation.id.desc())
+        ).all()
+
         for operation in operations:
+            if operation.operation_type != "update" or not operation.before_snapshot:
+                skipped += 1
+                continue
             model = model_map.get(operation.table_name)
             if model is None:
                 skipped += 1
                 continue
             instance = get_by_primary_key(db, model, operation.primary_key or {})
-            if operation.operation_type == "insert":
-                if instance is not None:
-                    db.delete(instance)
-                    deleted += 1
-                else:
-                    skipped += 1
+            if instance is None:
+                skipped += 1
                 continue
-            if operation.operation_type == "update" and operation.before_snapshot:
-                if instance is None:
-                    skipped += 1
-                    continue
-                restore_snapshot(instance, operation.before_snapshot)
-                restored += 1
-                continue
-            skipped += 1
+            restore_snapshot(instance, operation.before_snapshot)
+            # Restore geometry if it was captured in the snapshot.
+            if "geom" in operation.before_snapshot:
+                geom_value = operation.before_snapshot["geom"]
+                write_dk_geometries(
+                    db,
+                    operation.table_name,
+                    {instance.id: json.loads(geom_value) if geom_value else None},
+                )
+            # Restore last_import_* to previous values.
+            if hasattr(instance, "last_import_batch_id"):
+                instance.last_import_batch_id = operation.before_snapshot.get("last_import_batch_id")
+            if hasattr(instance, "last_import_row_id"):
+                instance.last_import_row_id = operation.before_snapshot.get("last_import_row_id")
+            restored += 1
+
         batch.status = "rolled_back"
-        batch.error_summary = {**(batch.error_summary or {}), "rollback": {"restored": restored, "deleted": deleted, "skipped": skipped, "by": current_user.id}}
+        batch.error_summary = {
+            **(batch.error_summary or {}),
+            "rollback": {"restored": restored, "deleted": deleted, "skipped": skipped, "by": current_user.id},
+        }
         db.commit()
         db.refresh(batch)
         return serialize_batch(batch)
-
     def _rollback_model_map(self):
         models = [Fbf, SurveyCbfResult, SurveyCbfJtcyResult, SurveyFbfResult, SurveyCbdkxxResult, SurveyDkResult]
         return {model.__tablename__: model for model in models}

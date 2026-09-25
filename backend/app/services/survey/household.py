@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.survey import (
@@ -17,6 +17,13 @@ from app.models.survey import (
 )
 from app.models.user import User
 from app.services.data_access_service import data_access_service
+from app.services.relation_codes import (
+    HEAD_RELATION_VALUE,
+    head_relation_after_change,
+    is_head_relation,
+    normalize_non_head_relations,
+    pick_household_head,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +75,8 @@ class SurveyServiceHouseholdMixin:
         if result.survey_status == "confirmed":
             raise HTTPException(400, "invalid operation")
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
+        # 任务归属：只有名下有这一户的人（或批次创建人 / 管理员）能改。
+        self.ensure_task_write_permission(db, batch, result, current_user)
         now = datetime.now(timezone.utc)
 
         old_head = db.scalars(
@@ -92,9 +101,14 @@ class SurveyServiceHouseholdMixin:
         if old_head:
             old_head.is_household_head = False
             old_head.is_changed = True
+            # ⛔ 原户主若还挂着"户主类"关系码（02 户主 / 01 本人）必须一并改掉，
+            # 否则一个户里会同时存在两个户主类码 —— 而本项目按「优先 02 → 次选 01」
+            # 判定户主，会取回原户主（2026-09-25 修）。做法是"对调"：原户主继承
+            # 新户主原先的关系码；双方都是户主类码时收敛为 10（配偶）。
+            old_head.yhzgx = head_relation_after_change(new_head.yhzgx, old_head.yhzgx)
         new_head.is_household_head = True
         new_head.is_changed = True
-        new_head.yhzgx = "01"
+        new_head.yhzgx = HEAD_RELATION_VALUE
 
         record = self._create_change_record(
             db, batch_id, contractor_uid, result.cbfbm,
@@ -133,6 +147,8 @@ class SurveyServiceHouseholdMixin:
         if result.survey_status == "confirmed":
             raise HTTPException(400, "invalid operation")
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
+        # 任务归属：只有名下有这一户的人（或批次创建人 / 管理员）能改。
+        self.ensure_task_write_permission(db, batch, result, current_user)
         now = datetime.now(timezone.utc)
 
         change_details = {"added": [], "updated": [], "deleted": []}
@@ -299,6 +315,8 @@ class SurveyServiceHouseholdMixin:
         if result.survey_status == "confirmed":
             raise HTTPException(400, "invalid operation")
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
+        # 任务归属：只有名下有这一户的人（或批次创建人 / 管理员）能改。
+        self.ensure_task_write_permission(db, batch, result, current_user)
         self._ensure_can_deregister(db, batch_id, contractor_uid, result)
         now = datetime.now(timezone.utc)
 
@@ -387,10 +405,17 @@ class SurveyServiceHouseholdMixin:
         result.investigator_name = current_user.real_name
         result.investigated_at = now
 
+        # 差异行无业务编码列，显式继承承包方结果的租户/村组码，
+        # 避免 before_flush 退化成当前用户的区域码（组级权限用户会 403）。
+        scope_tenant = result.tenant_code
+        scope_region = result.group_region_code or result.region_code or result.cbfbm
+
         db.add(SurveyChangeDiff(
             batch_id=batch_id,
             contractor_uid=contractor_uid,
             change_id=record.id,
+            tenant_code=scope_tenant,
+            region_code=scope_region,
             entity_type="contractor",
             entity_uid=contractor_uid,
             entity_name=result.cbfmc,
@@ -405,6 +430,8 @@ class SurveyServiceHouseholdMixin:
                 batch_id=batch_id,
                 contractor_uid=contractor_uid,
                 change_id=record.id,
+                tenant_code=scope_tenant,
+                region_code=scope_region,
                 entity_type="member",
                 entity_uid=member.member_uid,
                 entity_name=member.cyxm,
@@ -423,6 +450,8 @@ class SurveyServiceHouseholdMixin:
                 batch_id=batch_id,
                 contractor_uid=contractor_uid,
                 change_id=record.id,
+                tenant_code=scope_tenant,
+                region_code=scope_region,
                 entity_type="parcel_relation",
                 entity_uid=relation.parcel_info_uid,
                 entity_name=relation.dkbm,
@@ -441,6 +470,8 @@ class SurveyServiceHouseholdMixin:
                 batch_id=batch_id,
                 contractor_uid=contractor_uid,
                 change_id=record.id,
+                tenant_code=scope_tenant,
+                region_code=scope_region,
                 entity_type="parcel",
                 entity_uid=parcel.parcel_uid,
                 entity_name=parcel.dkmc,
@@ -476,6 +507,7 @@ class SurveyServiceHouseholdMixin:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前批次已结束，不能撤回注销")
         result = self._get_result(db, batch_id, contractor_uid)
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
+        self.ensure_task_write_permission(db, batch, result, current_user)
 
         deregister_change = db.scalars(
             select(SurveyChangeRecord)
@@ -602,6 +634,8 @@ class SurveyServiceHouseholdMixin:
         if result.survey_status == "confirmed":
             raise HTTPException(400, "invalid operation")
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
+        # 任务归属：只有名下有这一户的人（或批次创建人 / 管理员）能改。
+        self.ensure_task_write_permission(db, batch, result, current_user)
         now = datetime.now(timezone.utc)
 
         all_members = db.scalars(
@@ -645,8 +679,13 @@ class SurveyServiceHouseholdMixin:
             raise HTTPException(400, "原户所有有效地块必须且只能分配到一个新户")
 
         group_id = uuid4().hex
+        # 快照必须能支撑撤回：除了结果态，还要记下**任务态** —— 分户现在与合户对齐，
+        # 会把原户 task_status 置 deregistered（原户已不存在，应从待办摘除），
+        # 撤回时按这里还原。⛔ 只放 JSON 可序列化的值，datetime 不要放进来。
         source_before = {"result_status": result.result_status, "is_changed": result.is_changed,
-            "change_type": result.change_type, "change_reason": result.change_reason}
+            "change_type": result.change_type, "change_reason": result.change_reason,
+            "task_status": source_task.task_status, "has_change": source_task.has_change,
+            "change_count": source_task.change_count, "remark": source_task.remark}
         member_states_before = [{"member_uid": m.member_uid, "yhzgx": m.yhzgx,
             "is_household_head": m.is_household_head, "is_changed": m.is_changed,
             "change_reason": m.change_reason} for m in all_members]
@@ -686,7 +725,15 @@ class SurveyServiceHouseholdMixin:
                 member.change_reason = payload.get("reason")
                 member.is_household_head = member.member_uid == head_uid
                 if member.is_household_head:
-                    member.yhzgx = "01"
+                    # ⛔ 户主的关系码是字典里的 `02`（户主），不是 `01`（本人）。
+                    # 旧实现写 `01`，与存量户的 `02` 并存 ⇒ 同一个户里出现两个"户主"。
+                    member.yhzgx = HEAD_RELATION_VALUE
+            # 与合户同理：源户可能不止一个户主类关系码（存量数据里确实有 228 户如此），
+            # 未指定为本户户主的一律收敛为 `80`（其他），避免新户出现多个"户主"。
+            normalize_non_head_relations(
+                target_members,
+                next((m for m in target_members if m.member_uid == head_uid), None),
+            )
             for dkbm in target.get("parcelDkbms") or []:
                 rel = parcel_map[dkbm]
                 rel.cbfbm = new_cbfbm
@@ -730,16 +777,49 @@ class SurveyServiceHouseholdMixin:
         source_task.has_change = True
         source_task.change_count = (source_task.change_count or 0) + 1
         source_task.investigated_at = now
+        # 与 merge_household 对齐：原户这个承包方已不存在，"调查这一户"已无意义，
+        # 应从主待办列表摘除（list_tasks 默认过滤 task_status != "deregistered"）。
+        # ⛔ 摘除之后**必须保证撤回入口可达**：主列表已看不到这个户，撤回只能走
+        # 「已注销承包方」弹窗，而它按 changeType 分流到 split-household/rollback。
+        # 两者必须同源，否则等于把 ISSUE-01 的同型断裂复制到分户（2026-09-25）。
+        source_task.task_status = "deregistered"
 
-        if not commit:
-            db.flush()
-            return {"queued": True}
+        # diff 重建必须排在 commit 判断之前，与 merge_household 的收尾顺序对齐。
+        # 分户是 terminal 操作，调用方 update_result 在 has_terminal_operation 时
+        # 会整段跳过 diff 重建，全部依赖这里；若先走 "if not commit: return"，
+        # 队列模式下（_apply_pending_operations 传 commit=False）原户与新户的
+        # survey_change_diffs 就都不会被刷新，原户停在分户前的旧值、新户恒为空。
         self._rebuild_contractor_diffs(
             db,
             batch_id,
             [contractor_uid, *[item["contractorUid"] for item in created]],
             change_ids={contractor_uid: record.id, **change_ids},
         )
+        # 原户分户后 result.result_status 转 cancelled。但 survey_cbf_base **没有**
+        # result_status 列（只有任务态 task_status），_rebuild_diffs 的
+        # contractor_fields 无从比出这一项 —— 与 deregister_contractor 一样只能手工补。
+        # ⛔ 顺序必须排在 _rebuild_contractor_diffs **之后**：它开头会 DELETE 掉
+        # form_diff_entity_types（含 contractor）的全部行再重算，提前插入会被清掉。
+        # 撤回分户时再次重建 ⇒ 这条随之消失，净差异语义成立。
+        if source_before.get("result_status") != "cancelled":
+            db.add(SurveyChangeDiff(
+                batch_id=batch_id,
+                contractor_uid=contractor_uid,
+                change_id=record.id,
+                tenant_code=result.tenant_code,
+                region_code=result.group_region_code or result.region_code or result.cbfbm,
+                entity_type="contractor",
+                entity_uid=contractor_uid,
+                entity_name=result.cbfmc,
+                field_name="result_status",
+                field_label="承包方状态",
+                before_value=source_before.get("result_status"),
+                after_value="cancelled",
+                change_reason=payload.get("reason"),
+            ))
+        if not commit:
+            db.flush()
+            return {"queued": True}
         db.commit()
         return {"splitGroupId": group_id, "sourceContractorUid": contractor_uid, "newHouseholds": created}
 
@@ -748,6 +828,7 @@ class SurveyServiceHouseholdMixin:
         if batch.status == "finished":
             raise HTTPException(400, "当前调查任务已结束，不能撤回分户")
         source = self._get_result(db, batch_id, contractor_uid)
+        self.ensure_task_write_permission(db, batch, source, current_user)
         record = db.scalars(select(SurveyChangeRecord).where(
             SurveyChangeRecord.batch_id == batch_id, SurveyChangeRecord.contractor_uid == contractor_uid,
             SurveyChangeRecord.change_type == "split_household", SurveyChangeRecord.change_status != "rolled_back",
@@ -773,7 +854,7 @@ class SurveyServiceHouseholdMixin:
             member.yhzgx = state.get("yhzgx", member.yhzgx)
             member.is_changed = bool(state.get("is_changed", False))
             member.change_reason = state.get("change_reason")
-            member.is_household_head = bool(state.get("is_household_head", member.yhzgx == "01"))
+            member.is_household_head = bool(state.get("is_household_head", is_head_relation(member.yhzgx)))
         relations = db.scalars(select(SurveyCbdkxxResult).where(SurveyCbdkxxResult.cbfbm.in_([i["cbfbm"] for i in children]))).all()
         for rel in relations:
             state = parcel_states.get(rel.dkbm, {})
@@ -794,6 +875,15 @@ class SurveyServiceHouseholdMixin:
         source.is_changed = bool(before.get("is_changed", False))
         source.change_type = before.get("change_type") or "none"
         source.change_reason = before.get("change_reason")
+        # 任务态还原：分户会把原户 task_status 置 deregistered（从主待办列表摘除），
+        # 撤回时必须按快照还原，否则原户虽然"恢复了"却仍被 list_tasks 过滤掉，
+        # 界面表现就是"撤回了但列表里没有"。
+        source_task = self._get_task(db, batch_id, contractor_uid)
+        if source_task is not None:
+            source_task.task_status = before.get("task_status") or "not_started"
+            source_task.has_change = bool(before.get("has_change", False))
+            source_task.change_count = int(before.get("change_count") or 0)
+            source_task.remark = before.get("remark")
         record.change_status = "rolled_back"
         rollback = self._create_change_record(db, batch_id, contractor_uid, source.cbfbm,
             change_type="rollback_split_household", before_summary={"split_group_id": group_id},
@@ -803,6 +893,149 @@ class SurveyServiceHouseholdMixin:
         self._rebuild_contractor_diffs(db, batch_id, [contractor_uid], change_ids={contractor_uid: rollback.id})
         db.commit()
         return {"splitGroupId": group_id, "restoredContractorUid": contractor_uid, "removedHouseholds": children}
+
+    def list_contractor_candidates(
+        self,
+        db: Session,
+        batch_id: int,
+        contractor_uid: str,
+        current_user: User,
+        keyword: str | None = None,
+        purpose: str = "merge",
+    ) -> list[dict]:
+        """同村组、可参与户级操作（合户 / 地块互换）的候选承包方。
+
+        候选池按「当前批次 + 同一村组 + 状态可参与」在后端算全，供前端下拉直接消费；
+        不再依赖任务列表页的数据快照（后者受关键字 / 任务状态 / page_size=100 分页影响，
+        会把候选池连带收窄）。判定口径与 merge_household / swap_parcels 的校验保持一致：
+        merge —— 结果状态 normal/added；swap —— 未注销且对方有可互换地块。
+        """
+        batch = self._ensure_batch(db, batch_id)
+        source_task = self._get_task(db, batch_id, contractor_uid)
+        if source_task is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="承包方不属于当前调查批次",
+            )
+        source_result = self._get_result(db, batch_id, contractor_uid)
+        data_access_service.ensure_code_in_scope(current_user, source_result.cbfbm, detail="out of scope")
+        group_key = source_result.group_region_code or source_result.region_code or source_task.cbfbm[:14]
+
+        group_expr = func.coalesce(
+            func.nullif(SurveyCbfResult.group_region_code, ""),
+            SurveyCbfResult.region_code,
+        )
+        filters = [
+            SurveyCbfBase.tenant_code == batch.tenant_code,
+            SurveyCbfBase.batch_id == batch_id,
+            group_expr == group_key,
+            SurveyCbfBase.task_status.notin_(("deregistered", "finished")),
+            SurveyCbfResult.survey_status != "confirmed",
+        ]
+        if purpose == "swap":
+            # swap_parcels 的校验只要求目标户未被确认；再加一层"对方还有可互换地块"，
+            # 免得选到没有地块的户才发现无从勾选。
+            filters.append(SurveyCbfResult.result_status != "cancelled")
+            filters.append(
+                exists(
+                    select(SurveyCbdkxxResult.id)
+                    .where(
+                        SurveyCbdkxxResult.tenant_code == SurveyCbfBase.tenant_code,
+                        SurveyCbdkxxResult.cbfbm == SurveyCbfBase.cbfbm,
+                        SurveyCbdkxxResult.result_status.notin_(("removed", "split_source")),
+                    )
+                    .correlate(SurveyCbfBase)
+                )
+            )
+        else:
+            filters.append(SurveyCbfResult.result_status.in_(("normal", "added")))
+        filters.extend(data_access_service.build_code_scope_filters(SurveyCbfBase.cbfbm, current_user))
+        if keyword:
+            pattern = f"%{keyword.strip()}%"
+            filters.append(or_(SurveyCbfBase.cbfbm.ilike(pattern), SurveyCbfBase.cbfmc.ilike(pattern)))
+
+        rows = db.execute(
+            select(SurveyCbfBase, SurveyCbfResult)
+            .join(
+                SurveyCbfResult,
+                and_(
+                    SurveyCbfResult.tenant_code == SurveyCbfBase.tenant_code,
+                    SurveyCbfResult.contractor_uid == SurveyCbfBase.contractor_uid,
+                ),
+            )
+            .where(*filters)
+            .order_by(SurveyCbfBase.cbfbm.asc())
+            .limit(2000)
+            .execution_options(skip_tenant_scope=True)
+        ).all()
+        logger.info(
+            "Survey contractor candidates: batch_id=%s contractor_uid=%s purpose=%s group_key=%s keyword=%s returned=%s",
+            batch_id,
+            contractor_uid,
+            purpose,
+            group_key,
+            keyword,
+            len(rows),
+        )
+        return [
+            {
+                "id": task.id,
+                "batchId": task.batch_id,
+                "contractorUid": task.contractor_uid,
+                "cbfbm": task.cbfbm,
+                "cbfmc": task.cbfmc,
+                "cbfdz": task.cbfdz,
+                "cbfcysl": task.cbfcysl or 0,
+                "lxdh": task.lxdh,
+                "regionCode": task.region_code,
+                "groupRegionCode": result.group_region_code or task.cbfbm[:14],
+                "groupRegionName": result.group_region_name,
+                "taskStatus": task.task_status,
+                "hasChange": bool(task.has_change),
+                "changeCount": task.change_count or 0,
+                "investigatedAt": task.investigated_at,
+                "remark": task.remark,
+            }
+            for task, result in rows
+        ]
+
+    def list_contractor_codes(
+        self,
+        db: Session,
+        batch_id: int,
+        current_user: User,
+        prefix: str | None = None,
+    ) -> list[str]:
+        """当前租户下已占用的承包方编码（可按前缀过滤）。
+
+        合户 / 分户都需要为新承包户生成 18 位编码，前端原先拿任务列表页（page_size=100）
+        当"已用编码集合"，批次超过 100 户时算出的编码可能与列表外的户重复，保存时才报错。
+        这里直接给全量编码，与 split_household 的唯一性校验（按 survey_cbf_result.cbfbm 查重）
+        保持同一张表、同一口径。
+        """
+        batch = self._ensure_batch(db, batch_id)
+        filters = [
+            SurveyCbfResult.tenant_code == batch.tenant_code,
+        ]
+        filters.extend(data_access_service.build_code_scope_filters(SurveyCbfResult.cbfbm, current_user))
+        normalized = str(prefix or "").strip()
+        if normalized:
+            filters.append(SurveyCbfResult.cbfbm.like(f"{normalized}%"))
+        rows = db.scalars(
+            select(SurveyCbfResult.cbfbm)
+            .where(*filters)
+            .order_by(SurveyCbfResult.cbfbm.asc())
+            .limit(20000)
+            .execution_options(skip_tenant_scope=True)
+        ).all()
+        codes = [str(code) for code in rows if code]
+        logger.info(
+            "Survey contractor codes: batch_id=%s prefix=%s returned=%s",
+            batch_id,
+            normalized or "-",
+            len(codes),
+        )
+        return codes
 
     def merge_household(
         self, db: Session, batch_id: int, source_contractor_uid: str,
@@ -819,6 +1052,9 @@ class SurveyServiceHouseholdMixin:
         if any(task is None for task in tasks):
             raise HTTPException(400, "参与合户的承包方不属于当前调查批次")
         results = [self._get_result(db, batch_id, uid) for uid in source_uids]
+        # 合户一次动多户：每一户都要过归属校验，否则「把别人家的户并进来」就是越权。
+        for item in results:
+            self.ensure_task_write_permission(db, batch, item, current_user)
         if any(item.survey_status == "confirmed" or item.result_status not in {"normal", "added"} for item in results):
             raise HTTPException(400, "参与合户的承包方必须为未确认的正常状态")
         region_codes = {item.group_region_code or item.region_code for item in results}
@@ -902,8 +1138,18 @@ class SurveyServiceHouseholdMixin:
             member.contractor_uid, member.cbfbm = new_uid, new_cbfbm
             member.is_household_head = member.member_uid == head_uid
             if member.is_household_head:
-                member.yhzgx = "01"
+                # ⛔ 户主关系码是字典里的 `02`（户主），不是 `01`（本人）。
+                member.yhzgx = HEAD_RELATION_VALUE
             member.is_changed, member.change_reason = True, payload.get("reason")
+        # 合户会把 A、B 两户**各自的户主**（`yhzgx='02'`）一起带进新户，若不处理，
+        # 新户里就同时存在多个"户主"（用户报的现象）。这两个人相对**新户主**的关系
+        # 无从推断，写"配偶/子女"都是臆造 ⇒ 取字典里语义诚实的 `80 其他`。
+        normalized = normalize_non_head_relations(members, head)
+        if normalized:
+            logger.info(
+                "合户 %s：把 %d 名非户主成员残留的户主类关系码收敛为 80（其他）",
+                new_cbfbm, normalized,
+            )
         for parcel in parcels:
             parcel.cbfbm, parcel.is_changed = new_cbfbm, True
             parcel.change_type, parcel.change_reason = "merge_household", payload.get("reason")
@@ -932,6 +1178,30 @@ class SurveyServiceHouseholdMixin:
             reason=payload.get("reason"), current_user=current_user, now=now)
         change_ids[new_uid] = new_record.id
         self._rebuild_contractor_diffs(db, batch_id, [*source_uids, new_uid], change_ids=change_ids)
+        # 参与合户的原户 result.result_status 全部转 cancelled。同分户：base 表没有
+        # result_status 列，无法自动比对，只能在此手工补（⛔ 顺序必须在重建之后，
+        # 否则会被 _rebuild_contractor_diffs 的 DELETE 清掉）。
+        # 撤回合户时再次重建 ⇒ 这些行随之消失，净差异语义成立。
+        for src_result, _src_task in zip(results, tasks):
+            snapshot = source_snapshots.get(src_result.contractor_uid) or {}
+            before_status = (snapshot.get("result") or {}).get("result_status")
+            if before_status == "cancelled":
+                continue
+            db.add(SurveyChangeDiff(
+                batch_id=batch_id,
+                contractor_uid=src_result.contractor_uid,
+                change_id=change_ids.get(src_result.contractor_uid),
+                tenant_code=src_result.tenant_code,
+                region_code=src_result.group_region_code or src_result.region_code or src_result.cbfbm,
+                entity_type="contractor",
+                entity_uid=src_result.contractor_uid,
+                entity_name=src_result.cbfmc,
+                field_name="result_status",
+                field_label="承包方状态",
+                before_value=before_status,
+                after_value="cancelled",
+                change_reason=payload.get("reason"),
+            ))
         if not commit:
             db.flush()
             return {"queued": True}
@@ -944,6 +1214,7 @@ class SurveyServiceHouseholdMixin:
         if batch.status == "finished":
             raise HTTPException(400, "当前调查批次已结束，不能撤回合户")
         source = self._get_result(db, batch_id, contractor_uid)
+        self.ensure_task_write_permission(db, batch, source, current_user)
         record = db.scalars(select(SurveyChangeRecord).where(
             SurveyChangeRecord.batch_id == batch_id,
             SurveyChangeRecord.contractor_uid == contractor_uid,

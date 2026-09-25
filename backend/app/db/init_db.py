@@ -1,4 +1,5 @@
 import base64
+import re
 import json
 from pathlib import Path
 
@@ -6,6 +7,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
+from app.domain.survey_attachment import (
+    DEFAULT_SURVEY_ATTACHMENT_CATEGORY_NAMES,
+    SURVEY_ATTACHMENT_STAGE_NAME,
+    SURVEY_ATTACHMENT_TEMPLATE_SCOPE,
+)
 from app.models.dictionary import DictionaryItem
 from app.models.fbf import Fbf
 from app.models.map_layer import MapLayer
@@ -47,6 +53,7 @@ DEFAULT_USERS = [
 
 DEFAULT_PERMISSIONS = [
     {"name": "查看工作台", "code": "dashboard.view", "group_name": "平台首页", "category": "menu", "description": "允许进入工作台页面。"},
+    {"name": "查看工作进展大屏", "code": "dashboard.bigscreen", "group_name": "平台首页", "category": "menu", "description": "允许进入二轮延包工作进展大屏（全屏数据看板）。"},
     {"name": "查看人员权限", "code": "users.view", "group_name": "人员权限", "category": "menu", "description": "允许查看用户管理页面。"},
     {"name": "管理用户", "code": "users.manage", "group_name": "人员权限", "category": "action", "description": "允许新增、编辑、删除和重置用户密码。"},
     {"name": "查看角色权限", "code": "roles.view", "group_name": "人员权限", "category": "menu", "description": "允许查看角色与权限配置。"},
@@ -488,18 +495,19 @@ LEGACY_DEFAULT_MAP_LAYER_KEYS = {
 
 def seed_initial_data(db: Session) -> None:
     ensure_default_regions(db)
-    sync_regions_from_business_codes(db)
     ensure_tenants(db)
     sync_region_tenants(db)
     ensure_default_roles(db)
-    ensure_default_permissions(db)
+    created_permissions = ensure_default_permissions(db)
     ensure_default_role_permissions(db)
+    ensure_new_permission_grants(db, created_permissions)
     ensure_default_users(db)
     ensure_default_request_workflow_mappings(db)
     ensure_default_map_layers(db)
     ensure_dictionary_presets(db)
     ensure_default_request_attachment_templates(db)
     ensure_attachment_template_hierarchy(db)
+    ensure_survey_attachment_categories(db)
     ensure_demo_request_attachments(db)
 
 
@@ -667,6 +675,46 @@ def ensure_attachment_template_hierarchy(db: Session) -> None:
 
     if created or any(row.parent_id is not None for row in rows):
         db.commit()
+
+
+# 调查附件类别预设（`/surveys` → 承包方调查录入 → 调查附件 & 转业业务申请）。
+# 复用附件组管理页（request_attachment_templates）承载类别清单，作用域与默认项见
+# app/domain/survey_attachment.py：
+#   - 叶子行的 name 既是页面显示名，也是写入 survey_attachments.category 的类别值（中文）；
+#   - 分组（parent_id）只用于页面归类，读取类别时会被排除；
+#   - required 在调查附件侧不参与任何校验，一律 False —— 免得页面上挂着兑现不了的"必传"。
+def ensure_survey_attachment_categories(db: Session) -> None:
+    """幂等：把调查附件类别灌进附件组管理页；已存在就完全不碰（用户在页面上改过的不被覆盖）。"""
+    request_type, stage_code = SURVEY_ATTACHMENT_TEMPLATE_SCOPE
+    existing = db.scalar(
+        select(func.count())
+        .select_from(RequestAttachmentTemplate)
+        .where(
+            RequestAttachmentTemplate.request_type == request_type,
+            RequestAttachmentTemplate.stage_code == stage_code,
+        )
+    )
+    if existing:
+        return
+
+    for index, name in enumerate(DEFAULT_SURVEY_ATTACHMENT_CATEGORY_NAMES, start=1):
+        db.add(
+            RequestAttachmentTemplate(
+                tenant_code=None,
+                parent_id=None,
+                request_type=request_type,
+                stage_code=stage_code,
+                stage_name=SURVEY_ATTACHMENT_STAGE_NAME,
+                category=name,
+                name=name,
+                required=False,
+                description="承包方调查附件类别：上传时作为类型选项，名称即写入调查附件的类别值。",
+                example_file_name=None,
+                sort_order=index,
+                enabled=True,
+            )
+        )
+    db.commit()
 
 
 def ensure_demo_request_attachments(db: Session) -> None:
@@ -844,11 +892,19 @@ def sync_regions_from_business_codes(db: Session) -> None:
 
         town = db.scalar(select(Region).where(Region.code == town_code))
         if town is None:
+            # 从fbf表获取正确的镇名
+            _fbf_town = db.scalar(select(Fbf.fbfmc).where(Fbf.region_code == town_code))
+            if _fbf_town:
+                _s = re.sub(r'^.*?县', '', _fbf_town)
+                _m = re.search(r'^(.*?(?:镇|乡|开发区))', _s)
+                town_name = _m.group(1) if _m else f"{town_code} 镇级区域"
+            else:
+                town_name = f"{town_code} 镇级区域"
             town = Region(
-                name=f"{town_code} 镇级区域",
+                name=town_name,
                 code=town_code,
                 level="town",
-                full_name=f"{county.full_name} / {town_code} 镇级区域",
+                full_name=f"{county.full_name} / {town_name}",
                 parent_id=county.id,
                 tenant_code=county_code,
             )
@@ -858,11 +914,19 @@ def sync_regions_from_business_codes(db: Session) -> None:
 
         village = db.scalar(select(Region).where(Region.code == village_code))
         if village is None:
+            # 从fbf表获取正确的村名
+            _fbf_village = db.scalar(select(Fbf.fbfmc).where(Fbf.region_code == village_code))
+            if _fbf_village:
+                _s2 = re.sub(r'^.*?(?:镇|乡|开发区)', '', _fbf_village)
+                _m2 = re.search(r'^(.*?(?:村|居|社区))', _s2)
+                village_name = _m2.group(1) if _m2 else f"{village_code} 村级区域"
+            else:
+                village_name = f"{village_code} 村级区域"
             village = Region(
-                name=f"{village_code} 村级区域",
+                name=village_name,
                 code=village_code,
                 level="village",
-                full_name=f"{town.full_name} / {village_code} 村级区域",
+                full_name=f"{town.full_name} / {village_name}",
                 parent_id=town.id,
                 tenant_code=county_code,
             )
@@ -873,7 +937,7 @@ def sync_regions_from_business_codes(db: Session) -> None:
         if group_code:
             group = db.scalar(select(Region).where(Region.code == group_code))
             if group is None:
-                group_name = raw_group_name or f"{group_code} 缁勭骇鍖哄煙"
+                group_name = raw_group_name or f"{group_code} 组级区域"
                 group = Region(
                     name=group_name,
                     code=group_code,
@@ -941,93 +1005,131 @@ def ensure_default_roles(db: Session) -> None:
         db.commit()
 
 
-def ensure_default_permissions(db: Session) -> None:
-    changed = False
+def ensure_default_permissions(db: Session) -> set[str]:
+    """补齐缺失的权限点；已存在的权限点不覆盖。
+
+    旧实现会把已存在权限的 `name / group_name / category / description` 覆写回预设文案，
+    运维改过的权限名称会在重启后被改回去。现在只做\"缺则新增\"。
+
+    返回**本次新登记**的权限码集合，供 `ensure_new_permission_grants` 判断
+    \"哪些权限是刚加进代码的\"——补授动作只对新权限发生一次。
+    """
+    created: set[str] = set()
     for item in DEFAULT_PERMISSIONS:
         permission = db.scalar(select(Permission).where(Permission.code == item["code"]))
-        if permission is None:
-            db.add(
-                Permission(
-                    name=item["name"],
-                    code=item["code"],
-                    group_name=item["group_name"],
-                    category=item["category"],
-                    description=item["description"],
-                )
+        if permission is not None:
+            continue
+        db.add(
+            Permission(
+                name=item["name"],
+                code=item["code"],
+                group_name=item["group_name"],
+                category=item["category"],
+                description=item["description"],
             )
-            changed = True
-        elif (
-            permission.name != item["name"]
-            or permission.group_name != item["group_name"]
-            or permission.category != item["category"]
-            or permission.description != item["description"]
-        ):
-            permission.name = item["name"]
-            permission.group_name = item["group_name"]
-            permission.category = item["category"]
-            permission.description = item["description"]
-            changed = True
-    if changed:
+        )
+        created.add(item["code"])
+    if created:
         db.commit()
+    return created
 
 
 def ensure_default_role_permissions(db: Session) -> None:
+    """给**尚未配置权限**的角色种默认权限；角色已有权限则完全跳过。
+
+    旧实现是\"只补缺不删\"，看着安全，实则会把运维从角色上**摘掉**的权限在下次重启时
+    再加回来（回灌）。现在改为：角色权限集合为空才灌预设，非空则一行不动。
+    """
     permissions = {item.code: item for item in db.scalars(select(Permission)).all()}
     changed = False
     for role_code, permission_codes in DEFAULT_ROLE_PERMISSIONS.items():
         role = db.scalar(select(Role).where(Role.code == role_code))
         if role is None:
             continue
-        current_codes = {item.code for item in role.permissions}
-        missing_permissions = [
-            permissions[code]
-            for code in permission_codes
-            if code in permissions and code not in current_codes
-        ]
-        if missing_permissions:
-            role.permissions = [*role.permissions, *missing_permissions]
+        if role.permissions:
+            continue
+        seeded = [permissions[code] for code in permission_codes if code in permissions]
+        if seeded:
+            role.permissions = seeded
             changed = True
     if changed:
         db.commit()
 
 
+def ensure_new_permission_grants(db: Session, created_codes: set[str]) -> None:
+    """把**本次启动新登记**的权限点补授给平台管理员角色。
+
+    为什么需要单独一步：`ensure_default_role_permissions` 对"已有权限"的角色整体跳过
+    （这是刻意的，防止把运维从角色上摘掉的权限在重启后回灌），副作用是
+    **代码里新加的权限码不会自动挂到已存在的 platform_admin 上** ——
+    新装库能拿到，老库升级后管理员反而看不到新功能。
+
+    折中办法：只在"该权限码是本次启动新建的"前提下补授一次。
+    权限码一旦已存在（无论被谁持有、还是被运维摘掉），这里一概不碰，
+    因此运维在「角色权限」页调整过的授权不会被重启改回去。
+
+    这也正是 `dashboard.bigscreen` 的落地方式：权限点随代码发布自动
+    补授给平台管理员，其他角色要开放时去「角色权限」里手工勾选。
+    """
+    if not created_codes:
+        return
+    role = db.scalar(select(Role).where(Role.code == "platform_admin"))
+    if role is None:
+        return
+    owned = {item.code for item in role.permissions}
+    missing = sorted(created_codes - owned)
+    if not missing:
+        return
+    available = {
+        item.code: item
+        for item in db.scalars(select(Permission).where(Permission.code.in_(missing))).all()
+    }
+    granted = [available[code] for code in missing if code in available]
+    if not granted:
+        return
+    role.permissions = [*role.permissions, *granted]
+    db.commit()
+
+
 def ensure_default_users(db: Session) -> None:
+    """按需创建内置演示用户；**已存在的用户一律不修改**。
+
+    旧实现在每次启动时把已存在用户的 `real_name / mobile / status / tenant_code /
+    role_id / region_id` 全部覆盖回预设值，并调用 `_ensure_user_region_permissions`
+    把区域授权重置为预设集合——运维在「人员权限」页改过的东西会在重启后被悄悄改回去
+    （典型表现：改了某用户的数据权限区域，重启后\"自己恢复了\"）。
+
+    现在改为：用户不存在才创建（连默认区域授权一起种）；用户名已存在则整个跳过，
+    不碰任何字段、不碰授权行。需要重置请显式走运维手段，不要依赖启动流程。
+    """
     password_hash = hash_password("Admin123456")
     preferred_regions = _resolve_demo_regions(db)
     changed = False
     for item in DEFAULT_USERS:
+        existing = db.scalar(select(User).where(User.username == item["username"]))
+        if existing is not None:
+            # 已存在：不覆盖资料、不重置角色/区域、不重灌区域授权。
+            continue
         role = db.scalar(select(Role).where(Role.code == item["role_code"]))
         region_code = item.get("region_code") or preferred_regions.get(item["role_code"])
         region = db.scalar(select(Region).where(Region.code == region_code))
         if role is None or region is None:
             continue
-        tenant_code = region.tenant_code
-        user = db.scalar(select(User).where(User.username == item["username"]))
-        if user is None:
-            user = User(
-                username=item["username"],
-                real_name=item["real_name"],
-                password_hash=password_hash,
-                mobile=item["mobile"],
-                status="active",
-                tenant_code=tenant_code,
-                role_id=role.id,
-                region_id=region.id,
-            )
-            db.add(user)
-            db.flush()
-            changed = True
-        else:
-            user.real_name = item["real_name"]
-            user.mobile = item["mobile"]
-            user.status = "active"
-            user.tenant_code = tenant_code
-            user.role_id = role.id
-            user.region_id = region.id
-            changed = True
+        user = User(
+            username=item["username"],
+            real_name=item["real_name"],
+            password_hash=password_hash,
+            mobile=item["mobile"],
+            status="active",
+            tenant_code=region.tenant_code,
+            role_id=role.id,
+            region_id=region.id,
+        )
+        db.add(user)
+        db.flush()
         permission_codes = item.get("permission_codes") or [region.code]
-        if _ensure_user_region_permissions(db, user, permission_codes):
-            changed = True
+        _seed_user_region_permissions(db, user, permission_codes)
+        changed = True
     if changed:
         db.commit()
 
@@ -1045,22 +1147,27 @@ def _resolve_demo_regions(db: Session) -> dict[str, str]:
     }
 
 
-def _ensure_user_region_permissions(db: Session, user: User, region_codes: list[str]) -> bool:
-    changed = False
+def _seed_user_region_permissions(db: Session, user: User, region_codes: list[str]) -> None:
+    """给**新建**用户种默认区域授权。
+
+    只在用户当前没有任何授权行时写入。已有授权则一行都不动：不删、不补、不改。
+
+    旧实现（名为 `_ensure_user_region_permissions`）会先 `db.delete()` 掉所有不在预设集
+    合里的授权行、再补齐缺失的，等于每次启动都把用户的授权\"对齐\"回代码预设值。
+    这是\"改了数据权限区域、重启后被改回去\"的直接原因，已废弃。
+
+    授权只能由「人员权限」页或显式运维脚本变更，启动流程无权覆盖。
+    """
+    has_any = db.scalar(
+        select(func.count())
+        .select_from(UserRegionPermission)
+        .where(UserRegionPermission.user_id == user.id)
+    )
+    if has_any:
+        return
+
     desired_codes = {code for code in (_normalize_region_code(raw_code) for raw_code in region_codes) if code}
-    existing_rows = db.scalars(select(UserRegionPermission).where(UserRegionPermission.user_id == user.id)).all()
-    for row in existing_rows:
-        if row.region_code not in desired_codes:
-            db.delete(row)
-            changed = True
-    existing = {
-        row.region_code
-        for row in existing_rows
-        if row.region_code in desired_codes
-    }
     for code in desired_codes:
-        if code in existing:
-            continue
         db.add(
             UserRegionPermission(
                 user_id=user.id,
@@ -1069,8 +1176,6 @@ def _ensure_user_region_permissions(db: Session, user: User, region_codes: list[
                 level=_level_by_region_code(code),
             )
         )
-        changed = True
-    return changed
 
 
 def _normalize_region_code(code: str | None) -> str | None:
@@ -1103,18 +1208,24 @@ def sync_demo_user_passwords(db: Session) -> None:
 
 
 def ensure_default_map_layers(db: Session) -> None:
+    """补齐缺失的默认图层；**已存在的图层一律不覆盖、不删除**。
+
+    旧实现会：① 删掉 `LEGACY_DEFAULT_MAP_LAYER_KEYS` 里的历史图层行；
+    ② 把 survey_dk_result 的 name/group_name、image 的 service_url 覆写回预设值。
+    结果是运维在「图层管理」页改过的图层名称、底图地址会在重启后被改回去。
+    现在只做缺则新增；历史遗留行的清理不再由启动流程承担（需要时走显式运维 SQL）。
+    """
     changed = False
     for item in DEFAULT_MAP_LAYERS:
-        row = db.scalar(select(MapLayer).where(MapLayer.key == item["key"]))
+        if item["key"] in LEGACY_DEFAULT_MAP_LAYER_KEYS:
+            continue
+        existing = db.scalar(select(MapLayer).where(MapLayer.key == item["key"]))
+        if existing is not None:
+            continue
         if item["key"] == "survey_dk_result":
             item = {**item, "name": "\u627f\u5305\u5730\u5757", "group_name": "GeoServer\u56fe\u5c42"}
-        if item["key"] in LEGACY_DEFAULT_MAP_LAYER_KEYS:
-            if row is not None:
-                db.delete(row)
-                changed = True
-            continue
-        if row is None:
-            row = MapLayer(
+        db.add(
+            MapLayer(
                 name=item["name"],
                 key=item["key"],
                 layer_type=item["layer_type"],
@@ -1128,17 +1239,8 @@ def ensure_default_map_layers(db: Session) -> None:
                 sort_order=item.get("sort_order", 0),
                 enabled=item.get("enabled", True),
             )
-            db.add(row)
-            changed = True
-        elif item["key"] == "survey_dk_result" and (row.name != item["name"] or row.group_name != item["group_name"]):
-            row.name = item["name"]
-            row.group_name = item["group_name"]
-            changed = True
-        elif item["key"] == "image" and row.service_url == LEGACY_ARCGIS_IMAGE_BASEMAP_URL:
-            row.service_url = item["service_url"]
-            row.layer_type = item["layer_type"]
-            row.projection = item.get("projection")
-            changed = True
+        )
+        changed = True
 
     if changed:
         db.commit()
@@ -1171,12 +1273,21 @@ def ensure_default_request_workflow_mappings(db: Session) -> None:
 
 
 def ensure_dictionary_presets(db: Session) -> None:
-    from app.db.dictionary_presets import NYT2539_APPENDIX_C_DICTIONARY_ITEMS
+    """仅在**字典表为空**时灌入内置预设；表里已有数据则完全不动。
 
+    旧实现是「表非空就再按 dict_type 同步一次」（`_sync_dictionary_group`）：那个同步会
+    覆写已存在字典项的 `dict_name / item_name / sort_order / remark / enabled`，还会
+    **删除**所有不在预设清单里的字典项——运维在「字典管理」页改过或补录过的条目会在
+    重启后丢失。现在改为：有数据就一行不碰。
+
+    注意取舍：字典表非空时，代码后续版本新增的 dict_type 不会自动灌入，
+    需要时请显式执行运维数据脚本。
+    """
     existing_count = db.scalar(select(func.count()).select_from(DictionaryItem)) or 0
     if existing_count > 0:
-        _sync_dictionary_group(db, NYT2539_APPENDIX_C_DICTIONARY_ITEMS, "nyt2539_c20_relation_to_head")
         return
+
+    from app.db.dictionary_presets import NYT2539_APPENDIX_C_DICTIONARY_ITEMS
 
     for dict_type, dict_name, item_value, item_name, sort_order, remark in NYT2539_APPENDIX_C_DICTIONARY_ITEMS:
         db.add(
@@ -1194,57 +1305,11 @@ def ensure_dictionary_presets(db: Session) -> None:
     db.commit()
 
 
-def _sync_dictionary_group(db: Session, preset_items: list[tuple[str, str, str, str, int, str | None]], dict_type: str) -> None:
-    group_items = [item for item in preset_items if item[0] == dict_type]
-    if not group_items:
-        return
+# 原 `_sync_dictionary_group()` 已删除：它会在每次启动时覆写已存在字典项的字段，
+# 并删除所有不在预设清单里的项，属于\"用代码预设覆盖运维数据\"。
+# 字典预设现在只在字典表为空时灌入一次，见 `ensure_dictionary_presets()`。
 
-    existing_items = db.scalars(
-        select(DictionaryItem).where(
-            DictionaryItem.dict_type == dict_type,
-            DictionaryItem.tenant_code.is_(None),
-        )
-    ).all()
-    existing_by_value = {item.item_value: item for item in existing_items}
-    expected_values = {item_value for _, _, item_value, _, _, _ in group_items}
-    changed = False
 
-    for dict_type, dict_name, item_value, item_name, sort_order, remark in group_items:
-        existing = existing_by_value.get(item_value)
-        if existing is None:
-            db.add(
-                DictionaryItem(
-                    dict_type=dict_type,
-                    dict_name=dict_name,
-                    item_value=item_value,
-                    item_name=item_name,
-                    sort_order=sort_order,
-                    enabled=True,
-                    remark=remark,
-                    tenant_code=None,
-                )
-            )
-            changed = True
-            continue
 
-        if (
-            existing.dict_name != dict_name
-            or existing.item_name != item_name
-            or existing.sort_order != sort_order
-            or existing.remark != remark
-            or not existing.enabled
-        ):
-            existing.dict_name = dict_name
-            existing.item_name = item_name
-            existing.sort_order = sort_order
-            existing.remark = remark
-            existing.enabled = True
-            changed = True
 
-    for existing in existing_items:
-        if existing.item_value not in expected_values:
-            db.delete(existing)
-            changed = True
 
-    if changed:
-        db.commit()

@@ -1,0 +1,761 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>地籍调查表</title>
+<style>
+  /* 混合纸张方向（与 docx 分节一致）：
+     封面 / 发包方调查表 / 承包方调查表 / 界址点坐标成果表 → A4 纵向
+     承包地块调查表 → A4 横向
+     通过 CSS 命名页（Chrome / Edge 118+ 支持）实现一次打印两种方向；
+     基页按横向兜底，方向能力缺失时纵向页只会在纸面上多占一页，不会丢内容。 */
+  @page { size: A4 landscape; margin: 0; }
+  @page portrait-page { size: A4 portrait; margin: 0; }
+  @page landscape-page { size: A4 landscape; margin: 0; }
+
+  * { box-sizing: border-box; }
+
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    color: #000;
+    background: #f2f3f5;
+    font-family: "SimSun", "宋体", serif;
+    font-size: 10.5pt;
+  }
+
+  .print-btn {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 20;
+    padding: 8px 20px;
+    border: 0;
+    border-radius: 4px;
+    color: #fff;
+    background: #409eff;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  .page {
+    position: relative;
+    background: #fff;
+    overflow: hidden;
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+
+  /* 纵向页左右留白 13.13mm：正文区 = 210 - 2×13.13 = 183.74mm，
+     恰好容纳「发包方 / 承包方调查表」（表宽 183.74mm）并使左右留白对称。 */
+  .pg-portrait {
+    page: portrait-page;
+    width: 210mm;
+    height: 297mm;
+    padding: 18mm 13.13mm 14mm;
+    margin: 0 auto 14px;
+  }
+
+  /* 横向页左右留白 15mm：正文区 = 267mm，
+     「承包地块调查表」265.62mm 近乎满宽，居中几乎无位移。 */
+  .pg-landscape {
+    page: landscape-page;
+    width: 297mm;
+    height: 210mm;
+    padding: 12mm 15mm 10mm;
+    margin: 0 auto 14px;
+  }
+
+  /* ── 封面 ───────────────────────────────────────────── */
+  .cover {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .cover-head { height: 62mm; }
+
+  .cover-title {
+    text-align: center;
+    font-family: "SimHei", "黑体", "SimSun", serif;
+    font-size: 30pt;
+    font-weight: 700;
+    letter-spacing: 8mm;
+    text-indent: 8mm;
+    line-height: 1.6;
+  }
+
+  .cover-sub {
+    text-align: center;
+    font-size: 16pt;
+    letter-spacing: 2mm;
+    text-indent: 2mm;
+    margin-top: 8mm;
+  }
+
+  .cover-foot {
+    margin-top: auto;
+    padding-bottom: 22mm;
+    font-size: 14pt;
+    line-height: 2.4;
+    text-align: center;
+  }
+
+  /* ── 通用表格 ───────────────────────────────────────── */
+  .form-title {
+    margin: 0 0 6mm;
+    text-align: center;
+    font-family: "SimHei", "黑体", "SimSun", serif;
+    font-size: 16pt;
+    font-weight: 700;
+    line-height: 1.25;
+  }
+
+  .tbl {
+    border-collapse: collapse;
+    table-layout: fixed;
+    border: 1px solid #000;
+    width: 100%;
+  }
+
+  .tbl td {
+    border: 1px solid #000;
+    padding: 0 1mm;
+    vertical-align: middle;
+    text-align: center;
+    font-size: 10.5pt;
+    line-height: 1.3;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  .tbl .lbl {
+    font-family: "SimHei", "黑体", "SimSun", serif;
+    font-weight: 400;
+    /* 标签里的换行一律靠 <br>，**不能**用 pre-line：
+       模板为了可读会把长单元格折成多行、`<br>` 后面正好接一个换行，
+       pre-line 会把那个"排版换行"也当成断行 —— 取得（承包）方式那格
+       7 行被渲染成 14 行，整张表撑高约 37mm、溢出 A4 一页（打印时被
+       `overflow: hidden` 悄悄裁掉）。 */
+    white-space: normal;
+  }
+
+  .tbl .val {
+    text-align: left;
+    padding-left: 2mm;
+  }
+
+  .tbl .note {
+    text-align: left;
+    vertical-align: top;
+    padding: 3mm 3mm;
+    white-space: pre-line;
+    line-height: 1.9;
+  }
+
+  .cb { font-family: "SimSun", "宋体", serif; }
+
+  /* ── 勾选符号的字体 ──
+     ☑(U+2611) / ☐(U+2610) / ✓(U+2713) 在**宋体、黑体里都没有字形**（解析
+     simsun.ttc / simhei.ttf 的 cmap 实测确认），只有 MS Gothic / Segoe UI Symbol 有。
+     所以勾号必须显式换字体。
+
+     ⚠️ 命中与未命中的方框**必须同字体**：只给「☑」换字体、让「□」留在宋体，
+     两者来自不同字体 ⇒ **框有大有小**，这就是早年打印件上那个老毛病
+     （`services/docx_template.py` 的注释里记着这段教训）。故 ☑ 与 □ 都走 .box。
+
+     选 MS Gothic 因为甲方原件里那个 ☑ 的 run 就写死 MS Gothic；Segoe UI Symbol
+     是实测的 Word 自动回退字体（全宋体文档导出 PDF 时它会额外嵌入 SegoeUISymbol），
+     放第二顺位兜底；万一两者都缺，Word 仍会自行回退，不会变豆腐块。
+     标签文字（身份证/水田…）不加 .box，仍走宋体。 */
+  .box, .cb { font-family: "MS Gothic", "Segoe UI Symbol", "SimSun", "宋体", serif; }
+
+  .nowrap { white-space: nowrap; }
+
+  /* ── 发包方调查表列宽（合计 183.74mm，与承包方调查表同宽） ──
+     docx 原表为 150.32mm，此处按 183.74/150.32 = 1.222326 等比放大各列，
+     仅改宽度、不动行高，保证与承包方调查表左右边界齐平。 */
+  .t-issuer { width: 183.74mm; }
+  .t-issuer .f1 { width: 29.78mm; }
+  .t-issuer .f2 { width: 58.99mm; }
+  .t-issuer .f3 { width: 27.94mm; }
+  .t-issuer .f4 { width: 16.82mm; }
+  .t-issuer .f5 { width: 50.21mm; }
+  .h-1965 { height: 19.65mm; }
+  .h-2062 { height: 20.62mm; }
+  .h-2099 { height: 20.99mm; }
+  .h-2129 { height: 21.29mm; }
+  .h-5805 { height: 58.05mm; }
+  .h-7268 { height: 72.68mm; }
+
+  /* ── 承包方调查表列宽（合计 183.74mm） ─────────────── */
+  .t-contractor { width: 183.74mm; }
+  .t-contractor .c1 { width: 15.93mm; }
+  .t-contractor .c2 { width: 31.40mm; }
+  .t-contractor .c3 { width: 34.75mm; }
+  .t-contractor .c4 { width: 19.05mm; }
+  .t-contractor .c5 { width: 20.00mm; }
+  .t-contractor .c6 { width: 14.06mm; }
+  .t-contractor .c7 { width: 18.93mm; }
+  .t-contractor .c8 { width: 29.62mm; }
+  .h-1016 { height: 10.16mm; }
+  .h-1524 { height: 15.24mm; }
+  .h-508 { height: 5.08mm; }
+  .h-550 { height: 5.50mm; }
+  .h-6257 { height: 62.57mm; }
+  .h-2974 { height: 29.74mm; }
+
+  /* ── 承包地块调查表（合计 265.62mm，24 列） ────────── */
+  .t-parcel {
+    width: 265.62mm;
+    font-size: 8pt;
+  }
+  .t-parcel td {
+    font-size: 8pt;
+    line-height: 1.15;
+    padding: 0 0.5mm;
+  }
+  .t-parcel .d1 { width: 31.29mm; }
+  .t-parcel .d2 { width: 8.27mm; }
+  .t-parcel .d3 { width: 7.76mm; }
+  .t-parcel .d4 { width: 6.68mm; }
+  .t-parcel .d5 { width: 7.76mm; }
+  .t-parcel .d6 { width: 6.86mm; }
+  .t-parcel .d7 { width: 8.29mm; }
+  .t-parcel .d8 { width: 8.27mm; }
+  .t-parcel .d9 { width: 8.29mm; }
+  .t-parcel .d10 { width: 4.59mm; }
+  .t-parcel .d11 { width: 3.17mm; }
+  .t-parcel .d12 { width: 6.35mm; }
+  .t-parcel .d13 { width: 5.29mm; }
+  .t-parcel .d14 { width: 6.35mm; }
+  .t-parcel .d15 { width: 11.80mm; }
+  .t-parcel .d16 { width: 7.94mm; }
+  .t-parcel .d17 { width: 7.05mm; }
+  .t-parcel .d18 { width: 7.74mm; }
+  .t-parcel .d19 { width: 7.23mm; }
+  .t-parcel .d20 { width: 6.00mm; }
+  .t-parcel .d21 { width: 34.98mm; }
+  .t-parcel .d22 { width: 18.61mm; }
+  .t-parcel .d23 { width: 20.62mm; }
+  .t-parcel .d24 { width: 24.41mm; }
+  .t-parcel .h-836 { height: 8.36mm; }
+  .t-parcel .h-898 { height: 8.98mm; }
+  .t-parcel .h-792 { height: 7.92mm; }
+  .t-parcel .h-794 { height: 7.94mm; }
+  .t-parcel .h-1356 { height: 13.56mm; }
+  .t-parcel .h-688 { height: 6.88mm; }
+  .t-parcel .h-670 { height: 6.70mm; }
+  .t-parcel .h-802 { height: 8.02mm; }
+  .t-parcel .ck { font-size: 7pt; letter-spacing: 0; text-align: center; }
+  .t-parcel .note {
+    padding: 1.5mm 2mm;
+    line-height: 1.6;
+    font-size: 8pt;
+  }
+  /* 数据区尾部三列：docx 中跨全部界址点行纵向合并为一格 */
+  .t-parcel .sign-note {
+    font-size: 7pt;
+    line-height: 1.35;
+    text-align: left;
+    padding: 1mm 1mm;
+    white-space: normal;
+  }
+
+  /* ── 界址点坐标成果表（合计 183.74mm，7 列） ─────────
+     docx 原表为 161.20mm 且位于独立的 A4 纵向节（210x297，正文宽 146.51mm，
+     表宽本就超出正文区），此处按 183.74/161.21 = 1.139756 等比放大，
+     与封面 / 发包方 / 承包方三张纵向表左右边界齐平。 */
+  .t-points {
+    width: 183.74mm;
+    font-size: 9pt;
+  }
+  .t-points td { font-size: 9pt; line-height: 1.2; }
+  .t-points .p1 { width: 25.61mm; }
+  .t-points .p2 { width: 13.87mm; }
+  .t-points .p3 { width: 12.05mm; }
+  .t-points .p4 { width: 28.90mm; }
+  .t-points .p5 { width: 30.06mm; }
+  .t-points .p6 { width: 22.56mm; }
+  .t-points .p7 { width: 50.69mm; }
+  .t-points .head-lbl { text-align: left; padding-left: 1.5mm; }
+  .t-points .sect { font-weight: 700; letter-spacing: 2mm; }
+  /* 表头这三个高度（5.38 / 5.45 / 5.47mm）取自甲方原 docx 里 r0 / r1 / r2 的
+     trHeight 实测值（305 / 309 / 310 twips），不是估的。 */
+  .t-points .h-538 { height: 5.38mm; }
+  .t-points .h-545 { height: 5.45mm; }
+  .t-points .h-547 { height: 5.47mm; }
+  /* 点位行的「半行」也直接用 .h-545：原表数据区逐行实测 289~330 twips、众数
+     309 twips = 5.45mm，每个界址点占上下两个半行即 10.90mm。
+     ⚠️ 半行不能再往小里给 —— Word 的表格行存在最小行高（9pt 字体下实测约
+     13pt ≈ 4.59mm），给 2.60mm 会被 Word 顶回 4.59mm，一张 28 点的成果表因此
+     多占一页（实测 HTML 11 页 / Word 15 页）。半行高于该下限，两边页数才一致。 */
+  /* 数据列的 X（m）/ Y（m）/ 边长（m）三格：居中对齐。
+     这三格是成果表里仅有的 .num —— 顺序号 / 点号 / 备注 不带它。
+     原先写的是 `text-align: right; padding-right: 1.5mm`，数字靠右、
+     与居中的表头（X（m）/Y（m）/边长（m））错位；2026-09-20 用户要求居中。
+     ⚠️ 显式右内边距必须一并去掉：居中时留着 1.5mm 会让数字整体偏左
+     （左 1mm + 右 1.5mm）。删掉后回落 `.tbl td` 的 `padding: 0 1mm`，
+     左右相等、居中才是真的在格子正中。 */
+  .t-points .num { text-align: center; font-family: "Consolas", "SimSun", monospace; }
+
+  @media print {
+    html,
+    body { background: #fff; }
+
+    .page {
+      margin: 0;
+      box-shadow: none;
+      overflow: hidden;
+      page-break-after: always;
+      break-after: page;
+    }
+
+    .page:last-child {
+      page-break-after: auto;
+      break-after: auto;
+    }
+
+    .print-btn { display: none !important; }
+    .tbl tr { break-inside: avoid; page-break-inside: avoid; }
+  }
+
+  @media screen {
+    .page { box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12); }
+  }
+</style>
+</head>
+<body>
+
+{# 勾选符号：命中 → ☑，未命中 → □（`off` 传空串则留空，用于数据行的勾选串）。
+
+   两个符号都套 <span class="box"> —— 它们必须同字体，否则「框有大有小」。
+   字体为什么必须是 MS Gothic / Segoe UI Symbol 见上面 .box 的注释。 #}
+{% macro box(checked, off='□') -%}
+{%- if checked -%}<span class="box">☑</span>{%- elif off -%}<span class="box">{{ off }}</span>{%- endif -%}
+{%- endmacro %}
+
+{# 承包地块调查表「界标类型 / 界址线类别 / 界址线位置」的勾选单元格。
+   列跨度由 line_flags / pos_flags 里的 colspan 携带，与表头逐列对齐；
+   **只写命中项**：勾选显示「☑」，未勾选的格留空 —— 甲方原表数据行本是空白、
+   勾选框印在纸上，逐格铺「□」（3+10+4=17 格 × 8 行）会糊成一片。
+   空行复用同一宏，传入 parcel.blank_flags 的全未勾选列表，因此整行留空。 #}
+{% macro boundary_marks(mark_flags, line_flags, pos_flags) -%}
+{% for item in mark_flags %}<td class="ck">{{ box(item.checked, '') }}</td>{% endfor %}
+{% for item in line_flags %}<td class="ck"{% if item.colspan > 1 %} colspan="{{ item.colspan }}"{% endif %}>{{ box(item.checked, '') }}</td>{% endfor %}
+{% for item in pos_flags %}<td class="ck"{% if item.colspan > 1 %} colspan="{{ item.colspan }}"{% endif %}>{{ box(item.checked, '') }}</td>{% endfor %}
+{%- endmacro %}
+
+{# 界址点坐标成果表的点位行 —— 甲方原表「错行展示」的做法：
+
+   每个界址点占**上下两个半行**（h-545 各 5.45mm，一个点合计 10.90mm，与甲方原表
+   数据区行高一致）：
+     · 「顺序号 / 点号 / X / Y / 备注」跨这两个半行合并 ⇒ 视觉上仍是一行点；
+     · 「边长」跨"本点的下半行 + 下一点的上半行"并垂直居中 ⇒ **边长正好落在
+       两点之间的那条横线上**，而不是与点号并排。
+   这是甲方 docx 原件的合并方式（原表数据区 28 行、r5/r6 一份点位而边长挂在
+   r6/r7，即错开一行），不照做就会"没有错行展示"：边长与点号同行、看不出它
+   连的是哪两个点。
+
+   第 1 个点之前没有边长，用半行空格占住；最后一个点位行（第 slots 行）的边长格
+   只有半行高，为的是不让 rowspan 溢出表格底部。
+
+   ``slots`` 由 points_per_page 传入（=19）：表头 27.24mm + 19×10.90mm = 234.3mm，
+   低于纵向页正文区 265mm 减标题 13.06mm 后的 251.94mm，且半行 5.45mm 高于 Word
+   的最小行高 4.59mm —— 上一轮半行给 2.60mm 就是踩了这个下限，Word 把每行顶到
+   4.59mm，一张 28 点的表溢出 111mm，11 页被撑成 15 页。 #}
+{% macro sheet_point_rows(page_points, slots) -%}
+{% set total = page_points | length %}
+{% for k in range(slots) %}
+{% set point = page_points[k] if k < total else none %}
+<tr class="h-545">
+  <td rowspan="2">{{ point.seq if point else '' }}</td>
+  <td colspan="2" rowspan="2">{{ point.code if point else '' }}</td>
+  <td class="num" rowspan="2">{{ point.x if point else '' }}</td>
+  <td class="num" rowspan="2">{{ point.y if point else '' }}</td>
+  {% if k == 0 %}<td></td>{% endif %}
+  <td rowspan="2">{{ point.remark if point else '' }}</td>
+</tr>
+<tr class="h-545">
+  <td class="num"{% if k < slots - 1 %} rowspan="2"{% endif %}>{{ point.edge if point else '' }}</td>
+</tr>
+{% endfor %}
+{%- endmacro %}
+
+<button class="print-btn" onclick="window.print()">打印</button>
+
+{# ════════════════════════════════════════════════════════════
+   一个 packet = 一个承包方（一户）的一整套地籍调查表：
+   封面 + 发包方调查表 + 承包方调查表 + 每地块一套下表
+   ════════════════════════════════════════════════════════════ #}
+{% for packet in packets %}
+{% set issuer = packet.issuer %}
+{% set contractor = packet.contractor %}
+
+<!-- ①② 封面 -->
+<div class="page pg-portrait cover">
+  <div class="cover-head"></div>
+  <div class="cover-title">地籍调查表</div>
+  <div class="cover-sub">（土地承包经营权）</div>
+  <div class="cover-foot">
+    {# 调查单位不写死：取自字典项 survey_org（「字典管理」页可维护），取不到时由后端回退默认值 #}
+    <div>调查单位（机构）：{{ survey_org }}</div>
+    <div>调查时间：{{ packet.survey_date_text or '　　　　年　　月　　日' }}</div>
+  </div>
+</div>
+
+<!-- ③ 发包方调查表 -->
+<div class="page pg-portrait">
+  <h1 class="form-title">发包方调查表</h1>
+  <table class="tbl t-issuer">
+    <colgroup>
+      <col class="f1"><col class="f2"><col class="f3"><col class="f4"><col class="f5">
+    </colgroup>
+    <tr class="h-1965">
+      <td class="lbl">发包方名称</td>
+      <td class="val">{{ issuer.name }}</td>
+      <td class="lbl">发包方编码</td>
+      <td class="val" colspan="2">{{ issuer.code }}</td>
+    </tr>
+    <tr class="h-2062">
+      <td class="lbl">发包方负责人姓名</td>
+      <td class="val">{{ issuer.head }}</td>
+      <td class="lbl">联系电话</td>
+      <td class="val" colspan="2">{{ issuer.head_phone }}</td>
+    </tr>
+    <tr class="h-2099">
+      <td class="lbl">发包方负责人地址</td>
+      <td class="val" colspan="2">{{ issuer.address }}</td>
+      <td class="lbl">邮政编码</td>
+      <td class="val">{{ issuer.postcode }}</td>
+    </tr>
+    <tr class="h-2129">
+      <td class="lbl">发包方负责人证件类型</td>
+      <td class="val" colspan="2">
+        <span class="cb">{{ box(issuer.head_id_type == '居民身份证') }}</span>身份证
+        <span class="cb">{{ box(issuer.head_id_type == '军官证') }}</span>军官证
+        <span class="cb">{{ box(issuer.head_id_type == '护照') }}</span>护照
+        <span class="cb">{{ box(issuer.head_id_type == '户口簿') }}</span>户口簿
+        <span class="cb">{{ box(issuer.head_id_type and issuer.head_id_type not in ('居民身份证', '军官证', '护照', '户口簿')) }}</span>其他
+      </td>
+      <td class="lbl">证件号码</td>
+      <td class="val">{{ issuer.head_id_no }}</td>
+    </tr>
+    <tr class="h-5805">
+      <td class="lbl">调查记事</td>
+      <td class="note" colspan="4">{{ issuer.survey_note }}</td>
+    </tr>
+    <tr class="h-7268">
+      <td class="lbl">审核意见</td>
+      <td class="note" colspan="4">{{ issuer.audit_note }}
+审核人：{{ issuer.auditor }}
+日期：{{ issuer.audit_date_text or '　　　　年　　月　　日' }}</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ④ 承包方调查表 -->
+<div class="page pg-portrait">
+  <h1 class="form-title">承包方调查表</h1>
+  <table class="tbl t-contractor">
+    <colgroup>
+      <col class="c1"><col class="c2"><col class="c3"><col class="c4">
+      <col class="c5"><col class="c6"><col class="c7"><col class="c8">
+    </colgroup>
+    <tr class="h-1016">
+      <td class="lbl">发包方编码</td>
+      <td class="val" colspan="2">{{ issuer.code }}</td>
+      <td class="lbl" colspan="2">承包方编码<br>（缩略码）</td>
+      <td class="val" colspan="3">{{ contractor.short_code }}</td>
+    </tr>
+    <tr class="h-1016">
+      <td class="lbl">承包方（代表）</td>
+      <td class="val" colspan="2">{{ contractor.name }}</td>
+      <td class="lbl">联系电话</td>
+      <td class="val" colspan="4">{{ contractor.phone }}</td>
+    </tr>
+    <tr class="h-1016">
+      <td class="lbl">承包方地址</td>
+      <td class="val" colspan="3">{{ contractor.address }}</td>
+      <td class="lbl">邮政编码</td>
+      <td class="val" colspan="3">{{ contractor.postcode }}</td>
+    </tr>
+    <tr class="h-1524">
+      <td class="lbl">承包方（代表）<br>证件类型</td>
+      <td class="val" colspan="2">
+        <span class="cb">{{ box(contractor.id_type == '居民身份证') }}</span>身份证
+        <span class="cb">{{ box(contractor.id_type == '军官证') }}</span>军官证
+        <span class="cb">{{ box(contractor.id_type == '护照') }}</span>护照<br>
+        <span class="cb">{{ box(contractor.id_type == '行政、企事业单位机构代码证或法人代码证') }}</span>行政、企事业单位机构代码证或法人代码证<br>
+        <span class="cb">{{ box(contractor.id_type == '户口簿') }}</span>户口簿
+        <span class="cb">{{ box(contractor.id_type and contractor.id_type not in ('居民身份证', '军官证', '护照', '户口簿', '行政、企事业单位机构代码证或法人代码证')) }}</span>其他
+      </td>
+      <td class="lbl">证件号码</td>
+      <td class="val" colspan="4">{{ contractor.id_no }}</td>
+    </tr>
+    <tr class="h-1016">
+      <td class="lbl">有无承包合同</td>
+      <td>
+        <span class="cb">{{ box(contractor.has_contract) }}</span>有
+        <span class="cb">{{ box(not contractor.has_contract) }}</span>无
+      </td>
+      <td class="lbl">承包合同编号</td>
+      <td class="val" colspan="3">{{ contractor.contract_code }}</td>
+      <td class="lbl" rowspan="3">取得（承包）<br>方式</td>
+      <td class="lbl" rowspan="3">
+        <span class="cb">{{ box(contractor.acquire_method == '家庭承包') }}</span>家庭承包<br>
+        <span class="cb">{{ box(contractor.acquire_method == '招标') }}</span>招标<br>
+        <span class="cb">{{ box(contractor.acquire_method == '公开协商') }}</span>公开协商<br>
+        <span class="cb">{{ box(contractor.acquire_method == '拍卖') }}</span>拍卖<br>
+        <span class="cb">{{ box(contractor.acquire_method == '转让') }}</span>转让<br>
+        <span class="cb">{{ box(contractor.acquire_method == '互换') }}</span>互换<br>
+        <span class="cb">{{ box(contractor.acquire_method and contractor.acquire_method not in ('家庭承包', '招标', '公开协商', '拍卖', '转让', '互换')) }}</span>其他
+      </td>
+    </tr>
+    <tr class="h-1016">
+      <td class="lbl">有无经营权证</td>
+      <td>
+        <span class="cb">{{ box(contractor.has_cert) }}</span>有
+        <span class="cb">{{ box(not contractor.has_cert) }}</span>无
+      </td>
+      <td class="lbl">经营权证编号</td>
+      <td class="val" colspan="3">{{ contractor.cert_code }}</td>
+    </tr>
+    <tr class="h-1016">
+      <td class="lbl">承包起止日期</td>
+      <td class="val" colspan="2">
+        {{ contractor.term_begin or '　　年　　月　　日' }}至{{ contractor.term_end or '　　年　　月　　日' }}
+      </td>
+      <td class="lbl" colspan="2">承包期限</td>
+      <td class="val">{{ contractor.term_years ~ '年' if contractor.term_years else '' }}</td>
+    </tr>
+    <tr class="h-508">
+      <td colspan="4" style="text-align:left;padding-left:1.5mm">注意：本部分信息仅供家庭承包方式填写！</td>
+      <td class="lbl" colspan="3">家庭成员总数</td>
+      <td>共 {{ contractor.member_count }} 人</td>
+    </tr>
+    <tr class="h-508">
+      <td class="lbl" colspan="2">成员姓名</td>
+      <td class="lbl">与户主关系</td>
+      <td class="lbl" colspan="2">身份证号码</td>
+      <td class="lbl" colspan="3">成员备注</td>
+    </tr>
+    {% for member in contractor.members %}
+    <tr class="h-550">
+      <td colspan="2">{{ member.name }}</td>
+      <td>{{ member.relation }}</td>
+      <td colspan="2">{{ member.id_no }}</td>
+      <td colspan="3">{{ member.remark }}</td>
+    </tr>
+    {% endfor %}
+    {% for _ in range(member_min_rows - (contractor.members | length)) %}
+    <tr class="h-550">
+      <td colspan="2"></td><td></td><td colspan="2"></td><td colspan="3"></td>
+    </tr>
+    {% endfor %}
+    <tr class="h-6257">
+      <td class="lbl">调查<br>记事</td>
+      <td class="note" colspan="7">{{ contractor.survey_note }}</td>
+    </tr>
+    <tr class="h-2974">
+      <td class="lbl">审核<br>意见</td>
+      <td class="note" colspan="7">{{ contractor.audit_note }}
+审核人：{{ contractor.auditor }}
+日期：{{ contractor.audit_date_text or '　　　　年　　月　　日' }}</td>
+    </tr>
+  </table>
+</div>
+
+{# ⑤⑥ 一个地块一套表：承包地块调查表 + 界址点坐标成果表 #}
+{% for parcel in packet.parcels %}
+<div class="page pg-landscape">
+  <h1 class="form-title">承包地块调查表</h1>
+  <table class="tbl t-parcel">
+    <colgroup>
+      {% for _ in range(24) %}<col class="d{{ loop.index }}">{% endfor %}
+    </colgroup>
+    <tr class="h-836">
+      <td class="lbl">发包方编码</td>
+      <td colspan="7">{{ parcel.fbfbm }}</td>
+      <td class="lbl" colspan="5">承包方（代表）</td>
+      <td colspan="7">{{ contractor.name }}</td>
+      <td class="lbl" colspan="2">图幅编号</td>
+      <td colspan="2">{{ parcel.sheet_no or '' }}</td>
+    </tr>
+    <tr class="h-898">
+      <td class="lbl">地块编码</td>
+      <td colspan="7">{{ parcel.dkbm }}</td>
+      <td class="lbl" colspan="5">地块名称</td>
+      <td colspan="7">{{ parcel.dkmc }}</td>
+      <td class="lbl" colspan="2">合同面积（亩）</td>
+      <td colspan="2">{{ parcel.htmjm }}</td>
+    </tr>
+    <tr class="h-792">
+      <td class="lbl">东至</td>
+      <td colspan="7">{{ parcel.east }}</td>
+      <td class="lbl" colspan="2">南至</td>
+      <td colspan="6">{{ parcel.south }}</td>
+      <td class="lbl" colspan="4">西至</td>
+      <td>{{ parcel.west }}</td>
+      <td class="lbl">北至</td>
+      <td colspan="2">{{ parcel.north }}</td>
+    </tr>
+    <tr class="h-794">
+      <td class="lbl">不动产单元号</td>
+      <td colspan="19">{{ parcel.dkbm }}</td>
+      <td class="lbl" colspan="2">用途</td>
+      <td colspan="2">{{ parcel.use_text }}</td>
+    </tr>
+    <tr class="h-1356">
+      <td class="lbl">土地用途</td>
+      <td colspan="8" style="text-align:left">
+        {% for item in parcel.use_flags %}<span class="ck">{{ box(item.checked) }} {{ item.label }}</span>{{ '　' if not loop.last }}{% endfor %}
+      </td>
+      <td class="lbl" colspan="4">地力等级</td>
+      <td colspan="3">{{ parcel.grade_text }}</td>
+      <td class="lbl" colspan="4">土地利用类型</td>
+      <td colspan="2" style="text-align:left">
+        {% for item in parcel.landuse_flags %}<span class="ck">{{ box(item.checked) }} {{ item.label }}</span>{{ '　' if not loop.last }}{% endfor %}
+        <span class="ck">{{ box(parcel.landuse_text and parcel.landuse_text not in ('水田', '旱地', '水浇地', '林地', '果园')) }} 其他 {{ parcel.landuse_text if parcel.landuse_text and parcel.landuse_text not in ('水田', '旱地', '水浇地', '林地', '果园') else '' }}</span>
+      </td>
+      <td class="lbl">是否永久<br>基本农田</td>
+      <td style="white-space:nowrap">
+        <span class="ck">{{ box(parcel.basic_farmland) }}是</span><br>
+        <span class="ck">{{ box(not parcel.basic_farmland) }}否</span>
+      </td>
+    </tr>
+    <tr class="h-688">
+      <td class="lbl" rowspan="3">界址点号</td>
+      <td class="lbl" colspan="3">界标类型</td>
+      <td class="lbl" colspan="12">界址线类别</td>
+      <td class="lbl" colspan="4">界址线位置</td>
+      <td class="lbl" rowspan="3">界址线说明</td>
+      <td class="lbl" colspan="3">指界签章</td>
+    </tr>
+    <tr class="h-688">
+      <td class="ck" rowspan="2">木桩</td>
+      <td class="ck" rowspan="2">埋石</td>
+      <td class="ck" rowspan="2">无</td>
+      <td class="ck" rowspan="2">田埂</td>
+      <td class="ck" rowspan="2">沟渠</td>
+      <td class="ck" rowspan="2">道路</td>
+      <td class="ck" rowspan="2">行树</td>
+      <td class="ck" rowspan="2">围墙</td>
+      <td class="ck" colspan="2" rowspan="2">墙壁</td>
+      <td class="ck" rowspan="2">栅栏</td>
+      <td class="ck" colspan="2" rowspan="2">其他界线</td>
+      <td class="ck" rowspan="2">两点连线</td>
+      <td class="ck" rowspan="2"></td>
+      <td class="ck" rowspan="2">内</td>
+      <td class="ck" rowspan="2">中</td>
+      <td class="ck" rowspan="2">外</td>
+      <td class="ck" rowspan="2"></td>
+      <td class="ck" colspan="2">毗邻地块/地物</td>
+      <td class="ck" rowspan="2">本地块<br>指界人</td>
+    </tr>
+    <tr class="h-670">
+      <td class="ck">权利人</td>
+      <td class="ck">指界人</td>
+    </tr>
+    {% set point_rows = parcel.table_point_rows %}
+    {% set point_filled = parcel.table_points | length %}
+    {% for point in parcel.table_points %}
+    <tr class="h-802">
+      <td>{{ point.code }}</td>
+      {{ boundary_marks(point.mark_flags, point.line_flags, point.pos_flags) }}
+      <td>{{ point.line_note }}</td>
+      {% if loop.first %}
+      <td class="ck sign-note" colspan="2" rowspan="{{ point_rows }}">毗邻地块/地物权利人代表（签字并摁指印）见农村土地承包经营权确权地块分布图（确认图）</td>
+      <td rowspan="{{ point_rows }}"></td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+    {% for _ in range(point_rows - point_filled) %}
+    <tr class="h-802">
+      <td></td>
+      {{ boundary_marks(parcel.blank_flags.mark_flags, parcel.blank_flags.line_flags, parcel.blank_flags.pos_flags) }}
+      <td></td>
+      {% if point_filled == 0 and loop.first %}
+      <td class="ck sign-note" colspan="2" rowspan="{{ point_rows }}">毗邻地块/地物权利人代表（签字并摁指印）见农村土地承包经营权确权地块分布图（确认图）</td>
+      <td rowspan="{{ point_rows }}"></td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+    {% if parcel.hidden_point_count %}
+    <tr class="h-802">
+      <td colspan="24" style="text-align:left;padding-left:1.5mm">
+        本地块界址点共 {{ parcel.points | length }} 个，其余 {{ parcel.hidden_point_count }} 个界址点见《界址点坐标成果表》。
+      </td>
+    </tr>
+    {% endif %}
+    <tr class="h-802">
+      <td class="lbl">调查记事</td>
+      <td class="note" colspan="23">{{ parcel.survey_note }}</td>
+    </tr>
+    <tr class="h-802">
+      <td class="lbl">审核意见</td>
+      <td class="note" colspan="23">{{ parcel.audit_note }}
+审核员：{{ parcel.auditor }}
+日期：{{ parcel.audit_date_text or '　　　　年　　月　　日' }}</td>
+    </tr>
+  </table>
+</div>
+
+{% for page_points in parcel.point_pages %}
+<div class="page pg-portrait">
+  <h1 class="form-title">界址点坐标成果表</h1>
+  <table class="tbl t-points">
+    <colgroup>
+      <col class="p1"><col class="p2"><col class="p3"><col class="p4">
+      <col class="p5"><col class="p6"><col class="p7">
+    </colgroup>
+    <tr class="h-538">
+      <td class="head-lbl" colspan="2">权利人：</td>
+      <td colspan="2">{{ contractor.name }}</td>
+      <td class="head-lbl">地块编码：</td>
+      <td colspan="2" style="text-align:left;padding-left:1.5mm">{{ parcel.dkbm }}</td>
+    </tr>
+    <tr class="h-545">
+      <td class="head-lbl" colspan="2">地块面积（平方米）：</td>
+      <td colspan="2">{{ parcel.scmj }}</td>
+      <td class="head-lbl">地块面积（亩）：</td>
+      <td colspan="2">{{ parcel.area_mu }}</td>
+    </tr>
+    <tr class="h-547">
+      <td class="sect" colspan="7">界址点坐标</td>
+    </tr>
+    <tr class="h-547">
+      <td rowspan="2">顺序号</td>
+      <td colspan="2" rowspan="2">点号</td>
+      <td colspan="2">坐标</td>
+      <td rowspan="2">边长（m）</td>
+      <td rowspan="2">备注</td>
+    </tr>
+    <tr class="h-547">
+      <td>X（m）</td>
+      <td>Y（m）</td>
+    </tr>
+    {{ sheet_point_rows(page_points, points_per_page) }}
+  </table>
+</div>
+{% endfor %}
+{% endfor %}
+
+{% if not packet.parcels %}
+<div class="page pg-landscape">
+  <h1 class="form-title">承包地块调查表</h1>
+  <p style="text-align:center;margin-top:30mm;font-size:12pt">
+    该承包方名下暂无承包地块，无可打印的地块调查表与界址点坐标成果表。
+  </p>
+</div>
+{% endif %}
+
+{% endfor %}
+
+</body>
+</html>

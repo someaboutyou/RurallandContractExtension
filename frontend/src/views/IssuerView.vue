@@ -26,7 +26,9 @@
           <el-table-column prop="code" label="发包方代码" min-width="180" />
           <el-table-column prop="name" label="发包方名称" min-width="220" />
           <el-table-column prop="ownerName" label="负责人" min-width="120" />
-          <el-table-column prop="ownerIdType" label="证件类型" min-width="100" />
+          <el-table-column label="证件类型" min-width="100">
+            <template #default="{ row }">{{ idTypeLabel(row.ownerIdType, row.ownerIdType) }}</template>
+          </el-table-column>
           <el-table-column prop="mobile" label="联系电话" min-width="140" />
           <el-table-column prop="address" label="发包方地址" min-width="260" />
           <el-table-column prop="surveyorName" label="调查员" min-width="120" />
@@ -79,13 +81,7 @@
               <el-input v-model="form.ownerName" placeholder="请输入负责人姓名" />
             </el-form-item>
             <el-form-item label="负责人证件类型" prop="ownerIdType">
-              <el-select v-model="form.ownerIdType" placeholder="请选择证件类型">
-                <el-option label="居民身份证" value="1" />
-                <el-option label="军官证" value="2" />
-                <el-option label="护照" value="3" />
-                <el-option label="户口簿" value="4" />
-                <el-option label="其他" value="9" />
-              </el-select>
+              <DictionarySelect v-model="form.ownerIdType" dict-type="nyt2539_c15_id_document_type" placeholder="请选择证件类型" />
             </el-form-item>
             <el-form-item label="负责人证件号" prop="ownerIdNo">
               <el-input v-model="form.ownerIdNo" placeholder="请输入负责人证件号" />
@@ -235,6 +231,8 @@ import {
   updateIssuer,
 } from "../api/issuer";
 import { useDialogMap } from "../composables/useDialogMap";
+import DictionarySelect from "../components/DictionarySelect.vue";
+import { useDictionary } from "../composables/useDictionary";
 import { useAuthStore } from "../stores/auth";
 import { validateChinaId, validateMobile, validatePostcode } from "../utils/validators";
 
@@ -278,6 +276,8 @@ const {
 
 const flashDkbm = ref(null);
 const selectedParcel = ref(null);
+
+const { labelOf: idTypeLabel } = useDictionary("nyt2539_c15_id_document_type");
 
 const parcelDetailFields = [
   { key: "dkbm", label: "地块编码" },
