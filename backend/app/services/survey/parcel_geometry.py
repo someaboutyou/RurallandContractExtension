@@ -369,11 +369,21 @@ class SurveyServiceParcelGeometryMixin:
         source_srid: int,
         exclude_dkbms: list[str] | None = None,
     ) -> list[dict]:
+        # 冲突检测同样受系统授权区域约束。只按 tenant_code（县）过滤会让授权到
+        # 镇/村时把范围外地块、承包方的名称与重叠面积一并返回给前端。
+        authorized_region = data_access_service.get_system_region_code()
+        if authorized_region:
+            scope_sql = " AND region_code LIKE :scope_region_pattern"
+        else:
+            scope_sql = " AND FALSE"
+
         params = {
             "tenant_code": tenant_code,
             "geojson": json.dumps(geometry, ensure_ascii=False),
             "source_srid": int(source_srid or 4326),
         }
+        if authorized_region:
+            params["scope_region_pattern"] = f"{authorized_region}%"
         exclude_codes = [str(code).strip() for code in (exclude_dkbms or []) if str(code).strip()]
         exclude_sql = ""
         if exclude_codes:
@@ -397,6 +407,7 @@ class SurveyServiceParcelGeometryMixin:
                 WHERE tenant_code = :tenant_code
                   AND result_status NOT IN ('removed', 'split_source')
                   AND geom IS NOT NULL
+                  {scope_sql}
                 ORDER BY dkbm, id DESC
             ),
             current_relation AS (
@@ -406,6 +417,7 @@ class SurveyServiceParcelGeometryMixin:
                 FROM public.survey_cbdkxx_result
                 WHERE tenant_code = :tenant_code
                   AND result_status NOT IN ('removed', 'split_source')
+                  {scope_sql}
                 ORDER BY dkbm, id DESC
             ),
             current_contractor AS (
@@ -414,6 +426,7 @@ class SurveyServiceParcelGeometryMixin:
                     cbfmc
                 FROM public.survey_cbf_result
                 WHERE tenant_code = :tenant_code
+                  {scope_sql}
                 ORDER BY cbfbm, id DESC
             )
             SELECT

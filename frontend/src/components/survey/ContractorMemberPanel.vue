@@ -57,7 +57,10 @@
         </el-form-item>
         <el-form-item label="证件号码" :class="changedClass('idNo')">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isContractorFieldChanged('idNo'), beforeValueText('idNo'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
-            <el-input v-model="result.idNo" placeholder="证件号码" maxlength="20" />
+            <div class="idno-field" :class="idNoFieldClass(contractorIdNoIssue)">
+              <el-input v-model="result.idNo" placeholder="证件号码" :maxlength="ID_NO_MAX_LENGTH" />
+              <div v-if="contractorIdNoIssue" class="idno-field__tip">{{ contractorIdNoIssue.message }}</div>
+            </div>
           </div>
         </el-form-item>
         <el-form-item label="联系电话" :class="changedClass('mobile')">
@@ -213,10 +216,13 @@
       </el-table-column>
 
       <!-- 证件号码 -->
-      <el-table-column label="证件号码" min-width="160">
+      <el-table-column label="证件号码" min-width="180">
         <template #default="{ row }">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isMemberFieldChanged(row, 'idNo'), memberBeforeValueText(row, 'idNo'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
-            <el-input v-model="row.idNo" size="small" :disabled="readonly || row._deleted" :class="memberChangedClass(row, 'idNo')" />
+            <div class="idno-field" :class="idNoFieldClass(memberIdNoIssue(row))">
+              <el-input v-model="row.idNo" size="small" :maxlength="ID_NO_MAX_LENGTH" :disabled="readonly || row._deleted" :class="memberChangedClass(row, 'idNo')" />
+              <div v-if="memberIdNoIssue(row)" class="idno-field__tip">{{ memberIdNoIssue(row).message }}</div>
+            </div>
           </div>
         </template>
       </el-table-column>
@@ -345,6 +351,7 @@
 import { computed, ref, watch } from "vue";
 import ChangeDiffViewer from "./ChangeDiffViewer.vue";
 import { useDictionary } from "../../composables/useDictionary";
+import { evaluateIdNoIssue, ID_NO_MAX_LENGTH } from "../../utils/validators";
 
 const props = defineProps({
   readonly: { type: Boolean, default: false },
@@ -412,17 +419,6 @@ function moveDiffTooltip(event) {
 function hideDiffTooltip() {
   diffTooltip.value.visible = false;
 }
-
-// 初始化：如果 groupRegionName 为空但 groupRegionCode 有值，用 code 填充
-watch(
-  () => props.result,
-  (r) => {
-    if (r && !r.groupRegionName && r.groupRegionCode) {
-      r.groupRegionName = r.groupRegionCode;
-    }
-  },
-  { immediate: true },
-);
 
 // 记录初始快照用于判断修改
 const initialSnapshots = ref(new Map());
@@ -506,7 +502,10 @@ function setAsHead(row) {
   }
   // 设置目标为户主
   row.isHouseholdHead = true;
-  row.relationToHead = "01";
+  // ⛔ 户主的关系码是字典里的 "02"（户主），不是 "01"（本人）。
+  // 旧实现写 "01"，与存量户的 "02" 并存 ⇒ 一个户里出现两个"户主"（2026-09-25 修）。
+  // 注：本函数同时用于「点选 设为户主」与「关系下拉选到户主类码」两条路径。
+  row.relationToHead = "02";
   // 承包方名称默认随户主名称
   if (row.name) {
     props.result.name = row.name;
@@ -628,7 +627,61 @@ function changedClass(field) {
   return isContractorFieldChanged(field) ? "field-changed" : "";
 }
 
-defineExpose({ getValidMembers });
+// ---- 证件号码校验 ----
+// 判定口径（含"本次新录入的值从严、库内历史值降级为提示"的分档）在
+// utils/validators.js 的 evaluateIdNoIssue 里；这里只负责挑出"是否属于本次
+// 录入或改动"并驱动界面提示。
+function idNoFieldClass(issue) {
+  if (!issue) return "";
+  return issue.level === "error" ? "is-invalid" : "is-warn";
+}
+
+// 是否属于"本次录入或改动过"的证件号码：新增承包方、新增成员、或值发生过变化。
+function isContractorIdNoChanged() {
+  return isAddedContractor.value || isContractorFieldChanged("idNo");
+}
+
+function isMemberIdNoChanged(row) {
+  return isNewRow(row) || isMemberFieldChanged(row, "idNo");
+}
+
+const contractorIdNoIssue = computed(() =>
+  evaluateIdNoIssue(props.result.idType, props.result.idNo, { changed: isContractorIdNoChanged(), incompleteOk: true }),
+);
+
+function memberIdNoIssue(row) {
+  if (row?._deleted) return null;
+  return evaluateIdNoIssue(row?.idType, row?.idNo, { changed: isMemberIdNoChanged(row), incompleteOk: true });
+}
+
+/**
+ * 保存前的证件号码全量校验（严格口径：必填 + 完整格式/校验位）。
+ * @returns {string} 空串表示全部通过，否则为逐条问题描述（换行分隔）。
+ */
+function validateIdNos() {
+  const problems = [];
+  const contractorIssue = evaluateIdNoIssue(props.result.idType, props.result.idNo, {
+    requireValue: true,
+    changed: isContractorIdNoChanged(),
+  });
+  if (contractorIssue?.level === "error") {
+    problems.push(`承包方证件号码：${contractorIssue.message}`);
+  }
+  for (const row of props.result.familyMembers || []) {
+    if (row?._deleted) continue;
+    const label = String(row?.name ?? "").trim() || "未命名成员";
+    const issue = evaluateIdNoIssue(row?.idType, row?.idNo, {
+      requireValue: true,
+      changed: isMemberIdNoChanged(row),
+    });
+    if (issue?.level === "error") {
+      problems.push(`家庭成员“${label}”的证件号码：${issue.message}`);
+    }
+  }
+  return problems.join("\n");
+}
+
+defineExpose({ getValidMembers, validateIdNos });
 </script>
 
 <style scoped>
@@ -739,6 +792,27 @@ defineExpose({ getValidMembers });
 }
 .field-changed {
   position: relative;
+}
+
+/* 证件号码校验：error 红框拦住保存，warn 橙框只提示（库内历史值校验位有误时的降级）。 */
+.idno-field {
+  width: 100%;
+  min-width: 0;
+}
+.idno-field.is-invalid :deep(.el-input__wrapper) {
+  box-shadow: 0 0 0 1px #f56c6c inset;
+}
+.idno-field.is-warn :deep(.el-input__wrapper) {
+  box-shadow: 0 0 0 1px #e6a23c inset;
+}
+.idno-field__tip {
+  margin-top: 2px;
+  color: #f56c6c;
+  font-size: 12px;
+  line-height: 1.3;
+}
+.idno-field.is-warn .idno-field__tip {
+  color: #e6a23c;
 }
 .floating-diff-tooltip {
   position: fixed;

@@ -3,6 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <title>承包地块示意图</title>
+<!--
+  独立的「承包地块示意图」页（/surveys → 承包方调查录入 → 承包地块示意图 tab）。
+
+  ⚠️ 合同末页附件用的是同一套版式，副本在 backend/app/templates/contract.html 里
+     （类名加 sketch- 前缀：.sketch-page / .sketch-sheet / .sketch-title / .sketch-footer，
+      以及 .plots-grid / .plot-cell / .neighbor 等）。两份是**有意重复**的，因为两个模板
+      都要能在「打印模板管理」里各自独立编辑；改版式时请一起改，别只改一边。
+-->
 <style>
   @page {
     size: A4 landscape;

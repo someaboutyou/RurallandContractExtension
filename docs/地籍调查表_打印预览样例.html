@@ -1,0 +1,1590 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>地籍调查表</title>
+<style>
+  /* 混合纸张方向（与 docx 分节一致）：
+     封面 / 发包方调查表 / 承包方调查表 / 界址点坐标成果表 → A4 纵向
+     承包地块调查表 → A4 横向
+     通过 CSS 命名页（Chrome / Edge 118+ 支持）实现一次打印两种方向；
+     基页按横向兜底，方向能力缺失时纵向页只会在纸面上多占一页，不会丢内容。 */
+  @page { size: A4 landscape; margin: 0; }
+  @page portrait-page { size: A4 portrait; margin: 0; }
+  @page landscape-page { size: A4 landscape; margin: 0; }
+
+  * { box-sizing: border-box; }
+
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    color: #000;
+    background: #f2f3f5;
+    font-family: "SimSun", "宋体", serif;
+    font-size: 10.5pt;
+  }
+
+  .print-btn {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 20;
+    padding: 8px 20px;
+    border: 0;
+    border-radius: 4px;
+    color: #fff;
+    background: #409eff;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  .page {
+    position: relative;
+    background: #fff;
+    overflow: hidden;
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+
+  /* 纵向页左右留白 13.13mm：正文区 = 210 - 2×13.13 = 183.74mm，
+     恰好容纳「发包方 / 承包方调查表」（表宽 183.74mm）并使左右留白对称。 */
+  .pg-portrait {
+    page: portrait-page;
+    width: 210mm;
+    height: 297mm;
+    padding: 18mm 13.13mm 14mm;
+    margin: 0 auto 14px;
+  }
+
+  /* 横向页左右留白 15mm：正文区 = 267mm，
+     「承包地块调查表」265.62mm 近乎满宽，居中几乎无位移。 */
+  .pg-landscape {
+    page: landscape-page;
+    width: 297mm;
+    height: 210mm;
+    padding: 12mm 15mm 10mm;
+    margin: 0 auto 14px;
+  }
+
+  /* ── 封面 ───────────────────────────────────────────── */
+  .cover {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .cover-head { height: 62mm; }
+
+  .cover-title {
+    text-align: center;
+    font-family: "SimHei", "黑体", "SimSun", serif;
+    font-size: 30pt;
+    font-weight: 700;
+    letter-spacing: 8mm;
+    text-indent: 8mm;
+    line-height: 1.6;
+  }
+
+  .cover-sub {
+    text-align: center;
+    font-size: 16pt;
+    letter-spacing: 2mm;
+    text-indent: 2mm;
+    margin-top: 8mm;
+  }
+
+  .cover-foot {
+    margin-top: auto;
+    padding-bottom: 22mm;
+    font-size: 14pt;
+    line-height: 2.4;
+    text-align: center;
+  }
+
+  /* ── 通用表格 ───────────────────────────────────────── */
+  .form-title {
+    margin: 0 0 6mm;
+    text-align: center;
+    font-family: "SimHei", "黑体", "SimSun", serif;
+    font-size: 16pt;
+    font-weight: 700;
+    line-height: 1.25;
+  }
+
+  .tbl {
+    border-collapse: collapse;
+    table-layout: fixed;
+    border: 1px solid #000;
+    width: 100%;
+  }
+
+  .tbl td {
+    border: 1px solid #000;
+    padding: 0 1mm;
+    vertical-align: middle;
+    text-align: center;
+    font-size: 10.5pt;
+    line-height: 1.3;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  .tbl .lbl {
+    font-family: "SimHei", "黑体", "SimSun", serif;
+    font-weight: 400;
+    white-space: pre-line;
+  }
+
+  .tbl .val {
+    text-align: left;
+    padding-left: 2mm;
+  }
+
+  .tbl .note {
+    text-align: left;
+    vertical-align: top;
+    padding: 3mm 3mm;
+    white-space: pre-line;
+    line-height: 1.9;
+  }
+
+  .cb { font-family: "SimSun", "宋体", serif; }
+
+  .nowrap { white-space: nowrap; }
+
+  /* ── 发包方调查表列宽（合计 183.74mm，与承包方调查表同宽） ──
+     docx 原表为 150.32mm，此处按 183.74/150.32 = 1.222326 等比放大各列，
+     仅改宽度、不动行高，保证与承包方调查表左右边界齐平。 */
+  .t-issuer { width: 183.74mm; }
+  .t-issuer .f1 { width: 29.78mm; }
+  .t-issuer .f2 { width: 58.99mm; }
+  .t-issuer .f3 { width: 27.94mm; }
+  .t-issuer .f4 { width: 16.82mm; }
+  .t-issuer .f5 { width: 50.21mm; }
+  .h-1965 { height: 19.65mm; }
+  .h-2062 { height: 20.62mm; }
+  .h-2099 { height: 20.99mm; }
+  .h-2129 { height: 21.29mm; }
+  .h-5805 { height: 58.05mm; }
+  .h-7268 { height: 72.68mm; }
+
+  /* ── 承包方调查表列宽（合计 183.74mm） ─────────────── */
+  .t-contractor { width: 183.74mm; }
+  .t-contractor .c1 { width: 15.93mm; }
+  .t-contractor .c2 { width: 31.40mm; }
+  .t-contractor .c3 { width: 34.75mm; }
+  .t-contractor .c4 { width: 19.05mm; }
+  .t-contractor .c5 { width: 20.00mm; }
+  .t-contractor .c6 { width: 14.06mm; }
+  .t-contractor .c7 { width: 18.93mm; }
+  .t-contractor .c8 { width: 29.62mm; }
+  .h-1016 { height: 10.16mm; }
+  .h-1524 { height: 15.24mm; }
+  .h-508 { height: 5.08mm; }
+  .h-550 { height: 5.50mm; }
+  .h-6257 { height: 62.57mm; }
+  .h-2974 { height: 29.74mm; }
+
+  /* ── 承包地块调查表（合计 265.62mm，24 列） ────────── */
+  .t-parcel {
+    width: 265.62mm;
+    font-size: 8pt;
+  }
+  .t-parcel td {
+    font-size: 8pt;
+    line-height: 1.15;
+    padding: 0 0.5mm;
+  }
+  .t-parcel .d1 { width: 31.29mm; }
+  .t-parcel .d2 { width: 8.27mm; }
+  .t-parcel .d3 { width: 7.76mm; }
+  .t-parcel .d4 { width: 6.68mm; }
+  .t-parcel .d5 { width: 7.76mm; }
+  .t-parcel .d6 { width: 6.86mm; }
+  .t-parcel .d7 { width: 8.29mm; }
+  .t-parcel .d8 { width: 8.27mm; }
+  .t-parcel .d9 { width: 8.29mm; }
+  .t-parcel .d10 { width: 4.59mm; }
+  .t-parcel .d11 { width: 3.17mm; }
+  .t-parcel .d12 { width: 6.35mm; }
+  .t-parcel .d13 { width: 5.29mm; }
+  .t-parcel .d14 { width: 6.35mm; }
+  .t-parcel .d15 { width: 11.80mm; }
+  .t-parcel .d16 { width: 7.94mm; }
+  .t-parcel .d17 { width: 7.05mm; }
+  .t-parcel .d18 { width: 7.74mm; }
+  .t-parcel .d19 { width: 7.23mm; }
+  .t-parcel .d20 { width: 6.00mm; }
+  .t-parcel .d21 { width: 34.98mm; }
+  .t-parcel .d22 { width: 18.61mm; }
+  .t-parcel .d23 { width: 20.62mm; }
+  .t-parcel .d24 { width: 24.41mm; }
+  .t-parcel .h-836 { height: 8.36mm; }
+  .t-parcel .h-898 { height: 8.98mm; }
+  .t-parcel .h-792 { height: 7.92mm; }
+  .t-parcel .h-794 { height: 7.94mm; }
+  .t-parcel .h-1356 { height: 13.56mm; }
+  .t-parcel .h-688 { height: 6.88mm; }
+  .t-parcel .h-670 { height: 6.70mm; }
+  .t-parcel .h-802 { height: 8.02mm; }
+  .t-parcel .ck { font-size: 7pt; letter-spacing: 0; }
+  .t-parcel .note {
+    padding: 1.5mm 2mm;
+    line-height: 1.6;
+    font-size: 8pt;
+  }
+  /* 数据区尾部三列：docx 中跨全部界址点行纵向合并为一格 */
+  .t-parcel .sign-note {
+    font-size: 7pt;
+    line-height: 1.35;
+    text-align: left;
+    padding: 1mm 1mm;
+    white-space: normal;
+  }
+
+  /* ── 界址点坐标成果表（合计 183.74mm，7 列） ─────────
+     docx 原表为 161.20mm 且位于独立的 A4 纵向节（210x297，正文宽 146.51mm，
+     表宽本就超出正文区），此处按 183.74/161.21 = 1.139756 等比放大，
+     与封面 / 发包方 / 承包方三张纵向表左右边界齐平。 */
+  .t-points {
+    width: 183.74mm;
+    font-size: 9pt;
+  }
+  .t-points td { font-size: 9pt; line-height: 1.2; }
+  .t-points .p1 { width: 25.61mm; }
+  .t-points .p2 { width: 13.87mm; }
+  .t-points .p3 { width: 12.05mm; }
+  .t-points .p4 { width: 28.90mm; }
+  .t-points .p5 { width: 30.06mm; }
+  .t-points .p6 { width: 22.56mm; }
+  .t-points .p7 { width: 50.69mm; }
+  .t-points .head-lbl { text-align: left; padding-left: 1.5mm; }
+  .t-points .sect { font-weight: 700; letter-spacing: 2mm; }
+  .t-points .h-538 { height: 5.38mm; }
+  .t-points .h-545 { height: 5.45mm; }
+  .t-points .h-547 { height: 5.47mm; }
+  .t-points .h-520 { height: 5.20mm; }
+  .t-points .num { text-align: right; padding-right: 1.5mm; font-family: "Consolas", "SimSun", monospace; }
+
+  @media print {
+    html,
+    body { background: #fff; }
+
+    .page {
+      margin: 0;
+      box-shadow: none;
+      overflow: hidden;
+      page-break-after: always;
+      break-after: page;
+    }
+
+    .page:last-child {
+      page-break-after: auto;
+      break-after: auto;
+    }
+
+    .print-btn { display: none !important; }
+    .tbl tr { break-inside: avoid; page-break-inside: avoid; }
+  }
+
+  @media screen {
+    .page { box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12); }
+  }
+</style>
+</head>
+<body>
+
+<button class="print-btn" onclick="window.print()">打印</button>
+
+
+
+
+
+
+<!-- ①② 封面 -->
+<div class="page pg-portrait cover">
+  <div class="cover-head"></div>
+  <div class="cover-title">地籍调查表</div>
+  <div class="cover-sub">（土地承包经营权）</div>
+  <div class="cover-foot">
+    
+    <div>调查单位（机构）：美国航天航空局（在字典里面修改）</div>
+    <div>调查时间：2015年03月05日</div>
+  </div>
+</div>
+
+<!-- ③ 发包方调查表 -->
+<div class="page pg-portrait">
+  <h1 class="form-title">发包方调查表</h1>
+  <table class="tbl t-issuer">
+    <colgroup>
+      <col class="f1"><col class="f2"><col class="f3"><col class="f4"><col class="f5">
+    </colgroup>
+    <tr class="h-1965">
+      <td class="lbl">发包方名称</td>
+      <td class="val">泗洪县青阳镇城东居三组</td>
+      <td class="lbl">发包方编码</td>
+      <td class="val" colspan="2">32132410000103</td>
+    </tr>
+    <tr class="h-2062">
+      <td class="lbl">发包方负责人姓名</td>
+      <td class="val">刘根永</td>
+      <td class="lbl">联系电话</td>
+      <td class="val" colspan="2">13351612333</td>
+    </tr>
+    <tr class="h-2099">
+      <td class="lbl">发包方负责人地址</td>
+      <td class="val" colspan="2">泗洪县青阳镇城东居委会三组</td>
+      <td class="lbl">邮政编码</td>
+      <td class="val">223900</td>
+    </tr>
+    <tr class="h-2129">
+      <td class="lbl">发包方负责人证件类型</td>
+      <td class="val" colspan="2">
+        <span class="cb">☑</span>身份证
+        <span class="cb">□</span>军官证
+        <span class="cb">□</span>护照
+        <span class="cb">□</span>户口簿
+        <span class="cb">□</span>其他
+      </td>
+      <td class="lbl">证件号码</td>
+      <td class="val">320827197210120394</td>
+    </tr>
+    <tr class="h-5805">
+      <td class="lbl">调查记事</td>
+      <td class="note" colspan="4">发包方负责人及其变更情况，1995年至2000年陈勇，2000年至2014年刘修敏，2015年韩夏，2004年至2011年北泗洪县人民政府征收土地面积160亩土地
+调查员：刘修（签字并摁手印）
+日期：2015年02月20日</td>
+    </tr>
+    <tr class="h-7268">
+      <td class="lbl">审核意见</td>
+      <td class="note" colspan="4">合格。
+审核人：刘修
+日期：2015年02月20日</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ④ 承包方调查表 -->
+<div class="page pg-portrait">
+  <h1 class="form-title">承包方调查表</h1>
+  <table class="tbl t-contractor">
+    <colgroup>
+      <col class="c1"><col class="c2"><col class="c3"><col class="c4">
+      <col class="c5"><col class="c6"><col class="c7"><col class="c8">
+    </colgroup>
+    <tr class="h-1016">
+      <td class="lbl">发包方编码</td>
+      <td class="val" colspan="2">32132410000103</td>
+      <td class="lbl" colspan="2">承包方编码<br>（缩略码）</td>
+      <td class="val" colspan="3">0116</td>
+    </tr>
+    <tr class="h-1016">
+      <td class="lbl">承包方（代表）</td>
+      <td class="val" colspan="2">刘开铁</td>
+      <td class="lbl">联系电话</td>
+      <td class="val" colspan="4">15151128942</td>
+    </tr>
+    <tr class="h-1016">
+      <td class="lbl">承包方地址</td>
+      <td class="val" colspan="3">泗洪县青阳镇城东居委会三组</td>
+      <td class="lbl">邮政编码</td>
+      <td class="val" colspan="3">223900</td>
+    </tr>
+    <tr class="h-1524">
+      <td class="lbl">承包方（代表）<br>证件类型</td>
+      <td class="val" colspan="2">
+        <span class="cb">☑</span>身份证
+        <span class="cb">□</span>军官证
+        <span class="cb">□</span>护照<br>
+        <span class="cb">□</span>行政、企事业单位机构代码证或法人代码证<br>
+        <span class="cb">□</span>户口簿
+        <span class="cb">□</span>其他
+      </td>
+      <td class="lbl">证件号码</td>
+      <td class="val" colspan="4">320827196601020257</td>
+    </tr>
+    <tr class="h-1016">
+      <td class="lbl">有无承包合同</td>
+      <td>
+        <span class="cb">☑</span>有
+        <span class="cb">□</span>无
+      </td>
+      <td class="lbl">承包合同编号</td>
+      <td class="val" colspan="3">321324100001030116J</td>
+      <td class="lbl" rowspan="3">取得（承包）<br>方式</td>
+      <td class="lbl" rowspan="3">
+        <span class="cb">☑</span>家庭承包<br>
+        <span class="cb">□</span>招标<br>
+        <span class="cb">□</span>公开协商<br>
+        <span class="cb">□</span>拍卖<br>
+        <span class="cb">□</span>转让<br>
+        <span class="cb">□</span>互换<br>
+        <span class="cb">□</span>其他
+      </td>
+    </tr>
+    <tr class="h-1016">
+      <td class="lbl">有无经营权证</td>
+      <td>
+        <span class="cb">☑</span>有
+        <span class="cb">□</span>无
+      </td>
+      <td class="lbl">经营权证编号</td>
+      <td class="val" colspan="3">321324100001030116J</td>
+    </tr>
+    <tr class="h-1016">
+      <td class="lbl">承包起止日期</td>
+      <td class="val" colspan="2">
+        　　年　　月　　日至　　年　　月　　日
+      </td>
+      <td class="lbl" colspan="2">承包期限</td>
+      <td class="val"></td>
+    </tr>
+    <tr class="h-508">
+      <td colspan="4" style="text-align:left;padding-left:1.5mm">注意：本部分信息仅供家庭承包方式填写！</td>
+      <td class="lbl" colspan="3">家庭成员总数</td>
+      <td>共 4 人</td>
+    </tr>
+    <tr class="h-508">
+      <td class="lbl" colspan="2">成员姓名</td>
+      <td class="lbl">与户主关系</td>
+      <td class="lbl" colspan="2">身份证号码</td>
+      <td class="lbl" colspan="3">成员备注</td>
+    </tr>
+    
+    <tr class="h-550">
+      <td colspan="2">王福英</td>
+      <td>母亲</td>
+      <td colspan="2">320827193004050227</td>
+      <td colspan="3"></td>
+    </tr>
+    
+    <tr class="h-550">
+      <td colspan="2">刘开铁</td>
+      <td>户主</td>
+      <td colspan="2">320827196601020257</td>
+      <td colspan="3"></td>
+    </tr>
+    
+    <tr class="h-550">
+      <td colspan="2">朱修芝</td>
+      <td>配偶</td>
+      <td colspan="2">320827196901010384</td>
+      <td colspan="3"></td>
+    </tr>
+    
+    <tr class="h-550">
+      <td colspan="2">刘星星</td>
+      <td>子</td>
+      <td colspan="2">321324198911170211</td>
+      <td colspan="3"></td>
+    </tr>
+    
+    
+    <tr class="h-550">
+      <td colspan="2"></td><td></td><td colspan="2"></td><td colspan="3"></td>
+    </tr>
+    
+    <tr class="h-550">
+      <td colspan="2"></td><td></td><td colspan="2"></td><td colspan="3"></td>
+    </tr>
+    
+    <tr class="h-6257">
+      <td class="lbl">调查<br>记事</td>
+      <td class="note" colspan="7">承包方代表变更情况：无变更
+土地承包经营权权属特殊情况：无。
+农户内成员分家析产、合户或家庭成员其他情况：无。
+其他需要说明的情况：无。
+调查员：村长（签字并摁手印）
+日期：2015年03月05日</td>
+    </tr>
+    <tr class="h-2974">
+      <td class="lbl">审核<br>意见</td>
+      <td class="note" colspan="7">合格。
+审核人：主任
+日期：2015年12月25日</td>
+    </tr>
+  </table>
+</div>
+
+
+
+<div class="page pg-landscape">
+  <h1 class="form-title">承包地块调查表</h1>
+  <table class="tbl t-parcel">
+    <colgroup>
+      <col class="d1"><col class="d2"><col class="d3"><col class="d4"><col class="d5"><col class="d6"><col class="d7"><col class="d8"><col class="d9"><col class="d10"><col class="d11"><col class="d12"><col class="d13"><col class="d14"><col class="d15"><col class="d16"><col class="d17"><col class="d18"><col class="d19"><col class="d20"><col class="d21"><col class="d22"><col class="d23"><col class="d24">
+    </colgroup>
+    <tr class="h-836">
+      <td class="lbl">发包方编码</td>
+      <td colspan="7">32132410000103</td>
+      <td class="lbl" colspan="5">承包方（代表）</td>
+      <td colspan="7">刘开铁</td>
+      <td class="lbl" colspan="2">图幅编号</td>
+      <td colspan="2"></td>
+    </tr>
+    <tr class="h-898">
+      <td class="lbl">地块编码</td>
+      <td colspan="7">3213241000010300005</td>
+      <td class="lbl" colspan="5">地块名称</td>
+      <td colspan="7">东大渠新引河二</td>
+      <td class="lbl" colspan="2">合同面积（亩）</td>
+      <td colspan="2">3.14</td>
+    </tr>
+    <tr class="h-792">
+      <td class="lbl">东至</td>
+      <td colspan="7">沟渠</td>
+      <td class="lbl" colspan="2">南至</td>
+      <td colspan="6">其他;沟渠</td>
+      <td class="lbl" colspan="4">西至</td>
+      <td>解兰</td>
+      <td class="lbl">北至</td>
+      <td colspan="2">沟渠</td>
+    </tr>
+    <tr class="h-794">
+      <td class="lbl">不动产单元号</td>
+      <td colspan="19">3213241000010300005</td>
+      <td class="lbl" colspan="2">用途</td>
+      <td colspan="2">种植业</td>
+    </tr>
+    <tr class="h-1356">
+      <td class="lbl">土地用途</td>
+      <td colspan="8" style="text-align:left">
+        <span class="ck">☑ 种植业</span>　<span class="ck">□ 林业</span>　<span class="ck">□ 畜牧业</span>　<span class="ck">□ 渔业</span>
+      </td>
+      <td class="lbl" colspan="4">地力等级</td>
+      <td colspan="3">一等地</td>
+      <td class="lbl" colspan="4">土地利用类型</td>
+      <td colspan="2" style="text-align:left">
+        <span class="ck">□ 水田</span>　<span class="ck">☑ 旱地</span>　<span class="ck">□ 水浇地</span>　<span class="ck">□ 林地</span>　<span class="ck">□ 果园</span>
+        <span class="ck">□ 其他 </span>
+      </td>
+      <td class="lbl">是否永久<br>基本农田</td>
+      <td style="white-space:nowrap">
+        <span class="ck">☑是</span><br>
+        <span class="ck">□否</span>
+      </td>
+    </tr>
+    <tr class="h-688">
+      <td class="lbl" rowspan="3">界址点号</td>
+      <td class="lbl" colspan="3">界标类型</td>
+      <td class="lbl" colspan="12">界址线类别</td>
+      <td class="lbl" colspan="4">界址线位置</td>
+      <td class="lbl" rowspan="3">界址线说明</td>
+      <td class="lbl" colspan="3">指界签章</td>
+    </tr>
+    <tr class="h-688">
+      <td class="ck" rowspan="2">木桩</td>
+      <td class="ck" rowspan="2">埋石</td>
+      <td class="ck" rowspan="2">无</td>
+      <td class="ck" rowspan="2">田埂</td>
+      <td class="ck" rowspan="2">沟渠</td>
+      <td class="ck" rowspan="2">道路</td>
+      <td class="ck" rowspan="2">行树</td>
+      <td class="ck" rowspan="2">围墙</td>
+      <td class="ck" colspan="2" rowspan="2">墙壁</td>
+      <td class="ck" rowspan="2">栅栏</td>
+      <td class="ck" colspan="2" rowspan="2">其他界线</td>
+      <td class="ck" rowspan="2">两点连线</td>
+      <td class="ck" rowspan="2"></td>
+      <td class="ck" rowspan="2">内</td>
+      <td class="ck" rowspan="2">中</td>
+      <td class="ck" rowspan="2">外</td>
+      <td class="ck" rowspan="2"></td>
+      <td class="ck" colspan="2">毗邻地块/地物</td>
+      <td class="ck" rowspan="2">本地块<br>指界人</td>
+    </tr>
+    <tr class="h-670">
+      <td class="ck">权利人</td>
+      <td class="ck">指界人</td>
+    </tr>
+    
+    
+    
+    <tr class="h-802">
+      <td>J1</td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+      <td class="ck sign-note" colspan="2" rowspan="8">毗邻地块/地物权利人代表（签字并摁指印）见农村土地承包经营权确权地块分布图（确认图）</td>
+      <td rowspan="8"></td>
+      
+    </tr>
+    
+    <tr class="h-802">
+      <td>J2</td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    <tr class="h-802">
+      <td>J3</td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    <tr class="h-802">
+      <td>J4</td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    
+    <tr class="h-802">
+      <td></td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    <tr class="h-802">
+      <td></td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    <tr class="h-802">
+      <td></td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    <tr class="h-802">
+      <td></td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    
+    <tr class="h-802">
+      <td class="lbl">调查记事</td>
+      <td class="note" colspan="23">经调查该地块信息准确无误。</td>
+    </tr>
+    <tr class="h-802">
+      <td class="lbl">审核意见</td>
+      <td class="note" colspan="23">同意。
+审核员：
+日期：　　　　年　　月　　日</td>
+    </tr>
+  </table>
+</div>
+
+
+<div class="page pg-portrait">
+  <h1 class="form-title">界址点坐标成果表</h1>
+  <table class="tbl t-points">
+    <colgroup>
+      <col class="p1"><col class="p2"><col class="p3"><col class="p4">
+      <col class="p5"><col class="p6"><col class="p7">
+    </colgroup>
+    <tr class="h-538">
+      <td class="head-lbl" colspan="2">权利人：</td>
+      <td colspan="2">刘开铁</td>
+      <td class="head-lbl">地块编码：</td>
+      <td colspan="2" style="text-align:left;padding-left:1.5mm">3213241000010300005</td>
+    </tr>
+    <tr class="h-545">
+      <td class="head-lbl" colspan="2">地块面积（平方米）：</td>
+      <td colspan="2">2092.11</td>
+      <td class="head-lbl">地块面积（亩）：</td>
+      <td colspan="2">3.1381</td>
+    </tr>
+    <tr class="h-547">
+      <td class="sect" colspan="7">界址点坐标</td>
+    </tr>
+    <tr class="h-547">
+      <td rowspan="2">顺序号</td>
+      <td colspan="2" rowspan="2">点号</td>
+      <td colspan="2">坐标</td>
+      <td rowspan="2">边长（m）</td>
+      <td rowspan="2">备注</td>
+    </tr>
+    <tr class="h-547">
+      <td>X（m）</td>
+      <td>Y（m）</td>
+    </tr>
+    
+    <tr class="h-520">
+      <td>1</td>
+      <td colspan="2">J1</td>
+      <td class="num">3703067.208</td>
+      <td class="num">39616051.208</td>
+      <td class="num">185.208</td>
+      <td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td>2</td>
+      <td colspan="2">J2</td>
+      <td class="num">3703252.162</td>
+      <td class="num">39616041.521</td>
+      <td class="num">9.360</td>
+      <td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td>3</td>
+      <td colspan="2">J3</td>
+      <td class="num">3703251.796</td>
+      <td class="num">39616050.874</td>
+      <td class="num">185.690</td>
+      <td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td>4</td>
+      <td colspan="2">J4</td>
+      <td class="num">3703066.609</td>
+      <td class="num">39616064.525</td>
+      <td class="num">13.330</td>
+      <td></td>
+    </tr>
+    
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+  </table>
+</div>
+
+
+<div class="page pg-landscape">
+  <h1 class="form-title">承包地块调查表</h1>
+  <table class="tbl t-parcel">
+    <colgroup>
+      <col class="d1"><col class="d2"><col class="d3"><col class="d4"><col class="d5"><col class="d6"><col class="d7"><col class="d8"><col class="d9"><col class="d10"><col class="d11"><col class="d12"><col class="d13"><col class="d14"><col class="d15"><col class="d16"><col class="d17"><col class="d18"><col class="d19"><col class="d20"><col class="d21"><col class="d22"><col class="d23"><col class="d24">
+    </colgroup>
+    <tr class="h-836">
+      <td class="lbl">发包方编码</td>
+      <td colspan="7">32132410000103</td>
+      <td class="lbl" colspan="5">承包方（代表）</td>
+      <td colspan="7">刘开铁</td>
+      <td class="lbl" colspan="2">图幅编号</td>
+      <td colspan="2"></td>
+    </tr>
+    <tr class="h-898">
+      <td class="lbl">地块编码</td>
+      <td colspan="7">3213241000010300072</td>
+      <td class="lbl" colspan="5">地块名称</td>
+      <td colspan="7">东大渠新引河一</td>
+      <td class="lbl" colspan="2">合同面积（亩）</td>
+      <td colspan="2">0.71</td>
+    </tr>
+    <tr class="h-792">
+      <td class="lbl">东至</td>
+      <td colspan="7">刘开铜</td>
+      <td class="lbl" colspan="2">南至</td>
+      <td colspan="6">沟渠;沟渠</td>
+      <td class="lbl" colspan="4">西至</td>
+      <td>沟渠;其他</td>
+      <td class="lbl">北至</td>
+      <td colspan="2">其他</td>
+    </tr>
+    <tr class="h-794">
+      <td class="lbl">不动产单元号</td>
+      <td colspan="19">3213241000010300072</td>
+      <td class="lbl" colspan="2">用途</td>
+      <td colspan="2">种植业</td>
+    </tr>
+    <tr class="h-1356">
+      <td class="lbl">土地用途</td>
+      <td colspan="8" style="text-align:left">
+        <span class="ck">☑ 种植业</span>　<span class="ck">□ 林业</span>　<span class="ck">□ 畜牧业</span>　<span class="ck">□ 渔业</span>
+      </td>
+      <td class="lbl" colspan="4">地力等级</td>
+      <td colspan="3">一等地</td>
+      <td class="lbl" colspan="4">土地利用类型</td>
+      <td colspan="2" style="text-align:left">
+        <span class="ck">□ 水田</span>　<span class="ck">☑ 旱地</span>　<span class="ck">□ 水浇地</span>　<span class="ck">□ 林地</span>　<span class="ck">□ 果园</span>
+        <span class="ck">□ 其他 </span>
+      </td>
+      <td class="lbl">是否永久<br>基本农田</td>
+      <td style="white-space:nowrap">
+        <span class="ck">☑是</span><br>
+        <span class="ck">□否</span>
+      </td>
+    </tr>
+    <tr class="h-688">
+      <td class="lbl" rowspan="3">界址点号</td>
+      <td class="lbl" colspan="3">界标类型</td>
+      <td class="lbl" colspan="12">界址线类别</td>
+      <td class="lbl" colspan="4">界址线位置</td>
+      <td class="lbl" rowspan="3">界址线说明</td>
+      <td class="lbl" colspan="3">指界签章</td>
+    </tr>
+    <tr class="h-688">
+      <td class="ck" rowspan="2">木桩</td>
+      <td class="ck" rowspan="2">埋石</td>
+      <td class="ck" rowspan="2">无</td>
+      <td class="ck" rowspan="2">田埂</td>
+      <td class="ck" rowspan="2">沟渠</td>
+      <td class="ck" rowspan="2">道路</td>
+      <td class="ck" rowspan="2">行树</td>
+      <td class="ck" rowspan="2">围墙</td>
+      <td class="ck" colspan="2" rowspan="2">墙壁</td>
+      <td class="ck" rowspan="2">栅栏</td>
+      <td class="ck" colspan="2" rowspan="2">其他界线</td>
+      <td class="ck" rowspan="2">两点连线</td>
+      <td class="ck" rowspan="2"></td>
+      <td class="ck" rowspan="2">内</td>
+      <td class="ck" rowspan="2">中</td>
+      <td class="ck" rowspan="2">外</td>
+      <td class="ck" rowspan="2"></td>
+      <td class="ck" colspan="2">毗邻地块/地物</td>
+      <td class="ck" rowspan="2">本地块<br>指界人</td>
+    </tr>
+    <tr class="h-670">
+      <td class="ck">权利人</td>
+      <td class="ck">指界人</td>
+    </tr>
+    
+    
+    
+    <tr class="h-802">
+      <td>J1</td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+      <td class="ck sign-note" colspan="2" rowspan="8">毗邻地块/地物权利人代表（签字并摁指印）见农村土地承包经营权确权地块分布图（确认图）</td>
+      <td rowspan="8"></td>
+      
+    </tr>
+    
+    <tr class="h-802">
+      <td>J2</td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    <tr class="h-802">
+      <td>J3</td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    <tr class="h-802">
+      <td>J4</td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    
+    <tr class="h-802">
+      <td></td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    <tr class="h-802">
+      <td></td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    <tr class="h-802">
+      <td></td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    <tr class="h-802">
+      <td></td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    
+    <tr class="h-802">
+      <td class="lbl">调查记事</td>
+      <td class="note" colspan="23">经调查该地块信息准确无误。</td>
+    </tr>
+    <tr class="h-802">
+      <td class="lbl">审核意见</td>
+      <td class="note" colspan="23">同意。
+审核员：
+日期：　　　　年　　月　　日</td>
+    </tr>
+  </table>
+</div>
+
+
+<div class="page pg-portrait">
+  <h1 class="form-title">界址点坐标成果表</h1>
+  <table class="tbl t-points">
+    <colgroup>
+      <col class="p1"><col class="p2"><col class="p3"><col class="p4">
+      <col class="p5"><col class="p6"><col class="p7">
+    </colgroup>
+    <tr class="h-538">
+      <td class="head-lbl" colspan="2">权利人：</td>
+      <td colspan="2">刘开铁</td>
+      <td class="head-lbl">地块编码：</td>
+      <td colspan="2" style="text-align:left;padding-left:1.5mm">3213241000010300072</td>
+    </tr>
+    <tr class="h-545">
+      <td class="head-lbl" colspan="2">地块面积（平方米）：</td>
+      <td colspan="2">474.01</td>
+      <td class="head-lbl">地块面积（亩）：</td>
+      <td colspan="2">0.7110</td>
+    </tr>
+    <tr class="h-547">
+      <td class="sect" colspan="7">界址点坐标</td>
+    </tr>
+    <tr class="h-547">
+      <td rowspan="2">顺序号</td>
+      <td colspan="2" rowspan="2">点号</td>
+      <td colspan="2">坐标</td>
+      <td rowspan="2">边长（m）</td>
+      <td rowspan="2">备注</td>
+    </tr>
+    <tr class="h-547">
+      <td>X（m）</td>
+      <td>Y（m）</td>
+    </tr>
+    
+    <tr class="h-520">
+      <td>1</td>
+      <td colspan="2">J1</td>
+      <td class="num">3703288.617</td>
+      <td class="num">39615569.556</td>
+      <td class="num">4.674</td>
+      <td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td>2</td>
+      <td colspan="2">J2</td>
+      <td class="num">3703288.816</td>
+      <td class="num">39615564.886</td>
+      <td class="num">102.872</td>
+      <td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td>3</td>
+      <td colspan="2">J3</td>
+      <td class="num">3703391.633</td>
+      <td class="num">39615561.523</td>
+      <td class="num">4.571</td>
+      <td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td>4</td>
+      <td colspan="2">J4</td>
+      <td class="num">3703391.411</td>
+      <td class="num">39615566.089</td>
+      <td class="num">102.852</td>
+      <td></td>
+    </tr>
+    
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+  </table>
+</div>
+
+
+<div class="page pg-landscape">
+  <h1 class="form-title">承包地块调查表</h1>
+  <table class="tbl t-parcel">
+    <colgroup>
+      <col class="d1"><col class="d2"><col class="d3"><col class="d4"><col class="d5"><col class="d6"><col class="d7"><col class="d8"><col class="d9"><col class="d10"><col class="d11"><col class="d12"><col class="d13"><col class="d14"><col class="d15"><col class="d16"><col class="d17"><col class="d18"><col class="d19"><col class="d20"><col class="d21"><col class="d22"><col class="d23"><col class="d24">
+    </colgroup>
+    <tr class="h-836">
+      <td class="lbl">发包方编码</td>
+      <td colspan="7">32132410000103</td>
+      <td class="lbl" colspan="5">承包方（代表）</td>
+      <td colspan="7">刘开铁</td>
+      <td class="lbl" colspan="2">图幅编号</td>
+      <td colspan="2"></td>
+    </tr>
+    <tr class="h-898">
+      <td class="lbl">地块编码</td>
+      <td colspan="7">3213241000010300073</td>
+      <td class="lbl" colspan="5">地块名称</td>
+      <td colspan="7">城东车站南侧</td>
+      <td class="lbl" colspan="2">合同面积（亩）</td>
+      <td colspan="2">1.26</td>
+    </tr>
+    <tr class="h-792">
+      <td class="lbl">东至</td>
+      <td colspan="7">刘乃祥</td>
+      <td class="lbl" colspan="2">南至</td>
+      <td colspan="6">刘开铜</td>
+      <td class="lbl" colspan="4">西至</td>
+      <td>其他</td>
+      <td class="lbl">北至</td>
+      <td colspan="2">解兰</td>
+    </tr>
+    <tr class="h-794">
+      <td class="lbl">不动产单元号</td>
+      <td colspan="19">3213241000010300073</td>
+      <td class="lbl" colspan="2">用途</td>
+      <td colspan="2">种植业</td>
+    </tr>
+    <tr class="h-1356">
+      <td class="lbl">土地用途</td>
+      <td colspan="8" style="text-align:left">
+        <span class="ck">☑ 种植业</span>　<span class="ck">□ 林业</span>　<span class="ck">□ 畜牧业</span>　<span class="ck">□ 渔业</span>
+      </td>
+      <td class="lbl" colspan="4">地力等级</td>
+      <td colspan="3">一等地</td>
+      <td class="lbl" colspan="4">土地利用类型</td>
+      <td colspan="2" style="text-align:left">
+        <span class="ck">□ 水田</span>　<span class="ck">☑ 旱地</span>　<span class="ck">□ 水浇地</span>　<span class="ck">□ 林地</span>　<span class="ck">□ 果园</span>
+        <span class="ck">□ 其他 </span>
+      </td>
+      <td class="lbl">是否永久<br>基本农田</td>
+      <td style="white-space:nowrap">
+        <span class="ck">☑是</span><br>
+        <span class="ck">□否</span>
+      </td>
+    </tr>
+    <tr class="h-688">
+      <td class="lbl" rowspan="3">界址点号</td>
+      <td class="lbl" colspan="3">界标类型</td>
+      <td class="lbl" colspan="12">界址线类别</td>
+      <td class="lbl" colspan="4">界址线位置</td>
+      <td class="lbl" rowspan="3">界址线说明</td>
+      <td class="lbl" colspan="3">指界签章</td>
+    </tr>
+    <tr class="h-688">
+      <td class="ck" rowspan="2">木桩</td>
+      <td class="ck" rowspan="2">埋石</td>
+      <td class="ck" rowspan="2">无</td>
+      <td class="ck" rowspan="2">田埂</td>
+      <td class="ck" rowspan="2">沟渠</td>
+      <td class="ck" rowspan="2">道路</td>
+      <td class="ck" rowspan="2">行树</td>
+      <td class="ck" rowspan="2">围墙</td>
+      <td class="ck" colspan="2" rowspan="2">墙壁</td>
+      <td class="ck" rowspan="2">栅栏</td>
+      <td class="ck" colspan="2" rowspan="2">其他界线</td>
+      <td class="ck" rowspan="2">两点连线</td>
+      <td class="ck" rowspan="2"></td>
+      <td class="ck" rowspan="2">内</td>
+      <td class="ck" rowspan="2">中</td>
+      <td class="ck" rowspan="2">外</td>
+      <td class="ck" rowspan="2"></td>
+      <td class="ck" colspan="2">毗邻地块/地物</td>
+      <td class="ck" rowspan="2">本地块<br>指界人</td>
+    </tr>
+    <tr class="h-670">
+      <td class="ck">权利人</td>
+      <td class="ck">指界人</td>
+    </tr>
+    
+    
+    
+    <tr class="h-802">
+      <td>J1</td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+      <td class="ck sign-note" colspan="2" rowspan="8">毗邻地块/地物权利人代表（签字并摁指印）见农村土地承包经营权确权地块分布图（确认图）</td>
+      <td rowspan="8"></td>
+      
+    </tr>
+    
+    <tr class="h-802">
+      <td>J2</td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    <tr class="h-802">
+      <td>J3</td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    <tr class="h-802">
+      <td>J4</td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    <tr class="h-802">
+      <td>J5</td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    
+    <tr class="h-802">
+      <td></td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    <tr class="h-802">
+      <td></td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    <tr class="h-802">
+      <td></td>
+      <td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td colspan="2"></td><td></td><td colspan="2"></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+      <td></td>
+      
+    </tr>
+    
+    
+    <tr class="h-802">
+      <td class="lbl">调查记事</td>
+      <td class="note" colspan="23">经调查该地块信息准确无误。</td>
+    </tr>
+    <tr class="h-802">
+      <td class="lbl">审核意见</td>
+      <td class="note" colspan="23">同意。
+审核员：
+日期：　　　　年　　月　　日</td>
+    </tr>
+  </table>
+</div>
+
+
+<div class="page pg-portrait">
+  <h1 class="form-title">界址点坐标成果表</h1>
+  <table class="tbl t-points">
+    <colgroup>
+      <col class="p1"><col class="p2"><col class="p3"><col class="p4">
+      <col class="p5"><col class="p6"><col class="p7">
+    </colgroup>
+    <tr class="h-538">
+      <td class="head-lbl" colspan="2">权利人：</td>
+      <td colspan="2">刘开铁</td>
+      <td class="head-lbl">地块编码：</td>
+      <td colspan="2" style="text-align:left;padding-left:1.5mm">3213241000010300073</td>
+    </tr>
+    <tr class="h-545">
+      <td class="head-lbl" colspan="2">地块面积（平方米）：</td>
+      <td colspan="2">838.71</td>
+      <td class="head-lbl">地块面积（亩）：</td>
+      <td colspan="2">1.2581</td>
+    </tr>
+    <tr class="h-547">
+      <td class="sect" colspan="7">界址点坐标</td>
+    </tr>
+    <tr class="h-547">
+      <td rowspan="2">顺序号</td>
+      <td colspan="2" rowspan="2">点号</td>
+      <td colspan="2">坐标</td>
+      <td rowspan="2">边长（m）</td>
+      <td rowspan="2">备注</td>
+    </tr>
+    <tr class="h-547">
+      <td>X（m）</td>
+      <td>Y（m）</td>
+    </tr>
+    
+    <tr class="h-520">
+      <td>1</td>
+      <td colspan="2">J1</td>
+      <td class="num">3702915.831</td>
+      <td class="num">39615344.754</td>
+      <td class="num">6.289</td>
+      <td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td>2</td>
+      <td colspan="2">J2</td>
+      <td class="num">3702909.553</td>
+      <td class="num">39615345.129</td>
+      <td class="num">133.804</td>
+      <td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td>3</td>
+      <td colspan="2">J3</td>
+      <td class="num">3702904.934</td>
+      <td class="num">39615211.405</td>
+      <td class="num">5.927</td>
+      <td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td>4</td>
+      <td colspan="2">J4</td>
+      <td class="num">3702910.809</td>
+      <td class="num">39615210.626</td>
+      <td class="num">134.216</td>
+      <td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td>5</td>
+      <td colspan="2">J5</td>
+      <td class="num">3702916.160</td>
+      <td class="num">39615344.734</td>
+      <td class="num">0.330</td>
+      <td></td>
+    </tr>
+    
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+    <tr class="h-520">
+      <td></td><td colspan="2"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    
+  </table>
+</div>
+
+
+
+
+
+
+
+</body>
+</html>

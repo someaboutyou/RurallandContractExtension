@@ -1,0 +1,13 @@
+{
+  "appId": "com.ztgeo.ruralland.survey",
+  "appName": "延包调查",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true
+  },
+  "android": {
+    "path": "../android",
+    "allowMixedContent": true
+  }
+}

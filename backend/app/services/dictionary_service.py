@@ -4,6 +4,15 @@ from sqlalchemy.orm import Session
 
 from app.models.dictionary import DictionaryItem
 
+# ── 单值配置型字典 ──────────────────────────────────────────────
+# 这类字典不是"选项列表"，而是把原本写死在代码里的配置项搬进字典表，
+# 由运维在「字典管理」页自行维护，代码侧只负责读取 + 兜底。
+# 约定：item_value 为配置键（缺省取 default），item_name 为实际取用的值。
+
+SURVEY_ORG_DICT_TYPE = "survey_org"
+SURVEY_ORG_DICT_NAME = "调查单位（机构）"
+DEFAULT_SURVEY_ORG = "江苏中天吉奥信息技术股份有限公司"
+
 
 class DictionaryService:
     def list_items(
@@ -43,6 +52,35 @@ class DictionaryService:
         )
         items = db.scalars(stmt).all()
         return [{"value": item.item_value, "label": item.item_name} for item in items]
+
+    def get_setting(
+        self,
+        db: Session,
+        dict_type: str,
+        default: str | None = None,
+        key: str | None = None,
+    ) -> str | None:
+        """读取「单值配置型字典」的当前取值。
+
+        - 传了 ``key`` 就先按 ``item_value == key`` 精确命中；
+        - 没命中（或没传 key）则取该类型下启用项里排序最靠前的一条；
+        - 取用 ``item_name``，为空时退回 ``item_value``；
+        - 完全没有可用项时返回 ``default``，保证调用方永远拿得到一个能打印的值。
+        """
+        stmt = (
+            select(DictionaryItem)
+            .where(DictionaryItem.dict_type == dict_type, DictionaryItem.enabled == True)  # noqa: E712
+            .order_by(DictionaryItem.sort_order.asc(), DictionaryItem.id.asc())
+        )
+        if key:
+            matched = db.scalars(stmt.where(DictionaryItem.item_value == key)).first()
+            if matched is not None:
+                return (matched.item_name or "").strip() or matched.item_value or default
+
+        item = db.scalars(stmt).first()
+        if item is None:
+            return default
+        return (item.item_name or "").strip() or item.item_value or default
 
     def create_item(self, db: Session, payload: dict) -> dict:
         item = DictionaryItem(

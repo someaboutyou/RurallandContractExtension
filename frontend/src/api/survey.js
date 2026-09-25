@@ -8,6 +8,11 @@ export function createSurveyBatch(payload) {
   return http.post("/surveys/batches", payload);
 }
 
+/** 进行中的调查批次（含区域码与创建人），用于新建批次时置灰已初始化的区域。 */
+export function fetchActiveSurveyBatches() {
+  return http.get("/surveys/active-batches");
+}
+
 export function finishSurveyBatch(batchId) {
   return http.post(`/surveys/batches/${batchId}/finish`);
 }
@@ -18,6 +23,31 @@ export function exportSurveyResults(batchId, params) {
 
 export function fetchSurveyTasks(batchId, params) {
   return http.get(`/surveys/batches/${batchId}/tasks`, { params });
+}
+
+export function assignSurveyTasks(batchId, payload) {
+  return http.put(`/surveys/batches/${batchId}/tasks/assign`, payload);
+}
+
+export function fetchAssignableUsers(batchId) {
+  return http.get(`/surveys/batches/${batchId}/assignable-users`);
+}
+
+/** 可指派为调查员的用户（不绑定批次）。传 regionCode 时顺带返回 coversRegion，供前端置灰。 */
+export function fetchSurveyAssignees(params) {
+  return http.get("/surveys/assignees", { params });
+}
+
+export function fetchMergeCandidates(batchId, contractorUid, params) {
+  return http.get(`/surveys/batches/${batchId}/tasks/${contractorUid}/merge-candidates`, { params });
+}
+
+export function fetchSwapCandidates(batchId, contractorUid, params) {
+  return http.get(`/surveys/batches/${batchId}/tasks/${contractorUid}/swap-candidates`, { params });
+}
+
+export function fetchContractorCodes(batchId, params) {
+  return http.get(`/surveys/batches/${batchId}/contractor-codes`, { params });
 }
 
 export function fetchDeregisteredSurveyContractors(batchId, params) {
@@ -132,8 +162,19 @@ export function downloadSurveyAttachment(id) {
   return http.get(`/surveys/attachments/${id}/download`, { responseType: "blob" });
 }
 
+// 预览与下载取的是同一份文件流，差别只在浏览器如何消费：
+// 预览在前端 createObjectURL 后交给 img / iframe 渲染，因此放宽超时（大扫描件容忍更久）。
+export function previewSurveyAttachment(id) {
+  return http.get(`/surveys/attachments/${id}/download`, { responseType: "blob", timeout: 60000 });
+}
+
 export function deleteSurveyAttachment(id) {
   return http.delete(`/surveys/attachments/${id}`);
+}
+
+// 调查附件上传的类别选项：来源是「附件组管理」页里 request_type=调查附件 的叶子项。
+export function fetchSurveyAttachmentCategories() {
+  return http.get("/surveys/attachment-categories");
 }
 
 export function fetchSurveyParcels(batchId, contractorUid, params) {
@@ -152,6 +193,21 @@ export function generateNextSurveyParcelCode(batchId, contractorUid) {
   return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/parcels/next-code`);
 }
 
+// ── 界址点 / 界址线 ───────────────────────────────────
+
+export function fetchParcelBoundary(batchId, contractorUid, dkbm) {
+  return http.get(
+    `/surveys/batches/${batchId}/results/${contractorUid}/parcels/${encodeURIComponent(dkbm)}/boundary`
+  );
+}
+
+export function saveParcelBoundary(batchId, contractorUid, dkbm, payload) {
+  return http.put(
+    `/surveys/batches/${batchId}/results/${contractorUid}/parcels/${encodeURIComponent(dkbm)}/boundary`,
+    payload
+  );
+}
+
 export function generateSurveyRequest(batchId, contractorUid, payload) {
   return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/generate-request`, payload);
 }
@@ -162,6 +218,27 @@ export function fetchSurveyContract(batchId, contractorUid) {
   return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/contract`);
 }
 
+// 该承包方的合同清单（现行延包合同 + 历史合同 + 上次承包合同）
+export function fetchSurveyContracts(batchId, contractorUid) {
+  return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/contracts`);
+}
+
+// 指定合同的明细与渲染 HTML（历史合同也能查看）
+export function fetchSurveyContractDetail(batchId, contractorUid, cbhtbm) {
+  return http.get(
+    `/surveys/batches/${batchId}/results/${contractorUid}/contracts/${encodeURIComponent(cbhtbm)}`,
+    { timeout: 30000 }
+  );
+}
+
+// 按新的调查信息生成延包合同（生成后上次合同置为历史）
+export function generateSurveyContract(batchId, contractorUid, payload) {
+  return http.post(
+    `/surveys/batches/${batchId}/results/${contractorUid}/contract/generate`,
+    payload || {}
+  );
+}
+
 export function fetchSurveyPlotSketchMap(batchId, contractorUid) {
   return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/plot-sketch-map`, {
     // Rendering includes parcel geometry and nearby-parcel lookup, which can
@@ -170,12 +247,22 @@ export function fetchSurveyPlotSketchMap(batchId, contractorUid) {
   });
 }
 
-export function printSurveyContract(batchId, contractorUid) {
-  return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/contract/print`);
+export function printSurveyContract(batchId, contractorUid, cbhtbm) {
+  return http.post(
+    `/surveys/batches/${batchId}/results/${contractorUid}/contract/print`,
+    cbhtbm ? { cbhtbm } : {}
+  );
 }
 
 export function fetchSurveyRegistrationApplication(batchId, contractorUid) {
   return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/registration-application`);
+}
+
+export function fetchCadastralSurvey(batchId, contractorUid) {
+  return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/cadastral-survey`, {
+    // 一户一整套（封面 + 发包方 + 承包方 + 每地块两表），地块多时渲染较慢。
+    timeout: 60000,
+  });
 }
 
 // ── 调查操作 ──────────────────────────────────────────

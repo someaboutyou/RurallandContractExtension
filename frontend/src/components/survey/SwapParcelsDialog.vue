@@ -20,6 +20,7 @@
           v-model="form.targetContractorUid"
           placeholder="请选择本组互换对象"
           filterable
+          :loading="loadingTargets"
           style="width: 100%"
           @change="onTargetChange"
         >
@@ -30,6 +31,9 @@
             :value="t.contractorUid"
           />
         </el-select>
+        <div class="field-hint">
+          候选为本批次内同一村组、还有可互换地块的承包方（{{ targetOptions.length }} 户），不受上方任务列表的搜索条件影响。
+        </div>
       </el-form-item>
     </el-form>
 
@@ -124,7 +128,8 @@
 <script setup>
 import { computed, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
-import { fetchSurveyParcels } from "../../api/survey";
+import { fetchSurveyParcels, fetchSwapCandidates } from "../../api/survey";
+import { fallbackSameGroupTasks, taskGroupCode } from "../../utils/surveyCandidates";
 
 const emit = defineEmits(["done"]);
 
@@ -133,6 +138,7 @@ const submitting = ref(false);
 const batchId = ref(null);
 const contractorUid = ref("");
 const currentGroupRegionCode = ref("");
+const loadingTargets = ref(false);
 
 const targetOptions = ref([]);
 const sourceParcels = ref([]);
@@ -161,18 +167,38 @@ const canSubmit = computed(() =>
 
 function sameGroup(task) {
   if (!currentGroupRegionCode.value) return true;
-  const taskGroup = task.groupRegionCode || task.cbfbm?.slice(0, 14) || "";
-  return taskGroup === currentGroupRegionCode.value;
+  return taskGroupCode(task) === currentGroupRegionCode.value;
 }
 
-function open(bid, cuid, taskList, parcelList, currentContractor) {
+async function open(bid, cuid, taskList, parcelList, currentContractor) {
   batchId.value = bid;
   contractorUid.value = cuid;
   sourceParcels.value = parcelList || [];
-  currentGroupRegionCode.value = currentContractor?.groupRegionCode || currentContractor?.code?.slice(0, 14) || "";
+  currentGroupRegionCode.value = taskGroupCode(currentContractor);
+  // 先用任务列表快照秒开，随后用后端候选接口刷新（列表可能带搜索/分页条件）。
   targetOptions.value = (taskList || []).filter((t) => t.contractorUid !== cuid && sameGroup(t));
   resetForm();
   visible.value = true;
+  await refreshTargetOptions(taskList || []);
+}
+
+async function refreshTargetOptions(fallbackTasks) {
+  loadingTargets.value = true;
+  try {
+    const { data } = await fetchSwapCandidates(batchId.value, contractorUid.value);
+    const list = (data.data || []).filter((t) => t.contractorUid !== contractorUid.value);
+    targetOptions.value = list;
+  } catch (e) {
+    try {
+      const rows = await fallbackSameGroupTasks(batchId.value, contractorUid.value);
+      targetOptions.value = rows.filter((t) => t.contractorUid !== contractorUid.value);
+    } catch {
+      targetOptions.value = fallbackTasks.filter((t) => t.contractorUid !== contractorUid.value && sameGroup(t));
+      ElMessage.warning("候选承包方加载失败，已回退为当前任务列表中的承包方");
+    }
+  } finally {
+    loadingTargets.value = false;
+  }
 }
 
 function resetForm() {
@@ -238,6 +264,7 @@ defineExpose({ open });
 
 <style scoped>
 .dialog-alert { margin-bottom: 16px; }
+.field-hint { margin-top: 6px; color: #909399; font-size: 12px; line-height: 1.5; }
 .swap-tables { display: flex; gap: 16px; align-items: flex-start; margin-top: 12px; }
 .swap-panel { flex: 1; min-width: 0; }
 .swap-panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }

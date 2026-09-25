@@ -36,6 +36,8 @@
 <script setup>
 import { computed, ref } from "vue";
 import { ElMessage } from "element-plus";
+import { fetchContractorCodes } from "../../api/survey";
+import { collectContractorCodes, fetchAllBatchTasks } from "../../utils/surveyCandidates";
 
 const emit = defineEmits(["done"]);
 const visible = ref(false);
@@ -63,12 +65,12 @@ const assignmentError = computed(() => {
   return "";
 });
 
-function open(_batchId, _contractorUid, members, parcels, sourceCode, tasks) {
+async function open(batchId, _contractorUid, members, parcels, sourceCode, tasks) {
   allMembers.value = members || [];
   allParcels.value = (parcels || []).filter(item => !["removed", "split_source"].includes(item.resultStatus));
   const digits = String(sourceCode || "").replace(/\D/g, "");
   codePrefix.value = digits.slice(0, Math.min(14, digits.length));
-  existingCodes.value = new Set((tasks || []).map(item => String(item.cbfbm || "").replace(/\D/g, "")).filter(Boolean));
+  existingCodes.value = new Set(collectContractorCodes(tasks));
   households.value = [emptyHousehold(), emptyHousehold()];
   allMembers.value.forEach((m, i) => households.value[i % 2].memberUids.push(m.memberUid));
   allParcels.value.forEach((p, i) => households.value[i % 2].parcelDkbms.push(p.dkbm));
@@ -79,6 +81,27 @@ function open(_batchId, _contractorUid, members, parcels, sourceCode, tasks) {
   });
   reason.value = "";
   visible.value = true;
+  await refreshExistingCodes(batchId);
+}
+async function refreshExistingCodes(batchId) {
+  if (!batchId || !codePrefix.value) return;
+  let codes = [];
+  try {
+    const { data } = await fetchContractorCodes(batchId, { prefix: codePrefix.value });
+    codes = collectContractorCodes(data.data);
+  } catch {
+    try {
+      codes = collectContractorCodes(await fetchAllBatchTasks(batchId));
+    } catch {
+      ElMessage.warning("已用承包方编码加载失败，若批次超过 100 户，请核对自动生成的新编码是否重复");
+      return;
+    }
+  }
+  if (!codes.length) return;
+  existingCodes.value = new Set(codes);
+  // 新编码是只读自动生成的，拿到全量编码后重算一遍，避免与任务列表外的户撞号。
+  households.value.forEach(item => { item.newCbfbm = ""; });
+  households.value.forEach(item => { item.newCbfbm = generateCode(); });
 }
 function generateCode() {
   const prefix = codePrefix.value;

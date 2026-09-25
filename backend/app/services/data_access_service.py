@@ -8,6 +8,7 @@ from sqlalchemy import and_, exists, false, or_, select
 from app.models.request_case import RequestCase
 from app.models.request_case_participant import RequestCaseParticipant
 from app.models.user import User
+from app.core.license import license_validator
 
 
 LEVEL_BY_LENGTH = {6: "county", 9: "town", 12: "village", 14: "group"}
@@ -52,6 +53,9 @@ class DataAccessService:
     def derive_level(self, code: str | None) -> str:
         normalized = self.normalize_region_code(code)
         return LEVEL_BY_LENGTH.get(len(normalized or ""), "custom")
+
+    def get_system_region_code(self) -> str | None:
+        return self.normalize_region_code(license_validator.get_authorized_region_code())
 
     def get_region_permissions(self, user: User) -> list[RegionPermission]:
         if user.role.data_scope == "all":
@@ -128,9 +132,14 @@ class DataAccessService:
         return f"({table_alias}.{tenant_column} = '{tenant_code}' AND (" + " OR ".join(clauses) + "))"
 
     def ensure_code_in_scope(self, user: User, code: str | None, *, detail: str = "当前数据不在可操作范围内") -> None:
-        if user.role.data_scope == "all" or not code:
+        if not code:
             return
         normalized = self.normalize_region_code(code)
+        system_region_code = self.get_system_region_code()
+        if system_region_code and not normalized.startswith(system_region_code):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+        if user.role.data_scope == "all":
+            return
         tenant_code = self.derive_tenant_code(normalized)
         if tenant_code != self.get_tenant_code(user):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
@@ -141,6 +150,52 @@ class DataAccessService:
 
     def ensure_region_in_scope(self, user: User, region_code: str | None, *, detail: str = "当前区域不在可操作范围内") -> None:
         self.ensure_code_in_scope(user, region_code, detail=detail)
+
+    def ensure_region_filter_in_scope(
+        self,
+        user: User,
+        region_code: str | None,
+        *,
+        detail: str = "当前区域不在可操作范围内",
+    ) -> None:
+        """列表 / 导出等**只读查询的区域筛选值**校验（写操作请用 ensure_region_in_scope）。
+
+        与 ensure_region_in_scope 的唯一区别：这里允许传「比授权范围更粗」的区域码——
+        只要它与某条授权存在父子关系（``normalized`` 是授权的祖先或后代）即放行。
+
+        为什么必须放宽：前端列表页会用「用户所属区域」当默认筛选值，而数据权限是按
+        ``user_region_permissions`` 授权的。例如只授权到「城东居二组」
+        (32132410000102) 的用户，其所属区域是上一级的「城东居」(321324100001)，
+        这个村码既不以任何一条授权开头、也不被授权包含，原校验直接 403，
+        页面就变成「批次明明创建成功、列表却一片空白」。
+
+        放宽是安全的：真正兜底的是查询里叠加的 scope 过滤
+        （``build_scoped_filter`` / ``build_code_scope_filters``），结果集仍只会落在
+        他自己的授权范围内；筛选值放宽到村/镇只会让筛选条件变宽，不会越权读到别人的数据。
+        """
+        if not region_code:
+            return
+        normalized = self.normalize_region_code(region_code)
+        system_region_code = self.get_system_region_code()
+        if system_region_code and not (
+            normalized.startswith(system_region_code) or system_region_code.startswith(normalized)
+        ):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+        if user.role.data_scope == "all":
+            return
+        tenant_code = self.derive_tenant_code(normalized)
+        if tenant_code != self.get_tenant_code(user):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+        for permission in self.get_region_permissions(user):
+            if normalized.startswith(permission.region_code) or permission.region_code.startswith(normalized):
+                return
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+    def ensure_region_contains(self, parent_code: str | None, child_code: str | None, *, detail: str) -> None:
+        parent = self.normalize_region_code(parent_code)
+        child = self.normalize_region_code(child_code)
+        if parent and child and not child.startswith(parent):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
 
     def derive_request_scope(
         self,

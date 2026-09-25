@@ -62,15 +62,17 @@ class SurveyServiceResultMixin:
 
     def update_result(self, db: Session, batch_id: int, contractor_uid: str, payload: dict, current_user: User) -> dict:
         batch = self._ensure_batch(db, batch_id)
-        if batch.status == "finished":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鐠嬪啯鐓￠幍瑙勵偧瀹歌尙绮ㄩ弶鐕傜礉娑撳秷鍏樼紒褏鐢荤紓鏍帆")
+        self._ensure_batch_editable_status(batch, action="继续编辑")
         result = self._get_result(db, batch_id, contractor_uid)
         if result.survey_status == "confirmed":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鐠嬪啯鐓￠幋鎰亯瀹歌尙鈥樼拋銈忕礉娑撳秷鍏樼紒褏鐢荤紓鏍帆")
-        if result.result_status in {"cancelled", "extinct"} or result.change_type in self.terminal_operation_types:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="调查成果已确认，不能继续编辑")
+        if self.is_terminal_result(result):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该承包户已注销，撤回注销、分户或合并操作后才能修改")
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
         data_access_service.ensure_code_in_scope(current_user, payload["code"], detail="out of scope")
+        # 任务归属校验：已分配给某调查员的户，只有该调查员（或批次创建人、
+        # 全量数据权限角色）能保存。未分配的户不拦，沿用区域权限口径。
+        self.ensure_task_write_permission(db, batch, result, current_user)
         now = datetime.now(timezone.utc)
         data_batch_id = batch_id
         base = db.scalar(
@@ -101,9 +103,9 @@ class SurveyServiceResultMixin:
         if issuer_payload:
             issuer, base_issuer = self._get_result_issuer(db, result)
             if issuer is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="閸欐垵瀵橀弬纭呯殶閺屻儲鍨氶弸婊€绗夌€涙ê婀?")
-            data_access_service.ensure_code_in_scope(current_user, issuer.fbfbm, detail="閸欐垵瀵橀弬閫涚瑝閸︺劌缍嬮崜宥嗘殶閹诡喗娼堥梽鎰瘱閸ユ潙鍞?")
-            data_access_service.ensure_code_in_scope(current_user, issuer_payload["code"], detail="閸欐垵瀵橀弬閫涚瑝閸︺劌缍嬮崜宥嗘殶閹诡喗娼堥梽鎰瘱閸ユ潙鍞?")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="发包方调查成果不存在")
+            data_access_service.ensure_code_in_scope(current_user, issuer.fbfbm, detail="发包方不在当前数据权限范围内")
+            data_access_service.ensure_code_in_scope(current_user, issuer_payload["code"], detail="发包方不在当前数据权限范围内")
             issuer_before_summary = self._issuer_summary_from_base(base_issuer) if base_issuer else self._issuer_summary_from_result(issuer)
 
         result.cbfbm = payload["code"]
@@ -301,6 +303,10 @@ class SurveyServiceResultMixin:
                 )
             ).first()
             if task is None:
+                # 补建任务行：结果表有、快照表没有的户。默认归到操作人名下
+                # （他是本批次调查员时），否则留空待创建人分配——「谁录入的户归谁」，
+                # 顺带满足「批次里的户最终都有归属调查员」。
+                assignee = self.default_new_task_assignee(db, batch, current_user)
                 task = SurveyCbfBase(
                     tenant_code=result.tenant_code,
                     region_code=result.group_region_code or result.region_code,
@@ -308,16 +314,11 @@ class SurveyServiceResultMixin:
                     contractor_uid=contractor_uid,
                     cbfbm=result.cbfbm,
                     cbfmc=result.cbfmc,
+                    assigned_to=assignee.id if assignee else None,
+                    assigned_to_name=assignee.real_name if assignee else None,
+                    assigned_at=now if assignee else None,
                 )
                 db.add(task)
-            if task:
-                task.cbfbm = result.cbfbm
-                task.cbfmc = result.cbfmc
-                task.task_status = result.survey_status
-                task.has_change = result.is_changed or preserved_operation_change_count > 0
-                task.change_count = form_change_count + preserved_operation_change_count
-                task.investigated_at = now
-                task.remark = result.remark
             affected_uids = self._collect_diff_rebuild_uids(batch_id, contractor_uid, pending_operations)
             self._rebuild_contractor_diffs(
                 db,
@@ -326,6 +327,22 @@ class SurveyServiceResultMixin:
                 change_ids={contractor_uid: change_record.id if change_record else None},
                 deleted_member_reasons={contractor_uid: deleted_member_reasons},
             )
+            # 任务态同步必须晚于 diff 重建。这里的 task 与 _rebuild_diffs 读到的
+            # base 是同一行：survey_cbf_base 既是批次基线快照、又被当任务表用。
+            # ⛔ 只回写**任务态字段**，绝不回写 cbfbm/cbfmc —— 那是基线字段，
+            # 一旦就地覆写，批次基线就被永久推进：
+            #   1) _rebuild_diffs 比对恒等，改名/改码永远进不了 survey_change_diffs；
+            #      更糟的是净差异语义失效——改回原值不是"差异消失"，而是又比出一条；
+            #   2) _rebuild_parcel_diffs 拿新 cbfbm 去查 survey_cbdkxx_base 全部落空，
+            #      存量地块关联会被误判成"新增"（或全部消失）。
+            # 当前编码/名称由 result 承载：任务列表的显示与搜索改在 task.py 里
+            # 优先取 result 值（base 只作兜底），保证"不推进基线"与"显示当前值"并存。
+            if task:
+                task.task_status = result.survey_status
+                task.has_change = result.is_changed or preserved_operation_change_count > 0
+                task.change_count = form_change_count + preserved_operation_change_count
+                task.investigated_at = now
+                task.remark = result.remark
             self.refresh_auto_tags(db, batch_id, contractor_uid, current_user, commit=False)
         db.commit()
         if has_terminal_operation:
@@ -347,7 +364,7 @@ class SurveyServiceResultMixin:
     def create_contractor(self, db: Session, batch_id: int, payload: dict, current_user: User) -> dict:
         batch = self._ensure_batch(db, batch_id)
         if batch.status == "finished":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="鐠嬪啯鐓￠幍瑙勵偧瀹歌尙绮ㄩ弶鐕傜礉娑撳秷鍏橀弬鏉款杻")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="调查批次已结束，不能新增")
         code = payload["code"].strip()
         data_access_service.ensure_code_in_scope(current_user, code, detail="contractor is out of scope")
         if batch.region_code and not code.startswith(batch.region_code):
@@ -365,6 +382,10 @@ class SurveyServiceResultMixin:
         now = datetime.now(timezone.utc)
         contractor_uid = str(uuid5(NAMESPACE_URL, f"survey:{batch_id}:cbf:{code}"))
         group_region_code = payload.get("groupRegionCode") or batch.region_code
+        # 新增的户默认归到操作人名下（他是本批次调查员 / 创建人时），否则留空待创建人分配。
+        # 不然「新增承包方」一落库，批次里就又出现「未分配」的户，
+        # 与「创建后每个承包户都有归属调查员」的口径冲突。
+        assignee = self.default_new_task_assignee(db, batch, current_user)
         base = SurveyCbfBase(
             tenant_code=batch.tenant_code,
             region_code=group_region_code or batch.region_code,
@@ -389,9 +410,21 @@ class SurveyServiceResultMixin:
             initialized_from_key=code,
             initialized_at=now,
             snapshot_at=now,
+            # 新增户本身就是一条变化。
+            # 注意：任务行与快照行在本模型里是**同一行**（survey_cbf_base 已把 task_* 字段
+            # 合并进来），别再额外插一行——多出来的那行缺 source_cbfbm / region_code 等
+            # 非空列，必然插入失败，而且会让 count(id) 口径的统计翻倍。
+            task_status="not_started",
+            has_change=True,
+            change_count=1,
+            remark=payload.get("remark"),
+            assigned_to=assignee.id if assignee else None,
+            assigned_to_name=assignee.real_name if assignee else None,
+            assigned_at=now if assignee else None,
         )
-        db.add(base)
-        db.flush()
+        # ⛔ 不能在这里 add/flush base：survey_cbf_base.result_id 是**非空**列，
+        # 而 result 还没创建（id 尚未生成），先落库必然违反非空约束。
+        # 顺序必须是：先落 result 拿到 id → 回填 base.result_id → 再落 base。
         result = SurveyCbfResult(
             tenant_code=batch.tenant_code,
             region_code=group_region_code or batch.region_code,
@@ -420,21 +453,19 @@ class SurveyServiceResultMixin:
         result.remark = payload.get("remark")
         db.add(result)
         db.flush()
+        # result 已拿到 id，此时才把快照行补上 result_id 并落库。
         base.result_id = result.id
-        db.add(SurveyCbfBase(
-            tenant_code=batch.tenant_code,
-            region_code=group_region_code or batch.region_code,
-            batch_id=batch_id,
-            contractor_uid=contractor_uid,
-            cbfbm=code,
-            cbfmc=payload["name"],
-            task_status="not_started",
-            has_change=True,
-            change_count=1,
-            remark=payload.get("remark"),
-        ))
+        db.add(base)
+        db.flush()
         db.commit()
-        return self._serialize_result_task(result, batch_id, self._get_task(db, batch_id, contractor_uid))
+        # 新增户归到操作人名下（走的是 contractors.manage 入口），返回的行直接标可写，
+        # 否则刚建完的户在列表里立刻显示「查看详情」。
+        return self._serialize_result_task(
+            result,
+            batch_id,
+            self._get_task(db, batch_id, contractor_uid),
+            can_write=True,
+        )
 
 
     def _contractor_changed(self, result: SurveyCbfResult, base: SurveyCbfBase | None) -> bool:
@@ -573,6 +604,10 @@ class SurveyServiceResultMixin:
             "isChanged": item.is_changed,
             "changeType": item.change_type,
             "changeReason": item.change_reason,
+            # 这一户是否已被终结（已注销 / 被合户并走 / 被分户拆走）。
+            # ⛔ 前端据此把整个表单置为只读，**不要**让它拿 changeType 自己算：
+            # 分户/合户新生成的户 changeType 与原户同值，自算必然误判成"已注销"。
+            "isTerminal": self.is_terminal_result(item),
             "policyBasis": item.policy_basis,
             "evidenceSummary": item.evidence_summary,
             "remark": item.remark,

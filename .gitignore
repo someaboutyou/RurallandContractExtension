@@ -31,3 +31,27 @@ frontend/dist/
 frontend/node_modules/
 
 **/*.zip
+
+# ---- 临时产物清理（2026-09-25）----
+# backend 根目录下的一次性修复/清理/测试脚本与临时输出。
+# 正式代码都在 backend/app/ 内；已入库的 backend/setup_cython.py 不受影响。
+backend/*.py
+backend/*.txt
+backend/*.log
+backend/*.sql
+*.bak
+
+# 授权文件备份与副本（正式的 backend/storage/license.dat 已入库）
+backend/storage/license*.dat.bak.*
+backend/storage/license1 (2).dat
+
+# 运行时上传的附件（业务数据，不入库）
+backend/storage/survey_attachments/
+
+# Vite 临时文件
+frontend/vite.config.js.timestamp-*.mjs
+
+# 仓库根的一次性脚本 / 临时验证产物 / 本地工作台数据
+fix_helpers.py
+.tmp-visual/
+.workbuddy/

@@ -89,7 +89,7 @@ class SurveyServiceTagsMixin:
 
     def create_manual_tag(self, db: Session, batch_id: int, contractor_uid: str, payload: dict, current_user: User) -> dict:
         result = self._get_result(db, batch_id, contractor_uid)
-        self._ensure_editable_batch_and_result(db, result)
+        self._ensure_editable_batch_and_result(db, result, current_user)
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="survey result out of scope")
         now = datetime.now(timezone.utc)
         item = SurveyHouseholdTag(
@@ -118,7 +118,7 @@ class SurveyServiceTagsMixin:
         if item is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="household tag not found")
         result = self._get_result(db, item.batch_id, item.contractor_uid)
-        self._ensure_editable_batch_and_result(db, result)
+        self._ensure_editable_batch_and_result(db, result, current_user)
         data_access_service.ensure_code_in_scope(current_user, item.cbfbm, detail="survey result out of scope")
         item.is_active = False
         item.disabled_reason = disabled_reason

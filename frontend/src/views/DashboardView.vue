@@ -1,996 +1,1375 @@
 <template>
-  <div class="viz-page">
-    <section class="viz-toolbar">
-      <div>
-        <div class="eyebrow">数据可视化</div>
-        <h1>延包业务数据驾驶舱</h1>
-        <p>围绕调查进度、地块面积、流程审核和档案归集做作业监测，异常事项可直接下钻处理。</p>
-      </div>
-      <div class="viz-actions">
-        <el-select v-model="selectedBatch" class="batch-select" size="large">
-          <el-option v-for="item in batches" :key="item" :label="item" :value="item" />
-        </el-select>
-        <el-radio-group v-model="scope" size="large">
-          <el-radio-button label="县域" />
-          <el-radio-button label="乡镇" />
-          <el-radio-button label="村组" />
-        </el-radio-group>
-      </div>
-    </section>
-
-    <section class="metric-grid">
-      <article v-for="item in metrics" :key="item.label" class="metric-card" :class="`is-${item.tone}`">
-        <div class="metric-head">
-          <span>{{ item.label }}</span>
-          <el-icon><component :is="item.icon" /></el-icon>
-        </div>
-        <div class="metric-value">{{ item.value }}</div>
-        <div class="metric-foot">
-          <span>{{ item.hint }}</span>
-          <strong>{{ item.delta }}</strong>
-        </div>
-      </article>
-    </section>
-
-    <section class="viz-tabs">
-      <button
-        v-for="tab in tabs"
-        :key="tab.key"
-        type="button"
-        class="viz-tab"
-        :class="{ 'is-active': activeTab === tab.key }"
-        @click="activeTab = tab.key"
-      >
-        {{ tab.label }}
-      </button>
-    </section>
-
-    <section v-if="activeTab === 'overview'" class="overview-grid">
-      <article class="viz-panel map-panel">
-        <div class="panel-head">
+  <div class="bigscreen">
+    <div class="screen-stage" :style="stageStyle">
+      <header class="screen-head">
+        <div class="head-title">
+          <span class="head-badge">二轮延包</span>
           <div>
-            <h2>县域作业热力</h2>
-            <p>按村组调查完成率、异常地块和待审核事项叠加展示</p>
+            <h1>农村土地承包经营权二轮延包 · 工作进展</h1>
+            <p>
+              <template v-if="batch">
+                {{ batch.batchName }} · {{ batch.regionName || "—" }} ·
+                <span class="state-chip" :class="`is-${batch.status}`">{{ statusLabel(batch.status) }}</span>
+              </template>
+              <template v-else>暂无调查批次</template>
+            </p>
           </div>
-          <el-tag type="warning" effect="plain">18 个重点村组</el-tag>
         </div>
-        <div class="county-map">
-          <div
-            v-for="area in mapAreas"
-            :key="area.name"
-            class="map-area"
-            :class="`level-${area.level}`"
-            :style="area.style"
+
+        <div class="head-controls">
+          <el-select
+            v-model="selectedBatchId"
+            class="head-select"
+            size="large"
+            placeholder="选择调查批次"
+            :disabled="!batches.length"
+            @change="load()"
           >
-            <span>{{ area.name }}</span>
-            <strong>{{ area.rate }}%</strong>
+            <el-option
+              v-for="item in batches"
+              :key="item.id"
+              :label="`${item.batchName}（${statusLabel(item.status)}）`"
+              :value="item.id"
+            />
+          </el-select>
+          <div class="seg">
+            <button
+              v-for="item in levelOptions"
+              :key="item.value"
+              type="button"
+              class="seg-btn"
+              :class="{ 'is-active': regionLevel === item.value }"
+              @click="switchLevel(item.value)"
+            >
+              {{ item.label }}
+            </button>
           </div>
         </div>
-        <div class="map-legend">
-          <span><i class="legend-dot is-good"></i>完成较好</span>
-          <span><i class="legend-dot is-warn"></i>需跟进</span>
-          <span><i class="legend-dot is-risk"></i>重点督办</span>
-        </div>
-      </article>
 
-      <article class="viz-panel">
-        <div class="panel-head">
-          <div>
-            <h2>调查状态分布</h2>
-            <p>承包方调查任务当前状态</p>
+        <div class="head-right">
+          <div class="clock">
+            <strong>{{ clock.time }}</strong>
+            <span>{{ clock.date }}</span>
+          </div>
+          <div class="head-actions">
+            <button type="button" class="icon-btn" :title="autoRefresh ? '暂停自动刷新' : '开启自动刷新'" @click="toggleAutoRefresh">
+              <span class="dot" :class="{ 'is-live': autoRefresh }"></span>{{ autoRefresh ? "实时" : "暂停" }}
+            </button>
+            <button type="button" class="icon-btn" :disabled="loading" @click="load()">
+              {{ loading ? "加载中" : "刷新" }}
+            </button>
+            <button type="button" class="icon-btn" @click="toggleFullscreen">
+              {{ isFullscreen ? "取消全屏" : "全屏" }}
+            </button>
+            <button type="button" class="icon-btn is-ghost" @click="exit">返回平台</button>
           </div>
         </div>
-        <div class="status-list">
-          <div v-for="item in surveyStatus" :key="item.label" class="status-row">
-            <div class="status-info">
+      </header>
+
+      <div v-if="errorMessage" class="screen-error">
+        <strong>数据加载失败</strong>
+        <span>{{ errorMessage }}</span>
+        <button type="button" @click="load()">重试</button>
+      </div>
+
+      <div v-else-if="!batch" class="screen-empty">
+        <strong>暂无调查批次</strong>
+        <span>先在「调查批次」里创建并初始化一个批次，这里就会出现工作进展。</span>
+      </div>
+
+      <main v-else class="screen-body">
+        <!-- 左列：总量与分配 -->
+        <section class="col col-left">
+          <div class="metric-grid">
+            <article v-for="item in metricCards" :key="item.key" class="metric-card" :class="`is-${item.tone}`">
+              <header>
+                <span>{{ item.label }}</span>
+                <em>{{ item.rate }}%</em>
+              </header>
+              <strong>{{ formatNumber(item.value) }}</strong>
+              <div class="metric-track"><i :style="{ width: `${Math.min(item.rate, 100)}%` }"></i></div>
+              <small>{{ item.hint }}</small>
+            </article>
+          </div>
+
+          <div class="stat-strip">
+            <div v-for="item in stripItems" :key="item.label" class="strip-item">
               <span>{{ item.label }}</span>
-              <strong>{{ item.value }} 户</strong>
-            </div>
-            <div class="progress-track">
-              <span :class="`is-${item.tone}`" :style="{ width: `${item.percent}%` }"></span>
+              <strong>{{ item.value }}<em v-if="item.unit">{{ item.unit }}</em></strong>
             </div>
           </div>
-        </div>
-      </article>
 
-      <article class="viz-panel wide-panel">
-        <div class="panel-head">
-          <div>
-            <h2>近 30 天办理趋势</h2>
-            <p>调查完成、业务申请和档案归集按日汇总</p>
-          </div>
-        </div>
-        <div class="trend-chart" aria-label="近30天办理趋势">
-          <div v-for="point in trends" :key="point.day" class="trend-column">
-            <span class="bar is-survey" :style="{ height: `${point.survey}%` }"></span>
-            <span class="bar is-request" :style="{ height: `${point.request}%` }"></span>
-            <span class="bar is-archive" :style="{ height: `${point.archive}%` }"></span>
-            <small>{{ point.day }}</small>
-          </div>
-        </div>
-        <div class="chart-legend">
-          <span><i class="legend-line is-survey"></i>调查完成</span>
-          <span><i class="legend-line is-request"></i>业务申请</span>
-          <span><i class="legend-line is-archive"></i>档案归集</span>
-        </div>
-      </article>
+          <section class="panel panel-grow">
+            <header class="panel-head">
+              <h2>调查员工作量</h2>
+              <span class="panel-note">{{ assignees.length }} 人已领任务</span>
+            </header>
+            <div v-if="assignees.length" ref="assigneeChart" class="chart"></div>
+            <p v-else class="panel-empty">本批次还没有把户分给任何调查员。</p>
+          </section>
+        </section>
 
-      <article class="viz-panel">
-        <div class="panel-head">
-          <div>
-            <h2>待办优先级</h2>
-            <p>按风险和超期情况排序</p>
-          </div>
-        </div>
-        <div class="todo-list">
-          <RouterLink v-for="item in todos" :key="item.title" class="todo-item" :to="item.to">
-            <span :class="`todo-mark is-${item.tone}`"></span>
-            <div>
-              <strong>{{ item.title }}</strong>
-              <small>{{ item.meta }}</small>
+        <!-- 中列：漏斗 · 趋势 · 区域 -->
+        <section class="col col-center">
+          <section class="panel">
+            <header class="panel-head">
+              <h2>办理进度漏斗</h2>
+              <span class="panel-note">基线 → 分配 → 调查 → 确认 → 申请</span>
+            </header>
+            <div class="funnel-wrap">
+              <div ref="funnelChart" class="chart chart-funnel"></div>
+              <ul class="funnel-list">
+                <li v-for="item in funnel" :key="item.key">
+                  <span class="funnel-label">{{ item.label }}</span>
+                  <strong>{{ formatNumber(item.count) }}</strong>
+                  <em>{{ item.rate }}%</em>
+                  <div class="funnel-track"><i :style="{ width: `${Math.min(item.rate, 100)}%` }"></i></div>
+                  <small>{{ funnelHint(item.key) }}</small>
+                </li>
+              </ul>
             </div>
-            <el-icon><ArrowRight /></el-icon>
-          </RouterLink>
-        </div>
-      </article>
-    </section>
+          </section>
 
-    <section v-else-if="activeTab === 'survey'" class="analysis-grid">
-      <article class="viz-panel wide-panel">
-        <div class="panel-head">
-          <div>
-            <h2>乡镇调查进度排行</h2>
-            <p>点击后可按行政区筛选承包方和调查任务</p>
-          </div>
-        </div>
-        <div class="ranking-list">
-          <div v-for="item in townProgress" :key="item.name" class="ranking-row">
-            <span>{{ item.name }}</span>
-            <div class="ranking-track"><i :style="{ width: `${item.rate}%` }"></i></div>
-            <strong>{{ item.rate }}%</strong>
-            <small>{{ item.done }}/{{ item.total }} 户</small>
-          </div>
-        </div>
-      </article>
-      <article class="viz-panel">
-        <div class="panel-head">
-          <div>
-            <h2>变更类型</h2>
-            <p>调查成果相对基准快照的变化</p>
-          </div>
-        </div>
-        <div class="change-grid">
-          <div v-for="item in changeTypes" :key="item.label" class="change-card">
-            <span>{{ item.label }}</span>
-            <strong>{{ item.value }}</strong>
-            <small>{{ item.note }}</small>
-          </div>
-        </div>
-      </article>
-      <article class="viz-panel full-panel">
-        <div class="panel-head">
-          <div>
-            <h2>村组推进明细</h2>
-            <p>用于每日调度和现场作业复盘</p>
-          </div>
-        </div>
-        <el-table :data="villageRows" height="286" stripe>
-          <el-table-column prop="village" label="村组" min-width="140" />
-          <el-table-column prop="contractors" label="承包方" width="100" />
-          <el-table-column prop="parcels" label="地块" width="100" />
-          <el-table-column prop="progress" label="完成率" width="160">
-            <template #default="{ row }">
-              <el-progress :percentage="row.progress" :stroke-width="8" />
-            </template>
-          </el-table-column>
-          <el-table-column prop="changes" label="变更数" width="100" />
-          <el-table-column prop="risk" label="风险提示" min-width="180" />
-        </el-table>
-      </article>
-    </section>
+          <section class="panel">
+            <header class="panel-head">
+              <h2>近 {{ trend.length || trendDays }} 天工作趋势</h2>
+              <span class="panel-note">按日统计分配 / 调查 / 确认</span>
+            </header>
+            <div ref="trendChart" class="chart chart-trend"></div>
+          </section>
 
-    <section v-else-if="activeTab === 'parcel'" class="analysis-grid">
-      <article class="viz-panel map-panel wide-panel">
-        <div class="panel-head">
-          <div>
-            <h2>地块异常定位</h2>
-            <p>按面积差异、切割互换、归属变化生成核查图层</p>
-          </div>
-          <RouterLink class="panel-link" to="/gis">进入一张图</RouterLink>
-        </div>
-        <div class="parcel-map">
-          <span v-for="plot in plots" :key="plot.id" :class="`plot is-${plot.tone}`" :style="plot.style">
-            {{ plot.id }}
-          </span>
-        </div>
-      </article>
-      <article class="viz-panel">
-        <div class="panel-head">
-          <div>
-            <h2>面积差异 Top 5</h2>
-            <p>合同面积与实测面积偏差</p>
-          </div>
-        </div>
-        <div class="diff-list">
-          <div v-for="item in areaDiffs" :key="item.code" class="diff-row">
-            <div>
-              <strong>{{ item.code }}</strong>
-              <small>{{ item.owner }}</small>
+          <section class="panel panel-grow">
+            <header class="panel-head">
+              <h2>{{ regionBoard.levelLabel }}进度榜</h2>
+              <span class="panel-note">左：完成率领先　右：需要督办</span>
+            </header>
+            <div class="region-board">
+              <div class="region-column">
+                <h3 class="is-good">进度领先</h3>
+                <div v-for="item in regionBoard.leading" :key="`l-${item.code}`" class="region-row">
+                  <span class="region-name" :title="item.code">{{ item.name }}</span>
+                  <div class="region-track"><i class="is-good" :style="{ width: `${item.surveyedRate}%` }"></i></div>
+                  <strong>{{ item.surveyedRate }}%</strong>
+                  <small>{{ item.surveyed }}/{{ item.total }}</small>
+                </div>
+                <p v-if="!regionBoard.leading.length" class="panel-empty">暂无数据</p>
+              </div>
+              <div class="region-column">
+                <h3 class="is-risk">需要督办</h3>
+                <div
+                  v-for="item in regionBoard.lagging"
+                  :key="`g-${item.code}`"
+                  class="region-row"
+                  :class="{ 'is-alert': item.surveyedRate < 60 }"
+                >
+                  <span class="region-name" :title="item.code">{{ item.name }}</span>
+                  <div class="region-track"><i class="is-risk" :style="{ width: `${item.surveyedRate}%` }"></i></div>
+                  <strong>{{ item.surveyedRate }}%</strong>
+                  <small>{{ item.surveyed }}/{{ item.total }}</small>
+                </div>
+                <p v-if="!regionBoard.lagging.length" class="panel-empty">暂无数据</p>
+              </div>
             </div>
-            <span>{{ item.diff }} 亩</span>
-          </div>
-        </div>
-      </article>
-      <article class="viz-panel full-panel">
-        <div class="panel-head">
-          <div>
-            <h2>地块类别结构</h2>
-            <p>用于判断承包地、自留地、机动地等结构变化</p>
-          </div>
-        </div>
-        <div class="category-bars">
-          <div v-for="item in parcelCategories" :key="item.label" class="category-row">
-            <span>{{ item.label }}</span>
-            <div><i :style="{ width: `${item.percent}%`, background: item.color }"></i></div>
-            <strong>{{ item.value }} 块</strong>
-          </div>
-        </div>
-      </article>
-    </section>
+          </section>
+        </section>
 
-    <section v-else class="analysis-grid">
-      <article class="viz-panel wide-panel">
-        <div class="panel-head">
-          <div>
-            <h2>村镇县审核链路</h2>
-            <p>关注超期、退回和节点积压</p>
-          </div>
-        </div>
-        <div class="workflow-funnel">
-          <div v-for="item in workflowNodes" :key="item.label" class="funnel-step">
-            <span>{{ item.label }}</span>
-            <strong>{{ item.count }}</strong>
-            <small>{{ item.note }}</small>
-          </div>
-        </div>
-      </article>
-      <article class="viz-panel">
-        <div class="panel-head">
-          <div>
-            <h2>归档完整率</h2>
-            <p>按案卷材料清单自动校验</p>
-          </div>
-        </div>
-        <div class="archive-score">
-          <div class="score-ring">86%</div>
-          <div class="score-notes">
-            <span>已归档 1,928 卷</span>
-            <span>待补材料 214 卷</span>
-            <span>目录待复核 76 卷</span>
-          </div>
-        </div>
-      </article>
-      <article class="viz-panel full-panel">
-        <div class="panel-head">
-          <div>
-            <h2>材料缺失清单</h2>
-            <p>优先补齐影响办结和归档的关键材料</p>
-          </div>
-          <RouterLink class="panel-link" to="/archives">进入档案管理</RouterLink>
-        </div>
-        <el-table :data="archiveRows" height="286" stripe>
-          <el-table-column prop="caseNo" label="业务编号" min-width="160" />
-          <el-table-column prop="owner" label="承包方" width="120" />
-          <el-table-column prop="node" label="当前环节" width="120" />
-          <el-table-column prop="missing" label="缺失材料" min-width="220" />
-          <el-table-column prop="days" label="滞留天数" width="100" />
-        </el-table>
-      </article>
-    </section>
+        <!-- 右列：状态 · 变更 · 预警 -->
+        <section class="col col-right">
+          <section class="panel">
+            <header class="panel-head">
+              <h2>调查状态分布</h2>
+              <span class="panel-note">共 {{ formatNumber(totalRows) }} 户</span>
+            </header>
+            <div ref="statusChart" class="chart chart-status"></div>
+          </section>
+
+          <section class="panel">
+            <header class="panel-head">
+              <h2>变更类型</h2>
+              <span class="panel-note">{{ changeTypesTotal }} 条变更记录</span>
+            </header>
+            <div v-if="changeTypes.length" ref="changeChart" class="chart chart-change"></div>
+            <p v-else class="panel-empty">本批次还没有变更记录。</p>
+          </section>
+
+          <section class="panel panel-grow">
+            <header class="panel-head">
+              <h2>异常预警</h2>
+              <span class="panel-note">{{ alerts.length }} 项待处理</span>
+            </header>
+            <ul v-if="alerts.length" class="alert-list">
+              <li v-for="item in alerts" :key="item.actionKey" :class="`is-${item.level}`">
+                <span class="alert-mark"></span>
+                <div>
+                  <strong>{{ item.title }}</strong>
+                  <p>{{ item.detail }}</p>
+                </div>
+                <em>{{ formatNumber(item.count) }}</em>
+              </li>
+            </ul>
+            <p v-else class="panel-empty">没有需要关注的事项，进度正常。</p>
+          </section>
+        </section>
+      </main>
+
+      <footer class="screen-foot">
+        <span>数据更新时间：{{ generatedAtText }}</span>
+        <span>每次进入 / 刷新重新计算，口径与「调查批次」一致</span>
+      </footer>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref } from "vue";
-import { ArrowRight, Collection, Files, MapLocation, TrendCharts } from "@element-plus/icons-vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
+import { useRouter } from "vue-router";
+import * as echarts from "echarts/core";
+import { BarChart, FunnelChart, LineChart, PieChart } from "echarts/charts";
+import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
+import { CanvasRenderer } from "echarts/renderers";
 
-const selectedBatch = ref("2026 年二轮延包调查批次");
-const scope = ref("县域");
-const activeTab = ref("overview");
+import { fetchBigscreen } from "../api/dashboard";
 
-const batches = ["2026 年二轮延包调查批次", "泗洪县试点村核查批次", "历史确权数据复核批次"];
-const tabs = [
-  { key: "overview", label: "总览" },
-  { key: "survey", label: "调查进度" },
-  { key: "parcel", label: "地块面积" },
-  { key: "archive", label: "流程归档" },
+echarts.use([
+  BarChart,
+  FunnelChart,
+  LineChart,
+  PieChart,
+  GridComponent,
+  LegendComponent,
+  TooltipComponent,
+  CanvasRenderer,
+]);
+
+// 大屏按 1920×1080 设计，用 CSS transform 等比缩放铺满任意分辨率，
+// 从而避免"换个屏幕就错位"。transform 不改变布局尺寸，ECharts 读 clientWidth 仍然正确。
+const BASE_WIDTH = 1920;
+const BASE_HEIGHT = 1080;
+const REFRESH_INTERVAL = 60 * 1000;
+
+const router = useRouter();
+
+const loading = ref(false);
+const errorMessage = ref("");
+const payload = ref(null);
+const selectedBatchId = ref(null);
+const regionLevel = ref("town");
+const trendDays = ref(15);
+const autoRefresh = ref(true);
+const scale = ref(1);
+
+const levelOptions = [
+  { value: "town", label: "镇级" },
+  { value: "village", label: "村级" },
 ];
 
-const metrics = [
-  { label: "调查完成率", value: "78.6%", hint: "较昨日", delta: "+3.2%", tone: "blue", icon: TrendCharts },
-  { label: "已核查承包方", value: "12,486", hint: "剩余 3,402 户", delta: "82%", tone: "green", icon: Collection },
-  { label: "异常地块", value: "326", hint: "面积差异/归属变化", delta: "待核查", tone: "orange", icon: MapLocation },
-  { label: "待归档案卷", value: "214", hint: "缺少关键材料", delta: "需补齐", tone: "red", icon: Files },
-];
+const TONE_COLORS = {
+  slate: "#9aacc0",
+  blue: "#2f6bbf",
+  orange: "#ef9b2d",
+  green: "#37b26c",
+  teal: "#2aa5a5",
+  purple: "#8b7bd8",
+  gray: "#c2cdd9",
+};
+const INK = "#17324d";
+const MUTED = "#6f88a3";
+const AXIS_LINE = "rgba(56, 122, 196, 0.18)";
 
-const mapAreas = [
-  { name: "青阳", rate: 91, level: 1, style: { left: "10%", top: "18%", width: "24%", height: "26%" } },
-  { name: "双沟", rate: 76, level: 2, style: { left: "35%", top: "12%", width: "22%", height: "30%" } },
-  { name: "归仁", rate: 68, level: 2, style: { left: "59%", top: "20%", width: "26%", height: "24%" } },
-  { name: "半城", rate: 84, level: 1, style: { left: "17%", top: "48%", width: "26%", height: "28%" } },
-  { name: "魏营", rate: 53, level: 3, style: { left: "47%", top: "48%", width: "22%", height: "32%" } },
-  { name: "孙园", rate: 71, level: 2, style: { left: "71%", top: "50%", width: "18%", height: "28%" } },
-];
+const batch = computed(() => payload.value?.batch || null);
+const batches = computed(() => payload.value?.batches || []);
+const overview = computed(() => payload.value?.overview || {});
+const funnel = computed(() => payload.value?.funnel || []);
+const taskStatus = computed(() => payload.value?.taskStatus || []);
+const assignees = computed(() => payload.value?.assignees || []);
+const regionBoard = computed(
+  () => payload.value?.regionBoard || { level: "town", levelLabel: "镇级", leading: [], lagging: [] },
+);
+const changeTypes = computed(() => payload.value?.changeTypes || []);
+const trend = computed(() => payload.value?.trend || []);
+const alerts = computed(() => payload.value?.alerts || []);
 
-const surveyStatus = [
-  { label: "已完成", value: 12486, percent: 79, tone: "green" },
-  { label: "进行中", value: 2418, percent: 15, tone: "blue" },
-  { label: "待入户", value: 984, percent: 6, tone: "orange" },
-  { label: "退回修正", value: 326, percent: 4, tone: "red" },
-];
+const totalRows = computed(() => taskStatus.value.reduce((sum, item) => sum + item.count, 0));
+const changeTypesTotal = computed(() => changeTypes.value.reduce((sum, item) => sum + item.count, 0));
 
-const trends = [
-  { day: "1日", survey: 42, request: 28, archive: 18 },
-  { day: "5日", survey: 55, request: 35, archive: 24 },
-  { day: "10日", survey: 63, request: 48, archive: 36 },
-  { day: "15日", survey: 78, request: 58, archive: 42 },
-  { day: "20日", survey: 84, request: 66, archive: 55 },
-  { day: "25日", survey: 92, request: 72, archive: 62 },
-  { day: "30日", survey: 88, request: 69, archive: 74 },
-];
+const metricCards = computed(() => [
+  {
+    key: "total",
+    label: "承包方基数",
+    value: overview.value.contractorTotal || 0,
+    rate: 100,
+    tone: "blue",
+    hint: `待调查 ${overview.value.contractorTotal - overview.value.surveyedCount} 户`,
+  },
+  {
+    key: "assigned",
+    label: "已分配到人",
+    value: overview.value.assignedCount || 0,
+    rate: overview.value.assignedRate || 0,
+    tone: "teal",
+    hint: `未分配 ${overview.value.contractorTotal - overview.value.assignedCount} 户`,
+  },
+  {
+    key: "surveyed",
+    label: "已调查录入",
+    value: overview.value.surveyedCount || 0,
+    rate: overview.value.surveyedRate || 0,
+    tone: "orange",
+    hint: `含变更 ${overview.value.changedCount} 户`,
+  },
+  {
+    key: "confirmed",
+    label: "已复核确认",
+    value: overview.value.confirmedCount || 0,
+    rate: overview.value.confirmedRate || 0,
+    tone: "green",
+    hint: `待生成申请 ${overview.value.surveyedCount - overview.value.requestGeneratedCount} 户`,
+  },
+]);
 
-const todos = [
-  { title: "魏营镇 42 户调查超期", meta: "平均滞留 6.4 天", tone: "red", to: "/surveys" },
-  { title: "18 块地面积差异大于 5 亩", meta: "需 GIS 复核", tone: "orange", to: "/gis" },
-  { title: "镇级审核积压 37 件", meta: "今日新增 9 件", tone: "blue", to: "/requests" },
-  { title: "合同附件缺失 126 份", meta: "影响归档完整率", tone: "brown", to: "/archives" },
-];
+const stripItems = computed(() => [
+  { label: "承包地块", value: formatNumber(overview.value.parcelTotal || 0), unit: "块" },
+  { label: "合同面积", value: formatNumber(overview.value.contractAreaMu || 0, 2), unit: "亩" },
+  { label: "发包方", value: formatNumber(overview.value.issuerTotal || 0), unit: "个" },
+  { label: "家庭成员", value: formatNumber(overview.value.memberTotal || 0), unit: "人" },
+  { label: "已生成申请", value: formatNumber(overview.value.requestGeneratedCount || 0), unit: "件" },
+  { label: "采集材料", value: formatNumber(overview.value.attachmentCount || 0), unit: "份" },
+]);
 
-const townProgress = [
-  { name: "青阳街道", rate: 91, done: 2280, total: 2506 },
-  { name: "半城镇", rate: 84, done: 1836, total: 2187 },
-  { name: "双沟镇", rate: 76, done: 1598, total: 2102 },
-  { name: "孙园镇", rate: 71, done: 1392, total: 1960 },
-  { name: "归仁镇", rate: 68, done: 1197, total: 1760 },
-  { name: "魏营镇", rate: 53, done: 980, total: 1849 },
-];
+const stageStyle = computed(() => ({
+  width: `${BASE_WIDTH}px`,
+  height: `${BASE_HEIGHT}px`,
+  transform: `scale(${scale.value})`,
+}));
 
-const changeTypes = [
-  { label: "分户", value: 184, note: "含成员和地块分配" },
-  { label: "合户", value: 67, note: "源户已注销" },
-  { label: "地块互换", value: 93, note: "跨承包方调整" },
-  { label: "新增地块", value: 128, note: "需补空间核验" },
-  { label: "切割地块", value: 56, note: "面积待复核" },
-  { label: "注销承包方", value: 41, note: "原始快照保留" },
-];
+const generatedAtText = computed(() => {
+  const value = payload.value?.generatedAt;
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  const pad = (num) => String(num).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+});
 
-const villageRows = [
-  { village: "青阳街道 大楼社区", contractors: 526, parcels: 2184, progress: 94, changes: 42, risk: "材料完整，按计划推进" },
-  { village: "双沟镇 李庄村", contractors: 418, parcels: 1690, progress: 79, changes: 36, risk: "合同附件缺失较多" },
-  { village: "归仁镇 张宅村", contractors: 392, parcels: 1458, progress: 71, changes: 58, risk: "地块归属变化偏多" },
-  { village: "魏营镇 涧圩村", contractors: 366, parcels: 1302, progress: 54, changes: 61, risk: "入户调查滞后" },
-  { village: "半城镇 洪安村", contractors: 448, parcels: 1765, progress: 86, changes: 29, risk: "少量面积差异待核查" },
-];
+const clock = ref({ time: "--:--:--", date: "----年--月--日" });
 
-const plots = [
-  { id: "DK01", tone: "ok", style: { left: "8%", top: "16%", width: "18%", height: "24%" } },
-  { id: "DK02", tone: "warn", style: { left: "30%", top: "12%", width: "20%", height: "31%" } },
-  { id: "DK03", tone: "risk", style: { left: "54%", top: "18%", width: "16%", height: "25%" } },
-  { id: "DK04", tone: "ok", style: { left: "73%", top: "16%", width: "18%", height: "30%" } },
-  { id: "DK05", tone: "warn", style: { left: "13%", top: "50%", width: "22%", height: "28%" } },
-  { id: "DK06", tone: "ok", style: { left: "39%", top: "52%", width: "20%", height: "27%" } },
-  { id: "DK07", tone: "risk", style: { left: "63%", top: "51%", width: "25%", height: "30%" } },
-];
+function formatNumber(value, digits = 0) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "0";
+  return num.toLocaleString("zh-CN", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
 
-const areaDiffs = [
-  { code: "32132410120300019", owner: "王明华", diff: "+8.72" },
-  { code: "32132410120300026", owner: "张国林", diff: "-6.35" },
-  { code: "32132410210800011", owner: "李秀兰", diff: "+5.94" },
-  { code: "32132410401600008", owner: "陈建军", diff: "+5.48" },
-  { code: "32132410502200031", owner: "周启明", diff: "-4.91" },
-];
+function statusLabel(status) {
+  return { draft: "草稿", in_progress: "进行中", finished: "已结束", pending: "待启动" }[status] || status || "—";
+}
 
-const parcelCategories = [
-  { label: "承包地块", value: 48216, percent: 82, color: "#4f8f59" },
-  { label: "自留地", value: 5362, percent: 9, color: "#3d77b8" },
-  { label: "机动地", value: 2984, percent: 5, color: "#d99837" },
-  { label: "其他", value: 2148, percent: 4, color: "#9b6b54" },
-];
+function funnelHint(key) {
+  return {
+    baseline: "本批次调查对象",
+    assigned: "已指定调查员",
+    surveyed: "已录入调查结果",
+    confirmed: "复核通过可流转",
+    request: "已生成业务申请",
+  }[key] || "";
+}
 
-const workflowNodes = [
-  { label: "申请提交", count: 2946, note: "本批次累计" },
-  { label: "村级审核", count: 426, note: "退回 38 件" },
-  { label: "镇级审核", count: 317, note: "超期 21 件" },
-  { label: "县级审核", count: 148, note: "待集中复核" },
-  { label: "归档办结", count: 1928, note: "完整率 86%" },
-];
+// ------------------------------------------------------------------ 图表
 
-const archiveRows = [
-  { caseNo: "YB202605240018", owner: "张国林", node: "镇级审核", missing: "承包合同扫描件、户主身份证复印件", days: 7 },
-  { caseNo: "YB202605240026", owner: "王明华", node: "归档复核", missing: "地块示意图、调查表签字页", days: 5 },
-  { caseNo: "YB202605230091", owner: "李秀兰", node: "村级补正", missing: "家庭成员确认表", days: 4 },
-  { caseNo: "YB202605220067", owner: "陈建军", node: "县级审核", missing: "面积差异说明", days: 8 },
-  { caseNo: "YB202605210044", owner: "周启明", node: "归档复核", missing: "审批流转单", days: 6 },
-];
+const assigneeChart = ref(null);
+const funnelChart = ref(null);
+const trendChart = ref(null);
+const statusChart = ref(null);
+const changeChart = ref(null);
+const chartEls = { assignee: assigneeChart, funnel: funnelChart, trend: trendChart, status: statusChart, change: changeChart };
+const charts = shallowRef({});
+const resizeObserver = new WeakSet();
+
+function ensureChart(key) {
+  const el = chartEls[key]?.value;
+  if (!el) {
+    const stale = charts.value[key];
+    if (stale) {
+      stale.dispose();
+      delete charts.value[key];
+    }
+    return null;
+  }
+  if (!charts.value[key]) {
+    charts.value[key] = echarts.init(el);
+  }
+  return charts.value[key];
+}
+
+function renderAssignee() {
+  const chart = ensureChart("assignee");
+  if (!chart) return;
+  const rows = assignees.value.slice(0, 8).reverse();
+  chart.setOption(
+    {
+      grid: { left: 8, right: 46, top: 6, bottom: 4, containLabel: true },
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "shadow" },
+        formatter: (params) => {
+          const item = rows[params[0].dataIndex];
+          return `${item.name}<br/>领任务 ${item.total} 户<br/>已调查 ${item.surveyed} 户（${item.surveyedRate}%）<br/>已确认 ${item.confirmed} 户`;
+        },
+      },
+      xAxis: { type: "value", show: false, max: Math.max(...rows.map((item) => item.total), 1) },
+      yAxis: {
+        type: "category",
+        data: rows.map((item) => item.name),
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { color: INK, fontSize: 13, width: 76, overflow: "truncate" },
+      },
+      series: [
+        {
+          name: "已调查",
+          type: "bar",
+          stack: "work",
+          barWidth: 13,
+          itemStyle: { color: "#37b26c", borderRadius: [3, 0, 0, 3] },
+          label: {
+            show: true,
+            position: "right",
+            color: MUTED,
+            fontSize: 12,
+            formatter: (params) => `${rows[params.dataIndex].surveyedRate}%`,
+          },
+          data: rows.map((item) => item.surveyed),
+        },
+        {
+          name: "未调查",
+          type: "bar",
+          stack: "work",
+          barWidth: 13,
+          itemStyle: { color: "rgba(154, 172, 192, 0.45)", borderRadius: [0, 3, 3, 0] },
+          data: rows.map((item) => Math.max(item.total - item.surveyed, 0)),
+        },
+      ],
+    },
+    true,
+  );
+}
+
+function renderFunnel() {
+  const chart = ensureChart("funnel");
+  if (!chart) return;
+  const rows = funnel.value;
+  const max = Math.max(...rows.map((item) => item.count), 1);
+  chart.setOption(
+    {
+      series: [
+        {
+          type: "funnel",
+          left: 4,
+          right: 4,
+          top: 8,
+          bottom: 8,
+          minSize: "26%",
+          maxSize: "100%",
+          sort: "descending",
+          gap: 3,
+          label: { show: false },
+          itemStyle: { borderWidth: 0 },
+          data: rows.map((item, index) => ({
+            name: item.label,
+            value: Math.max(item.count, max * 0.04),
+            itemStyle: { color: ["#2f6bbf", "#2aa5a5", "#ef9b2d", "#37b26c", "#8b7bd8"][index % 5], opacity: 0.88 },
+          })),
+        },
+      ],
+    },
+    true,
+  );
+}
+
+function renderTrend() {
+  const chart = ensureChart("trend");
+  if (!chart) return;
+  const rows = trend.value;
+  const compact = rows.length > 20;
+  chart.setOption(
+    {
+      color: ["#2f6bbf", "#ef9b2d", "#37b26c"],
+      grid: { left: 10, right: 18, top: 30, bottom: 6, containLabel: true },
+      tooltip: { trigger: "axis" },
+      legend: {
+        right: 0,
+        top: 0,
+        itemWidth: 14,
+        itemHeight: 8,
+        textStyle: { color: MUTED, fontSize: 12 },
+        data: ["已分配", "已调查", "已确认"],
+      },
+      xAxis: {
+        type: "category",
+        boundaryGap: false,
+        data: rows.map((item) => item.date.slice(5)),
+        axisLine: { lineStyle: { color: AXIS_LINE } },
+        axisTick: { show: false },
+        axisLabel: { color: MUTED, fontSize: 11, interval: compact ? Math.ceil(rows.length / 12) - 1 : 0 },
+      },
+      yAxis: {
+        type: "value",
+        splitLine: { lineStyle: { color: AXIS_LINE, type: "dashed" } },
+        axisLabel: { color: MUTED, fontSize: 11 },
+      },
+      series: [
+        { name: "已分配", type: "line", smooth: true, showSymbol: false, lineStyle: { width: 2 }, areaStyle: { opacity: 0.1 }, data: rows.map((item) => item.assigned) },
+        { name: "已调查", type: "line", smooth: true, showSymbol: false, lineStyle: { width: 2 }, areaStyle: { opacity: 0.12 }, data: rows.map((item) => item.investigated) },
+        { name: "已确认", type: "line", smooth: true, showSymbol: false, lineStyle: { width: 2 }, areaStyle: { opacity: 0.1 }, data: rows.map((item) => item.confirmed) },
+      ],
+    },
+    true,
+  );
+}
+
+function renderStatus() {
+  const chart = ensureChart("status");
+  if (!chart) return;
+  const rows = taskStatus.value.filter((item) => item.count > 0);
+  chart.setOption(
+    {
+      tooltip: { trigger: "item", formatter: "{b}：{c} 户（{d}%）" },
+      legend: {
+        type: "scroll",
+        orient: "vertical",
+        right: 0,
+        top: "middle",
+        itemWidth: 10,
+        itemHeight: 10,
+        textStyle: { color: MUTED, fontSize: 12 },
+      },
+      series: [
+        {
+          type: "pie",
+          radius: ["52%", "76%"],
+          center: ["34%", "50%"],
+          avoidLabelOverlap: true,
+          label: { show: true, position: "center", formatter: () => `${totalRows.value}`, color: INK, fontSize: 26, fontWeight: 700 },
+          labelLine: { show: false },
+          itemStyle: { borderColor: "#fff", borderWidth: 2 },
+          data: rows.map((item) => ({
+            name: item.label,
+            value: item.count,
+            itemStyle: { color: TONE_COLORS[item.tone] || TONE_COLORS.gray },
+          })),
+        },
+      ],
+    },
+    true,
+  );
+}
+
+function renderChange() {
+  const chart = ensureChart("change");
+  if (!chart) return;
+  const rows = changeTypes.value.slice(0, 7).reverse();
+  chart.setOption(
+    {
+      grid: { left: 8, right: 40, top: 6, bottom: 4, containLabel: true },
+      tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, formatter: "{b}：{c} 条" },
+      xAxis: { type: "value", show: false, max: Math.max(...rows.map((item) => item.count), 1) },
+      yAxis: {
+        type: "category",
+        data: rows.map((item) => item.label),
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { color: INK, fontSize: 12, width: 76, overflow: "truncate" },
+      },
+      series: [
+        {
+          type: "bar",
+          barWidth: 12,
+          itemStyle: { color: "#8b7bd8", borderRadius: [3, 3, 3, 3] },
+          label: { show: true, position: "right", color: MUTED, fontSize: 12 },
+          data: rows.map((item) => item.count),
+        },
+      ],
+    },
+    true,
+  );
+}
+
+function renderCharts() {
+  renderAssignee();
+  renderFunnel();
+  renderTrend();
+  renderStatus();
+  renderChange();
+}
+
+// ------------------------------------------------------------------ 生命周期
+
+async function load() {
+  loading.value = true;
+  errorMessage.value = "";
+  try {
+    const { data } = await fetchBigscreen({
+      batchId: selectedBatchId.value || undefined,
+      trendDays: trendDays.value,
+      regionLevel: regionLevel.value,
+    });
+    payload.value = data.data;
+    // 首次加载（或后端切了默认批次）时把下拉回填成实际展示的批次，
+    // 否则筛选框会停在"最新批次"上，而画面显示的是另一个批次。
+    if (payload.value?.batch) {
+      selectedBatchId.value = payload.value.batch.id;
+    }
+    await nextTick();
+    renderCharts();
+  } catch (error) {
+    const detail = error?.response?.data?.detail;
+    errorMessage.value = typeof detail === "string" ? detail : error?.message || "接口请求失败";
+    payload.value = null;
+  } finally {
+    loading.value = false;
+  }
+}
+
+function switchLevel(value) {
+  if (regionLevel.value === value) return;
+  regionLevel.value = value;
+  load();
+}
+
+function updateScale() {
+  scale.value = Math.min(window.innerWidth / BASE_WIDTH, window.innerHeight / BASE_HEIGHT);
+}
+
+function handleResize() {
+  updateScale();
+  Object.values(charts.value).forEach((chart) => chart && chart.resize());
+}
+
+function toggleAutoRefresh() {
+  autoRefresh.value = !autoRefresh.value;
+  scheduleRefresh();
+}
+
+// 按钮文案跟随**真实**全屏状态，而不是本地开关：用户按 ESC 退出时也要同步回「全屏」。
+const isFullscreen = ref(false);
+
+function syncFullscreenState() {
+  isFullscreen.value = Boolean(document.fullscreenElement);
+}
+
+async function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+    } else {
+      await document.documentElement.requestFullscreen();
+    }
+  } catch {
+    // 浏览器拒绝（非用户手势 / 权限策略）时静默降级，不打断大屏展示。
+  } finally {
+    // requestFullscreen 是异步生效的；个别浏览器/场景下事件回调有延迟，这里再兜一次。
+    syncFullscreenState();
+  }
+}
+
+async function exit() {
+  // ⛔ 必须先退出全屏再跳转：全屏是加在 document 上的，直接 router.push 只换路由不退出全屏，
+  // 平台其它页面会继续停在全屏里 —— 用户会觉得「点了返回平台却还在全屏」。
+  if (document.fullscreenElement) {
+    try {
+      await document.exitFullscreen();
+    } catch {
+      // 退出失败也要放行返回，不能把用户卡在大屏里。
+    }
+  }
+  router.push({ name: "gis" });
+}
+
+let clockTimer = null;
+let refreshTimer = null;
+
+function scheduleRefresh() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+  if (autoRefresh.value) {
+    refreshTimer = setInterval(load, REFRESH_INTERVAL);
+  }
+}
+
+onMounted(() => {
+  updateScale();
+  window.addEventListener("resize", handleResize);
+  document.addEventListener("fullscreenchange", syncFullscreenState);
+  syncFullscreenState();
+  // 大屏常挂在外部显示器上，屏幕切换后窗口尺寸不变但设备像素比会变，补一次 resize。
+  if (typeof ResizeObserver !== "undefined" && !resizeObserver.has(document.body)) {
+    resizeObserver.add(document.body);
+  }
+  clockTimer = setInterval(() => {
+    const now = new Date();
+    const pad = (num) => String(num).padStart(2, "0");
+    clock.value = {
+      time: `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
+      date: `${now.getFullYear()}年${pad(now.getMonth() + 1)}月${pad(now.getDate())}日`,
+    };
+  }, 1000);
+  load();
+  scheduleRefresh();
+});
+
+onBeforeUnmount(() => {
+  if (clockTimer) clearInterval(clockTimer);
+  if (refreshTimer) clearInterval(refreshTimer);
+  window.removeEventListener("resize", handleResize);
+  document.removeEventListener("fullscreenchange", syncFullscreenState);
+  // 兜底：以「返回平台」以外的方式离开（浏览器后退、外部跳转）时，也别把用户留在全屏态。
+  if (document.fullscreenElement) {
+    document.exitFullscreen().catch(() => {});
+  }
+  Object.values(charts.value).forEach((chart) => chart && chart.dispose());
+  charts.value = {};
+});
 </script>
 
 <style scoped>
-.viz-page {
-  height: 100%;
-  min-height: 0;
-  overflow: auto;
-  padding-right: 2px;
-}
-
-.viz-toolbar,
-.metric-card,
-.viz-panel,
-.viz-tabs {
-  border: 1px solid rgba(56, 122, 196, 0.16);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 12px 28px rgba(25, 74, 128, 0.08);
-}
-
-.viz-toolbar {
-  display: flex;
-  justify-content: space-between;
-  gap: 18px;
-  align-items: center;
-  padding: 16px 18px;
-  margin-bottom: 12px;
-}
-
-.viz-toolbar h1 {
-  margin: 8px 0 6px;
-  font-size: 26px;
-  line-height: 1.2;
-}
-
-.viz-toolbar p,
-.panel-head p {
-  margin: 0;
-  color: var(--muted);
-  line-height: 1.55;
-}
-
-.viz-actions {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.batch-select {
-  width: 250px;
-}
-
-.metric-grid {
+/* 大屏外层：占满视口，舞台按 1920×1080 固定布局后整体缩放。 */
+.bigscreen {
+  width: 100vw;
+  height: 100vh;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 12px;
+  place-items: center;
+  overflow: hidden;
+  background:
+    radial-gradient(1200px 620px at 12% -8%, rgba(47, 107, 191, 0.16), transparent 62%),
+    radial-gradient(900px 520px at 92% 6%, rgba(42, 165, 165, 0.14), transparent 58%),
+    linear-gradient(160deg, #eef5fc 0%, #e7f0f9 46%, #e3ecf7 100%);
 }
 
-.metric-card {
-  padding: 14px 16px;
-}
-
-.metric-head,
-.metric-foot,
-.panel-head,
-.todo-item,
-.diff-row,
-.ranking-row,
-.category-row {
+.screen-stage {
+  transform-origin: center center;
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-}
-
-.metric-head {
-  color: var(--muted);
-  font-weight: 700;
-}
-
-.metric-value {
-  margin-top: 10px;
-  font-size: 30px;
-  font-weight: 800;
+  flex-direction: column;
+  padding: 14px 18px 10px;
   color: var(--text);
 }
 
-.metric-foot {
-  margin-top: 8px;
+/* ---------------------------------------------------------------- 顶部 */
+.screen-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  padding: 12px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: var(--shadow);
+}
+
+.head-title {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.head-badge {
+  flex: 0 0 auto;
+  padding: 7px 12px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, #2f6bbf, #2aa5a5);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+
+.head-title h1 {
+  margin: 0 0 4px;
+  font-size: 25px;
+  line-height: 1.15;
+  letter-spacing: 1px;
+}
+
+.head-title p {
+  margin: 0;
   color: var(--muted);
   font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.metric-foot strong,
-.is-blue .metric-head .el-icon {
-  color: #356fb2;
+.state-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(47, 107, 191, 0.12);
+  color: #2f6bbf;
+  font-weight: 700;
 }
 
-.is-green .metric-head .el-icon,
-.is-green .metric-foot strong {
-  color: #3f8d55;
+.state-chip.is-in_progress {
+  background: rgba(55, 178, 108, 0.14);
+  color: #2f8f57;
 }
 
-.is-orange .metric-head .el-icon,
-.is-orange .metric-foot strong {
-  color: #c7801f;
-}
-
-.is-red .metric-head .el-icon,
-.is-red .metric-foot strong {
-  color: #c95454;
-}
-
-.viz-tabs {
+.head-controls {
   display: flex;
-  gap: 6px;
-  padding: 6px;
-  margin-bottom: 12px;
+  align-items: center;
+  gap: 10px;
 }
 
-.viz-tab {
-  min-height: 36px;
-  padding: 0 18px;
-  border: 1px solid transparent;
-  border-radius: 6px;
+.head-select {
+  width: 300px;
+}
+
+.seg {
+  display: flex;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(240, 246, 252, 0.9);
+}
+
+.seg-btn {
+  min-width: 62px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  font-weight: 800;
+  font-size: 14px;
+  font-weight: 700;
   cursor: pointer;
 }
 
-.viz-tab.is-active {
-  color: #25456e;
-  border-color: rgba(53, 95, 159, 0.18);
-  background: rgba(53, 95, 159, 0.09);
+.seg-btn.is-active {
+  background: #fff;
+  color: #2f6bbf;
+  box-shadow: 0 2px 8px rgba(25, 74, 128, 0.12);
 }
 
-.overview-grid,
-.analysis-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
-  gap: 12px;
-  padding-bottom: 16px;
-}
-
-.viz-panel {
-  min-width: 0;
-  padding: 14px 16px;
-}
-
-.wide-panel {
-  grid-column: span 1;
-}
-
-.full-panel {
-  grid-column: 1 / -1;
-}
-
-.panel-head {
-  margin-bottom: 14px;
-  align-items: flex-start;
-}
-
-.panel-head h2 {
-  margin: 0 0 4px;
-  font-size: 17px;
-}
-
-.panel-link {
-  flex: 0 0 auto;
-  color: #356fb2;
-  font-weight: 800;
-}
-
-.county-map,
-.parcel-map {
-  position: relative;
-  height: 330px;
-  border: 1px solid rgba(48, 101, 81, 0.16);
-  border-radius: 8px;
-  overflow: hidden;
-  background:
-    linear-gradient(rgba(53, 95, 159, 0.08) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(53, 95, 159, 0.08) 1px, transparent 1px),
-    linear-gradient(135deg, #eaf3ee, #eef5fb);
-  background-size: 32px 32px, 32px 32px, auto;
-}
-
-.map-area,
-.plot {
-  position: absolute;
-  display: grid;
-  place-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.72);
-  color: #203b32;
-  font-weight: 800;
-  text-align: center;
-  box-shadow: 0 12px 22px rgba(24, 67, 71, 0.12);
-}
-
-.map-area {
-  border-radius: 32% 48% 38% 44%;
-}
-
-.map-area strong {
-  font-size: 18px;
-}
-
-.level-1 {
-  background: rgba(87, 151, 93, 0.62);
-}
-
-.level-2 {
-  background: rgba(226, 168, 72, 0.62);
-}
-
-.level-3 {
-  background: rgba(207, 89, 84, 0.62);
-}
-
-.map-legend,
-.chart-legend {
+.head-right {
   display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
-  margin-top: 12px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+}
+
+.clock {
+  display: grid;
+  justify-items: end;
+  line-height: 1.2;
+}
+
+.clock strong {
+  font-size: 26px;
+  font-variant-numeric: tabular-nums;
+  color: #1d3f6b;
+}
+
+.clock span {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
-.legend-dot,
-.legend-line {
-  display: inline-block;
-  margin-right: 6px;
-  vertical-align: middle;
-}
-
-.legend-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-}
-
-.legend-line {
-  width: 18px;
-  height: 6px;
-  border-radius: 999px;
-}
-
-.is-good,
-.legend-line.is-archive {
-  background: #57975d;
-}
-
-.is-warn,
-.legend-line.is-request {
-  background: #e2a848;
-}
-
-.is-risk {
-  background: #cf5954;
-}
-
-.legend-line.is-survey {
-  background: #356fb2;
-}
-
-.status-list,
-.todo-list,
-.diff-list,
-.ranking-list,
-.category-bars {
-  display: grid;
-  gap: 12px;
-}
-
-.status-row {
-  display: grid;
+.head-actions {
+  display: flex;
   gap: 8px;
 }
 
-.status-info {
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: #fff;
+  color: #2f5b93;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: rgba(47, 107, 191, 0.08);
+}
+
+.icon-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.icon-btn.is-ghost {
+  color: var(--muted);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #c2cdd9;
+}
+
+.dot.is-live {
+  background: #37b26c;
+  box-shadow: 0 0 0 4px rgba(55, 178, 108, 0.18);
+}
+
+/* ---------------------------------------------------------------- 状态占位 */
+.screen-error,
+.screen-empty {
+  flex: 1;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--muted);
+  text-align: center;
+}
+
+.screen-error strong,
+.screen-empty strong {
+  font-size: 20px;
+  color: var(--text);
+}
+
+.screen-error button {
+  padding: 8px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: #fff;
+  color: #2f6bbf;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* ---------------------------------------------------------------- 主体三列 */
+.screen-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 400px minmax(0, 1fr) 400px;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.col {
   display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: var(--shadow);
+}
+
+.panel-grow {
+  flex: 1;
+}
+
+.panel-head {
+  display: flex;
+  align-items: baseline;
   justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.panel-head h2 {
+  margin: 0;
+  font-size: 17px;
+  letter-spacing: 0.5px;
+}
+
+.panel-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.panel-empty {
+  margin: auto;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* ⛔ 不要给 .chart 无条件写 `flex: 1`：在 flex column 里它展开成 flex-basis: 0，
+   优先级高于下面各 .chart-* 的 height（被静默忽略）；而 .panel 自身高度又由内容决定，
+   于是「面板等图表撑开、图表等面板给空间」互相依赖，一起塌成 0 高 ⇒ 图表画不出来。
+   只有真正需要吃掉剩余空间的图表（.panel-grow 内）才交给 flex。 */
+.chart {
+  min-height: 0;
+  width: 100%;
+}
+
+.panel-grow > .chart {
+  flex: 1;
+}
+
+.chart-funnel {
+  height: 210px;
+}
+
+.chart-trend {
+  height: 210px;
+}
+
+.chart-status {
+  height: 220px;
+}
+
+.chart-change {
+  height: 190px;
+}
+
+/* ---------------------------------------------------------------- 指标卡 */
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
-.progress-track,
-.ranking-track,
-.category-row div {
-  height: 10px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(46, 74, 109, 0.08);
+.metric-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: var(--shadow);
 }
 
-.progress-track span,
-.ranking-track i,
-.category-row i {
+.metric-card header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.metric-card header em {
+  font-style: normal;
+  font-size: 13px;
+}
+
+.metric-card strong {
+  font-size: 30px;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-card small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.metric-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(46, 74, 109, 0.09);
+}
+
+.metric-track i {
   display: block;
   height: 100%;
   border-radius: inherit;
 }
 
-.progress-track .is-green,
-.ranking-track i {
-  background: #57975d;
+.metric-card.is-blue strong,
+.metric-card.is-blue header em {
+  color: #2f6bbf;
 }
 
-.progress-track .is-blue {
-  background: #356fb2;
+.metric-card.is-blue .metric-track i {
+  background: #2f6bbf;
 }
 
-.progress-track .is-orange {
-  background: #d99837;
+.metric-card.is-teal strong,
+.metric-card.is-teal header em {
+  color: #2aa5a5;
 }
 
-.progress-track .is-red {
-  background: #cf5954;
+.metric-card.is-teal .metric-track i {
+  background: #2aa5a5;
 }
 
-.trend-chart {
-  height: 250px;
+.metric-card.is-orange strong,
+.metric-card.is-orange header em {
+  color: #d98a1c;
+}
+
+.metric-card.is-orange .metric-track i {
+  background: #ef9b2d;
+}
+
+.metric-card.is-green strong,
+.metric-card.is-green header em {
+  color: #2f8f57;
+}
+
+.metric-card.is-green .metric-track i {
+  background: #37b26c;
+}
+
+.stat-strip {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 14px;
-  align-items: end;
-  padding: 18px 6px 0;
-  border-bottom: 1px solid rgba(46, 74, 109, 0.1);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: rgba(248, 251, 255, 0.92);
 }
 
-.trend-column {
-  height: 100%;
+.strip-item {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
   gap: 4px;
-  align-items: end;
-  position: relative;
-  padding-bottom: 24px;
 }
 
-.trend-column small {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 2px;
+.strip-item span {
   color: var(--muted);
-  text-align: center;
+  font-size: 12px;
 }
 
-.bar {
-  min-height: 12px;
-  border-radius: 4px 4px 0 0;
+.strip-item strong {
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
 }
 
-.bar.is-survey {
-  background: #356fb2;
+.strip-item em {
+  margin-left: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 600;
 }
 
-.bar.is-request {
-  background: #d99837;
-}
-
-.bar.is-archive {
-  background: #57975d;
-}
-
-.todo-item {
-  min-height: 58px;
-  padding: 10px 12px;
-  border: 1px solid rgba(46, 74, 109, 0.1);
-  border-radius: 7px;
-  background: rgba(248, 251, 255, 0.82);
-}
-
-.todo-item div {
-  min-width: 0;
+/* ---------------------------------------------------------------- 漏斗 */
+.funnel-wrap {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: 16px;
   flex: 1;
+  min-height: 0;
+}
+
+.funnel-list {
   display: grid;
-  gap: 4px;
+  align-content: space-between;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-.todo-item small,
-.diff-row small,
-.change-card small,
-.ranking-row small {
+.funnel-list li {
+  display: grid;
+  grid-template-columns: 110px 74px 56px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.funnel-label {
+  font-weight: 700;
+}
+
+.funnel-list strong {
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.funnel-list em {
+  color: #2f6bbf;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 700;
+  text-align: right;
+}
+
+.funnel-list small {
+  grid-column: 4 / -1;
   color: var(--muted);
+  font-size: 11px;
 }
 
-.todo-mark {
-  width: 9px;
-  height: 36px;
+.funnel-track {
+  grid-row: 1 / 3;
+  grid-column: 4;
+  align-self: center;
+  height: 8px;
+  overflow: hidden;
   border-radius: 999px;
+  background: rgba(46, 74, 109, 0.09);
 }
 
-.todo-mark.is-red {
-  background: #cf5954;
+.funnel-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2f6bbf, #2aa5a5);
 }
 
-.todo-mark.is-orange {
-  background: #d99837;
-}
-
-.todo-mark.is-blue {
-  background: #356fb2;
-}
-
-.todo-mark.is-brown {
-  background: #7b643f;
-}
-
-.ranking-row {
-  grid-template-columns: 110px minmax(0, 1fr) 56px 92px;
-}
-
-.change-grid {
+/* ---------------------------------------------------------------- 区域榜 */
+.region-board {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 20px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 
-.change-card {
-  padding: 12px;
-  border-radius: 7px;
-  background: rgba(53, 95, 159, 0.07);
+.region-column h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  letter-spacing: 0.5px;
 }
 
-.change-card strong {
+.region-column h3.is-good {
+  color: #2f8f57;
+}
+
+.region-column h3.is-risk {
+  color: #cf5954;
+}
+
+.region-row {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr) 52px 62px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px dashed rgba(56, 122, 196, 0.12);
+}
+
+.region-row.is-alert .region-name {
+  color: #cf5954;
+  font-weight: 700;
+}
+
+.region-name {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.region-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(46, 74, 109, 0.09);
+}
+
+.region-track i {
   display: block;
-  margin: 8px 0 4px;
-  font-size: 24px;
+  height: 100%;
+  border-radius: inherit;
 }
 
-.parcel-map {
-  height: 360px;
-  background:
-    linear-gradient(rgba(75, 114, 75, 0.12) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(75, 114, 75, 0.12) 1px, transparent 1px),
-    linear-gradient(135deg, #eff7ec, #e7f1f4);
-  background-size: 42px 42px, 42px 42px, auto;
+.region-track i.is-good {
+  background: #37b26c;
 }
 
-.plot {
-  border-radius: 7px;
+.region-track i.is-risk {
+  background: #ef9b2d;
 }
 
-.plot.is-ok {
-  background: rgba(87, 151, 93, 0.58);
+.region-row strong {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
-.plot.is-warn {
-  background: rgba(226, 168, 72, 0.68);
+.region-row small {
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
 }
 
-.plot.is-risk {
-  background: rgba(207, 89, 84, 0.68);
+/* ---------------------------------------------------------------- 预警 */
+.alert-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: auto;
 }
 
-.diff-row {
-  padding: 11px 12px;
-  border-radius: 7px;
+.alert-list li {
+  display: grid;
+  grid-template-columns: 6px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
   background: rgba(248, 251, 255, 0.9);
 }
 
-.diff-row div {
-  display: grid;
-  gap: 4px;
+.alert-mark {
+  align-self: stretch;
+  border-radius: 999px;
+  background: #9aacc0;
 }
 
-.diff-row span {
-  color: #c95454;
-  font-weight: 800;
+.alert-list li.is-high .alert-mark {
+  background: #ea5a69;
 }
 
-.category-row {
-  grid-template-columns: 110px minmax(0, 1fr) 90px;
+.alert-list li.is-medium .alert-mark {
+  background: #ef9b2d;
 }
 
-.workflow-funnel {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
+.alert-list li.is-low .alert-mark {
+  background: #2f6bbf;
 }
 
-.funnel-step {
-  min-height: 140px;
-  display: grid;
-  align-content: center;
-  gap: 8px;
-  padding: 14px;
-  border-radius: 7px;
-  background: linear-gradient(180deg, rgba(53, 95, 159, 0.1), rgba(255, 255, 255, 0.92));
-  text-align: center;
+.alert-list strong {
+  font-size: 14px;
 }
 
-.funnel-step strong {
-  font-size: 28px;
-  color: #25456e;
-}
-
-.funnel-step small {
+.alert-list p {
+  margin: 3px 0 0;
   color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
-.archive-score {
-  display: grid;
-  grid-template-columns: 150px minmax(0, 1fr);
-  gap: 16px;
-  align-items: center;
+.alert-list em {
+  font-size: 18px;
+  font-style: normal;
+  font-weight: 700;
+  color: #1d3f6b;
 }
 
-.score-ring {
-  width: 142px;
-  height: 142px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle, #fff 56%, transparent 57%),
-    conic-gradient(#57975d 0 86%, rgba(46, 74, 109, 0.1) 86% 100%);
-  color: #2f6b40;
-  font-size: 28px;
-  font-weight: 800;
-}
-
-.score-notes {
-  display: grid;
-  gap: 10px;
+/* ---------------------------------------------------------------- 页脚 */
+.screen-foot {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 4px 0;
   color: var(--muted);
-}
-
-@media (max-width: 1180px) {
-  .metric-grid,
-  .overview-grid,
-  .analysis-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .metric-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .wide-panel,
-  .map-panel {
-    grid-column: 1 / -1;
-  }
-}
-
-@media (max-width: 760px) {
-  .viz-toolbar,
-  .panel-head {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .viz-actions,
-  .batch-select {
-    width: 100%;
-  }
-
-  .metric-grid,
-  .overview-grid,
-  .analysis-grid,
-  .workflow-funnel,
-  .archive-score {
-    grid-template-columns: 1fr;
-  }
-
-  .viz-tabs {
-    overflow-x: auto;
-  }
-
-  .ranking-row,
-  .category-row {
-    grid-template-columns: 1fr;
-    align-items: start;
-  }
+  font-size: 12px;
 }
 </style>

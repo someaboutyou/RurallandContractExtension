@@ -510,6 +510,9 @@ const ui = {
   mapClickHit: "\u5df2\u901a\u8fc7\u5730\u56fe\u70b9\u51fb\u547d\u4e2d\u56fe\u5c42 ",
   parcelClickHit: "\u5df2\u547d\u4e2d\u627f\u5305\u5730\u5757 ",
   clickPoint: "\u70b9\u51fb\u70b9",
+  parcelOutOfScope:
+    "该地块不在您的数据权限范围内，无法查看详情。如需查询该区域地块，请联系管理员为您开通对应区域的数据权限。",
+  parcelQueryFailed: "地块信息查询失败，请稍后重试。",
   meters: "\u7c73",
   squareMeters: "\u5e73\u65b9\u7c73",
   unknown: "-",
@@ -1027,10 +1030,22 @@ function buildCapabilitiesUrl(rawUrl, serviceType) {
 
 function getWmtsLayerConfig(config) {
   const { baseUrl, params } = parseServiceUrl(config.serviceUrl);
+  const layer = params.LAYER || params.LAYERS || "";
+  // GeoServer 里工作区级样式在 WMTS 端的标识符是全限定名（workspace:style）。
+  // 配置里若只写了短名（历史上的写法），GWC 会返回
+  // 400 "Style 'xxx' is invalid." 导致整层空白；这里补全工作区前缀。
+  const rawStyle = params.STYLE ?? "";
+  let style = rawStyle;
+  if (style && !style.includes(":")) {
+    const workspace = layer.includes(":") ? layer.split(":")[0] : "";
+    if (workspace) {
+      style = `${workspace}:${style}`;
+    }
+  }
   return {
     baseUrl,
-    layer: params.LAYER || params.LAYERS || "",
-    style: params.STYLE ?? "",
+    layer,
+    style,
     matrixSet: params.TILEMATRIXSET || "",
     format: params.FORMAT || "image/png",
   };
@@ -1599,19 +1614,61 @@ async function showPropertyPanel() {
   propertyPanelVisible.value = true;
 }
 
+// 地块详情请求结果：ok=取到数据 empty=无数据 denied=超出数据权限 failed=其他异常
+let lastOutOfScopeNotice = { code: "", at: 0 };
+
+function notifyParcelOutOfScope(code) {
+  const now = Date.now();
+  // 同一地块连续点击只提示一次，避免叠出一串一样的弹窗
+  if (lastOutOfScopeNotice.code === code && now - lastOutOfScopeNotice.at < 4000) {
+    return;
+  }
+  lastOutOfScopeNotice = { code, at: now };
+  queryMessage.value = ui.parcelOutOfScope;
+  ElMessage({
+    type: "warning",
+    message: ui.parcelOutOfScope,
+    duration: 4000,
+    showClose: true,
+  });
+}
+
+function resolveParcelRequestFailure(error, code) {
+  const status = error?.response?.status;
+  const body = error?.response?.data;
+  // 授权拦截（license_required）与登录失效已由全局拦截器统一处理，这里不重复提示
+  if (body?.error === "license_required" || status === 401) {
+    return "failed";
+  }
+  if (status === 403) {
+    notifyParcelOutOfScope(code);
+    return "denied";
+  }
+  queryMessage.value = ui.parcelQueryFailed;
+  ElMessage.warning(ui.parcelQueryFailed);
+  return "failed";
+}
+
+function clearParcelSelection() {
+  parcelHighlightLayer?.getSource?.().clear();
+  parcelPopupOverlay?.setPosition(undefined);
+  selectedParcel.value = null;
+  propertyPanelVisible.value = false;
+}
+
 async function applyParcelSelection(dkbm, coordinate, fallbackFeature = null) {
   if (!dkbm) {
-    return false;
+    return "empty";
   }
   let parcel = null;
   try {
     const { data } = await fetchGisParcel(dkbm);
     parcel = data.data;
-    if (!parcel) {
-      return false;
-    }
-  } catch (_error) {
-    return false;
+  } catch (error) {
+    return resolveParcelRequestFailure(error, dkbm);
+  }
+  if (!parcel) {
+    return "empty";
   }
 
   selectedParcel.value = parcel;
@@ -1625,22 +1682,22 @@ async function applyParcelSelection(dkbm, coordinate, fallbackFeature = null) {
     console.warn("Failed to highlight parcel:", error);
   }
   queryMessage.value = `${ui.parcelClickHit}${parcel.dkbm}`;
-  return true;
+  return "ok";
 }
 
 async function locateParcelByCode(dkbm, silent = false) {
   if (!dkbm) {
-    return false;
+    return "empty";
   }
   let parcel = null;
   try {
     const { data } = await fetchGisParcel(dkbm);
     parcel = data.data;
-  } catch (_error) {
-    return false;
+  } catch (error) {
+    return resolveParcelRequestFailure(error, dkbm);
   }
   if (!parcel) {
-    return false;
+    return "empty";
   }
 
   selectedParcel.value = parcel;
@@ -1656,7 +1713,7 @@ async function locateParcelByCode(dkbm, silent = false) {
   if (!silent) {
     queryMessage.value = `${ui.parcelClickHit}${parcel.dkbm}`;
   }
-  return true;
+  return "ok";
 }
 
 function buildWmsFeatureInfoUrl(instance, coordinate) {
@@ -1737,7 +1794,13 @@ async function fetchWmsFeatureInfo(coordinate) {
       const layerLabel = parentRow?.name || parentKey || "WMS";
       const properties = features[0].properties || {};
       const dkbm = getFeatureProperty(properties, ["dkbm", "DKBM", "source_dkbm", "SOURCE_DKBM", "地块代码"]);
-      if (await applyParcelSelection(dkbm, coordinate, features[0])) {
+      const selection = await applyParcelSelection(dkbm, coordinate, features[0]);
+      if (selection === "ok") {
+        return true;
+      }
+      if (selection === "denied") {
+        // 超出数据权限：权限提示已给出，这里只清掉选中态，不再覆盖提示文案
+        clearParcelSelection();
         return true;
       }
       selectedParcel.value = null;
@@ -2109,10 +2172,10 @@ function clearLabels() {
 }
 
 async function applyRequestResult(item, silent = false) {
-  const located = await locateParcelByCode(item.primaryParcelCode, true);
+  const located = (await locateParcelByCode(item.primaryParcelCode, true)) === "ok";
   if (!located) {
     await fitToPrimaryLayer();
-    selectedParcel.value = null;
+    clearParcelSelection();
   }
   activeParcelTab.value = located ? "contract" : "contractor";
   updateAttrsByEntries([
@@ -2132,10 +2195,10 @@ async function applyRequestResult(item, silent = false) {
 }
 
 async function applyIssuerResult(item) {
-  const located = await locateParcelByCode(item.primaryParcelCode, true);
+  const located = (await locateParcelByCode(item.primaryParcelCode, true)) === "ok";
   if (!located) {
     await fitToPrimaryLayer();
-    selectedParcel.value = null;
+    clearParcelSelection();
   }
   activeParcelTab.value = located ? "issuer" : "contractor";
   updateAttrsByEntries([
@@ -2164,10 +2227,10 @@ async function applyContractorResult(item) {
       contractorParcels.value = [];
     }
   }
-  const located = await locateParcelByCode(item.primaryParcelCode, true);
+  const located = (await locateParcelByCode(item.primaryParcelCode, true)) === "ok";
   if (!located) {
     await fitToPrimaryLayer();
-    selectedParcel.value = null;
+    clearParcelSelection();
   }
   if (selectedParcel.value) {
     contractorInfo.value = { ...selectedParcel.value };
@@ -2197,7 +2260,9 @@ async function selectContractorParcel(dkbm) {
   try {
     const { data } = await fetchGisParcel(dkbm);
     parcel = data.data;
-  } catch (_error) {
+  } catch (error) {
+    activeContractorParcelDkbm.value = null;
+    resolveParcelRequestFailure(error, dkbm);
     return;
   }
   if (!parcel) return;
@@ -2283,8 +2348,13 @@ async function performQuery() {
     queryMessage.value = `${ui.requestMatched}${searchResult.value.requests.length}${ui.requestMatchedSuffix}`;
   } else {
     const located = await locateParcelByCode(keyword, true);
-    queryMessage.value = located ? `${ui.parcelClickHit}${keyword}` : ui.notFound;
-    if (!located) {
+    if (located === "denied") {
+      // 权限提示已弹出，别覆盖成"未查询到匹配的业务对象"
+      queryMessage.value = ui.parcelOutOfScope;
+    } else {
+      queryMessage.value = located === "ok" ? `${ui.parcelClickHit}${keyword}` : ui.notFound;
+    }
+    if (located !== "ok") {
       await fitToPrimaryLayer();
     }
   }

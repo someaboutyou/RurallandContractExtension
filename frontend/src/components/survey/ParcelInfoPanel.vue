@@ -254,7 +254,18 @@
         </el-table>
 
         <div v-if="selectedParcel" class="parcel-detail" :class="{ 'is-removed': isHistoricalParcel(selectedParcel) }">
-          <div class="parcel-detail-title">{{ selectedParcel.dkmc || '地块详情' }}</div>
+          <div class="parcel-detail-title">
+            <span>{{ selectedParcel.dkmc || '地块详情' }}</span>
+            <el-button
+              type="primary"
+              plain
+              size="small"
+              :disabled="actionDisabled"
+              @click="openBoundaryDialog"
+            >
+              界址点 / 界址线维护
+            </el-button>
+          </div>
           <el-form label-position="top" size="small" :disabled="isHistoricalParcel(selectedParcel)">
             <div class="parcel-detail-grid">
               <el-form-item label="地块编码">
@@ -492,6 +503,11 @@
       @done="handleAddParcelDone"
       @closed="handleAddParcelDialogClosed"
     />
+    <BoundaryMaintainDialog
+      ref="boundaryDialog"
+      :can-manage="canManage"
+      @saved="handleBoundarySaved"
+    />
   </div>
 </template>
 
@@ -500,6 +516,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { ElMessage } from "element-plus";
 
 import AddParcelDialog from "./AddParcelDialog.vue";
+import BoundaryMaintainDialog from "./BoundaryMaintainDialog.vue";
 import { useDialogMap } from "../../composables/useDialogMap";
 import { useParcelDraftMap } from "../../composables/survey/useParcelDraftMap";
 import { useSplitParcel } from "../../composables/survey/useSplitParcel";
@@ -536,9 +553,10 @@ const props = defineProps({
   rollbackChangeLoadingId: { type: [Number, String], default: null },
 });
 
-const emit = defineEmits(["swap-parcels", "add-parcel", "split-parcel", "remove-parcel", "rollback-saved-swap", "rollback-saved-split", "undo-pending-remove", "rollback-saved-remove"]);
+const emit = defineEmits(["swap-parcels", "add-parcel", "split-parcel", "remove-parcel", "rollback-saved-swap", "rollback-saved-split", "undo-pending-remove", "rollback-saved-remove", "boundary-saved"]);
 
 const addParcelDialog = ref(null);
+const boundaryDialog = ref(null);
 const mapRoot = ref(null);
 const selectedParcel = ref(null);
 
@@ -707,6 +725,24 @@ function selectParcel(parcel) {
   selectedParcel.value = parcel;
   draftMap.focusParcel(parcel.dkbm);
   selectParcelInSplitMode(parcel);
+}
+
+// --- 界址点 / 界址线维护 ---
+function openBoundaryDialog() {
+  const parcel = selectedParcel.value;
+  if (!parcel || !parcel.dkbm) {
+    ElMessage.warning("请先在右侧列表中选中需要维护的地块");
+    return;
+  }
+  boundaryDialog.value?.open({
+    batchId: props.batchId,
+    contractorUid: props.contractorUid,
+    dkbm: parcel.dkbm,
+  });
+}
+
+function handleBoundarySaved({ dkbm }) {
+  emit("boundary-saved", { dkbm });
 }
 
 function handleSplitParcel() {
@@ -962,7 +998,7 @@ onBeforeUnmount(() => {
 }
 .parcel-detail { flex-shrink: 0; max-height: 36vh; overflow-y: auto; border-radius: 4px; padding: 10px 12px; border: 1px solid #ebeef5; }
 .parcel-detail.is-removed { background: #f4f4f5; }
-.parcel-detail-title { color: #303133; font-size: 14px; font-weight: 600; margin-bottom: 10px; }
+.parcel-detail-title { color: #303133; font-size: 14px; font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .parcel-detail-grid { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .parcel-detail :deep(.el-form-item) { margin-bottom: 10px; }
 .parcel-detail :deep(.el-form-item__label) { padding: 0 0 4px; font-size: 12px; }

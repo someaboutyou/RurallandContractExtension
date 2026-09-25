@@ -12,6 +12,20 @@ class Settings(BaseSettings):
         # 生产环境 / 单端口部署
         "http://127.0.0.1:8000",
         "http://localhost:8000",
+        # Capacitor 移动端（内置资源模式）
+        #
+        # WebView 里页面的 origin 是 `http://localhost` —— **不带端口**，
+        # 与上面的 `http://localhost:8000` 不是同一个字符串，CORS 是精确匹配，必须单独列出。
+        # 此时 App 用绝对地址请求后端属于跨域，而请求带 `Authorization` 头会触发
+        # 预检（OPTIONS），白名单缺了它就在浏览器/WebView 侧直接被拦，表现为"连不上后端"。
+        #
+        # ⚠️ 只有 Capacitor「在线模式」（capacitor.config.json 配了 server.url，
+        # 页面从服务器加载）才是同源、不需要这些；当前工程用的是内置资源模式。
+        # origin 的具体形态取决于 server.androidScheme：
+        #   http（当前）→ http://localhost ｜ https → https://localhost ｜ iOS 默认 → capacitor://localhost
+        "http://localhost",
+        "https://localhost",
+        "capacitor://localhost",
     ]
     database_host: str = "127.0.0.1"
     database_port: int = 5432

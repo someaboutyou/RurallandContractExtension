@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, inspect as sa_inspect, select, text
+from sqlalchemy import inspect as sa_inspect, select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.sqltypes import (
     Date as SADate,
@@ -24,6 +24,7 @@ from sqlalchemy.sql.sqltypes import (
     Numeric as SANumeric,
 )
 
+from app.db.sequences import next_no as generate_business_no
 from app.models.data_import import DataImportBatch, DataImportOperation, DataImportRow
 from app.models.region import Region
 from app.services.data_access_service import data_access_service
@@ -242,6 +243,21 @@ def primary_key_snapshot(instance) -> dict:
     }
 
 
+# Tables that have a PostGIS geom column written outside the ORM.
+_GEOMETRY_TABLES = frozenset({"survey_dk_result"})
+
+
+def _capture_geom(db: Session, table_name: str, row_id: int) -> str | None:
+    """Read the current geom as GeoJSON (EPSG:4326) from *table_name*."""
+    if table_name not in _GEOMETRY_TABLES:
+        return None
+    row = db.execute(
+        text(f"SELECT ST_AsGeoJSON(ST_Transform(geom, 4326)) FROM {table_name} WHERE id = :id"),
+        {"id": row_id},
+    ).first()
+    return row[0] if row and row[0] else None
+
+
 def record_operation(
     db: Session,
     batch: DataImportBatch,
@@ -251,9 +267,21 @@ def record_operation(
     before_snapshot: dict | None,
     chunk_no: int,
 ) -> None:
-    """Persist an ``DataImportOperation`` row for rollback tracking."""
-    if operation_type != "update" or before_snapshot is None:
+    """Persist a ``DataImportOperation`` row for rollback tracking.
+
+    Only **update** operations are recorded here.  Insert operations are
+    not logged because rollback can identify inserted rows via the
+    ``source_import_batch_id`` field on the target model, keeping the
+    operations table small.
+    """
+    # INSERT — nothing to log; rollback will delete by source_import_batch_id.
+    if operation_type == "insert":
         return
+
+    # UPDATE — capture before_snapshot (including geometry) for rollback.
+    snapshot = dict(before_snapshot) if before_snapshot else {}
+    if instance.__tablename__ in _GEOMETRY_TABLES:
+        snapshot["geom"] = _capture_geom(db, instance.__tablename__, instance.id)
     db.add(
         DataImportOperation(
             tenant_code=batch.tenant_code,
@@ -264,8 +292,8 @@ def record_operation(
             chunk_no=chunk_no,
             table_name=instance.__tablename__,
             primary_key=primary_key_snapshot(instance),
-            operation_type=operation_type,
-            before_snapshot=before_snapshot,
+            operation_type="update",
+            before_snapshot=snapshot,
             after_snapshot=snapshot_model(instance),
         )
     )
@@ -298,11 +326,16 @@ def restore_snapshot(instance, snapshot: dict) -> None:
 
 def get_by_primary_key(db: Session, model, primary_key: dict):
     mapper = sa_inspect(model).mapper
+    column_attrs = {col.key: col for col in mapper.column_attrs}
     values = []
-    for column in mapper.primary_key:
-        if column.key not in primary_key:
+    for pk_col in mapper.primary_key:
+        if pk_col.key not in primary_key:
             return None
-        values.append(restore_value(column, primary_key[column.key]))
+        attr = column_attrs.get(pk_col.key)
+        if attr is not None:
+            values.append(restore_value(attr, primary_key[pk_col.key]))
+        else:
+            values.append(primary_key[pk_col.key])
     return db.get(model, values[0] if len(values) == 1 else tuple(values))
 
 
@@ -334,12 +367,38 @@ def resolve_import_region(db: Session, data: dict, current_user) -> tuple[str, s
 
 
 def resolve_code_region(value: str | None, current_user) -> str:
-    return data_access_service.normalize_region_code(value, current_user)
+    region_code = data_access_service.normalize_region_code(value)
+    data_access_service.ensure_region_in_scope(current_user, region_code, detail="import row out of authorized scope")
+    return region_code
 
 
-def next_no(db: Session, prefix: str, id_column) -> str:
-    next_id = (db.scalar(select(func.max(id_column))) or 0) + 1
-    return f"{prefix}{datetime.now():%Y%m%d}{next_id:04d}"
+def resolve_effective_import_region(
+    batch: DataImportBatch,
+    current_user,
+    *candidates: str | None,
+) -> str:
+    region_code = next(
+        (data_access_service.normalize_region_code(value) for value in candidates if value),
+        None,
+    )
+    if not region_code:
+        raise ValueError("cannot derive import row region")
+    data_access_service.ensure_region_in_scope(current_user, region_code, detail="import row out of authorized scope")
+    data_access_service.ensure_region_contains(
+        batch.region_code,
+        region_code,
+        detail="import row is outside the selected batch region",
+    )
+    return region_code
+
+
+def next_no(db: Session, prefix: str, id_column=None) -> str:
+    """业务编号统一入口（走 PostgreSQL 序列，见 ``app.db.sequences``）。
+
+    旧实现是 ``max(id)+1``：删行后会回退导致编号重复、并发会撞号，已废弃。
+    ``id_column`` 只为兼容旧调用签名保留。
+    """
+    return generate_business_no(db, prefix, id_column)
 
 
 # ===========================================================================

@@ -1,10 +1,12 @@
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_permission
+from app.models.data_import import DataImportBatch
 from app.models.user import User
 from app.schemas.data_import import (
     DataImportBatchCreate,
@@ -97,6 +99,49 @@ async def upload_import_gdb(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contractors.manage")),
 ):
+    # Check 1: batch exists
+    batch = db.get(DataImportBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导入批次不存在")
+
+    # Check 2: active upload check
+    progress = data_import_progress.get(batch_id)
+    if progress and progress.get("status") in ("queued", "running", "processing", "cancel_requested"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该批次正在导入中，请等待完成后再上传")
+    if batch.status == "processing":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该批次正在导入中，请等待完成后再上传")
+
+    # Check 3: region containment
+    if batch.region_code:
+        from sqlalchemy import or_
+        active_statuses = ("uploaded", "processing", "success", "partial_success")
+        other_batches = db.scalars(
+            select(DataImportBatch).where(
+                DataImportBatch.id != batch_id,
+                DataImportBatch.region_code.isnot(None),
+                DataImportBatch.region_code != "",
+                DataImportBatch.status.in_(active_statuses),
+            )
+        ).all()
+        for other in other_batches:
+            if not other.region_code:
+                continue
+            if other.region_code == batch.region_code:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"该区域已有其他导入批次「{other.import_name}」（{other.import_no}），同级区域不能重复导入",
+                )
+            if batch.region_code.startswith(other.region_code) and other.region_code != batch.region_code:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"该区域的上级区域「{other.region_name or other.region_code}」已有导入批次「{other.import_name}」，下级区域不能再导入",
+                )
+            if other.region_code.startswith(batch.region_code) and other.region_code != batch.region_code:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"该区域的下级区域「{other.region_name or other.region_code}」已有导入批次「{other.import_name}」，导入上级区域会覆盖下级数据",
+                )
+
     user_id = current_user.id
     try:
         return {"data": await data_import_service.start_gdb_import_job(db, batch_id, file, current_user, background_tasks)}
@@ -116,39 +161,37 @@ def get_import_progress(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contractors.view")),
 ):
+    batch = db.get(DataImportBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导入批次不存在")
     progress = data_import_progress.get(batch_id)
     if not progress:
-        batch = db.get(data_import_service.batch_model, batch_id) if hasattr(data_import_service, "batch_model") else None
-        if batch is None:
-            from app.models.data_import import DataImportBatch
-
-            batch = db.get(DataImportBatch, batch_id)
-        if batch is None:
-            progress = {"batchId": batch_id, "status": "unknown", "message": "暂无导入进度"}
-        else:
-            total = batch.total_count or 0
-            processed = (batch.success_count or 0) + (batch.failed_count or 0)
-            progress = {
-                "batchId": batch.id,
-                "jobId": None,
-                "status": batch.status,
-                "currentLayer": None,
-                "totalRows": total,
-                "processedRows": processed,
-                "successRows": batch.success_count or 0,
-                "failedRows": batch.failed_count or 0,
-                "percent": round(processed * 100 / total, 2) if total else 0,
-                "message": "后台导入中，可稍后刷新进度" if batch.status == "processing" else "暂无实时进度",
-                "cancelRequested": data_import_progress.is_cancel_requested(batch_id),
-            }
+        total = batch.total_count or 0
+        processed = (batch.success_count or 0) + (batch.failed_count or 0)
+        progress = {
+            "batchId": batch.id,
+            "jobId": None,
+            "status": batch.status,
+            "currentLayer": None,
+            "totalRows": total,
+            "processedRows": processed,
+            "successRows": batch.success_count or 0,
+            "failedRows": batch.failed_count or 0,
+            "percent": round(processed * 100 / total, 2) if total else 0,
+            "message": "后台导入中，可稍后刷新进度" if batch.status == "processing" else "暂无实时进度",
+            "cancelRequested": data_import_progress.is_cancel_requested(batch_id),
+        }
     return {"data": progress}
 
 
 @router.post("/{batch_id}/cancel", response_model=ApiResponse[DataImportProgressRead])
 def cancel_import(
     batch_id: int,
+    db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contractors.manage")),
 ):
+    if db.get(DataImportBatch, batch_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导入批次不存在")
     data_import_progress.request_cancel(batch_id)
     progress = data_import_progress.get(batch_id) or {"batchId": batch_id, "status": "cancel_requested"}
     progress["cancelRequested"] = True

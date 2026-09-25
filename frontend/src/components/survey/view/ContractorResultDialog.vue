@@ -6,7 +6,10 @@
       <el-button v-if="canRollbackSplitHousehold" type="warning" plain size="small" :loading="rollbackingSplitHousehold" @click="handleRollbackSplitHousehold">撤回分户</el-button>
       <el-button plain size="small" :disabled="dataReadOnly" @click="handleOpMergeHousehold">合并户</el-button>
       <el-button v-if="canRollbackMergeHousehold" type="warning" plain size="small" :loading="rollbackingMergeHousehold" @click="handleRollbackMergeHousehold">撤回合户</el-button>
-      <span v-if="!canManage || isResultLocked" class="toolbar-lock-hint">（当前为只读模式）</span>
+      <span class="toolbar-print">
+        <el-button type="primary" plain size="small" :loading="printingCadastral" :disabled="isCreatingContractorResult" @click="handlePrintCadastral">打印地籍调查表</el-button>
+      </span>
+      <span v-if="dataReadOnly" class="toolbar-lock-hint">（当前为只读模式，只能查看详细信息）</span>
     </div>
     <el-alert v-if="pendingOperations.length" type="warning" :closable="false" show-icon class="pending-operation-alert" :title="`当前有 ${pendingOperations.length} 项操作尚未保存，请点击保存调查结果统一提交。`" />
     <div v-if="pendingOperations.length" class="pending-operation-list">
@@ -15,38 +18,47 @@
         <el-button v-if="canUndoPendingOperation(operation)" link type="danger" size="small" @click="handleUndoPendingOperationPreview(index)">撤销</el-button>
       </div>
     </div>
-    <el-tabs v-model="activeTab">
-      <el-tab-pane :label="`承包方及其家庭成员（${resultForm.familyMembers.length}人）`" name="contractor">
+    <el-collapse v-model="openPanels" class="survey-collapse" @change="handlePanelsChange">
+      <el-collapse-item name="contractor" :title="`承包方及其家庭成员（${resultForm.familyMembers.length}人）`">
         <ContractorMemberPanel ref="contractorMemberPanel" :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :result="resultForm" :changed-fields="computedChangedFields" :readonly="dataReadOnly" :can-generate-code="!dataReadOnly && resultForm.resultStatus === 'added'" @generate-code="generateResultContractorCode" />
-      </el-tab-pane>
-      <el-tab-pane label="地块信息" name="parcels" :disabled="isCreatingContractorResult" lazy>
-        <ParcelInfoPanel :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :parcels="parcels" :parcels-loading="parcelsLoading" :can-manage="canManage" :is-result-locked="dataReadOnly" :saved-swap-records="savedSwapRecords" :saved-split-records="savedSplitRecords" :saved-remove-records="savedRemoveRecords" :can-rollback-saved-parcel-change="canRollbackSavedParcelChange" :rollback-change-loading-id="rollbackingSavedChangeId" @swap-parcels="handleOpSwapParcels" @add-parcel="handlePendingOperation" @split-parcel="handlePendingOperation" @remove-parcel="handleOpRemoveParcel" @rollback-saved-swap="handleRollbackSavedSwap" @rollback-saved-split="handleRollbackSavedSplit" @rollback-saved-remove="handleRollbackSavedRemove" @undo-pending-remove="handleUndoPendingRemoveFromPanel" />
-      </el-tab-pane>
-      <el-tab-pane label="承包地块示意图" name="plotSketchMap" :disabled="isCreatingContractorResult" lazy>
-        <PlotSketchMapPanel :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :refresh-key="plotSketchRefreshKey" />
-      </el-tab-pane>
-      <el-tab-pane label="合同信息" name="contract" :disabled="isCreatingContractorResult" lazy>
-        <ContractInfoPanel :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" />
-      </el-tab-pane>
-    </el-tabs>
-    <el-collapse v-if="!isCreatingContractorResult" class="survey-aux-panel">
+      </el-collapse-item>
+      <el-collapse-item title="地块信息" name="parcels" :disabled="isCreatingContractorResult">
+        <ParcelInfoPanel v-if="isPanelMounted('parcels')" :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :parcels="parcels" :parcels-loading="parcelsLoading" :can-manage="canManage && canWrite" :is-result-locked="dataReadOnly" :saved-swap-records="savedSwapRecords" :saved-split-records="savedSplitRecords" :saved-remove-records="savedRemoveRecords" :can-rollback-saved-parcel-change="canRollbackSavedParcelChange" :rollback-change-loading-id="rollbackingSavedChangeId" @swap-parcels="handleOpSwapParcels" @add-parcel="handlePendingOperation" @split-parcel="handlePendingOperation" @remove-parcel="handleOpRemoveParcel" @rollback-saved-swap="handleRollbackSavedSwap" @rollback-saved-split="handleRollbackSavedSplit" @rollback-saved-remove="handleRollbackSavedRemove" @undo-pending-remove="handleUndoPendingRemoveFromPanel" />
+      </el-collapse-item>
+      <el-collapse-item title="承包地块示意图" name="plotSketchMap" :disabled="isCreatingContractorResult">
+        <PlotSketchMapPanel v-if="isPanelMounted('plotSketchMap')" :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :refresh-key="plotSketchRefreshKey" />
+      </el-collapse-item>
+      <el-collapse-item title="合同信息" name="contract" :disabled="isCreatingContractorResult">
+        <ContractInfoPanel
+          v-if="isPanelMounted('contract')"
+          :batch-id="activeBatch?.id"
+          :contractor-uid="resultForm.contractorUid"
+          :can-manage="canManage && canWrite"
+          :batch-status="activeBatch?.status || 'active'"
+        />
+      </el-collapse-item>
+    </el-collapse>
+    <el-collapse v-if="!isCreatingContractorResult" v-model="openAuxPanels" class="survey-collapse survey-collapse--aux">
       <el-collapse-item title="调查附件 & 转业业务申请" name="aux">
-        <div v-if="canManage && !dataReadOnly" class="phase2-upload">
+        <div v-if="canManage && canWrite && !dataReadOnly" class="phase2-upload">
           <el-select v-model="attachmentCategory" style="width: 160px" size="small">
-            <el-option label="身份证" value="id_card" /><el-option label="户口簿" value="household_register" /><el-option label="死亡证明" value="death_certificate" /><el-option label="婚嫁证明" value="marriage_certificate" /><el-option label="进城落户证明" value="urban_settlement" /><el-option label="政策依据" value="policy_basis" /><el-option label="授权委托书" value="authorization" /><el-option label="合同扫描件" value="contract" />
+            <el-option v-for="item in attachmentCategoryOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
           <el-input v-model="attachmentDescription" placeholder="附件说明" style="width: 200px" size="small" />
           <input type="file" @change="handleAttachmentFileChange" />
           <el-button type="success" size="small" plain @click="handleUploadAttachment">上传</el-button>
         </div>
         <el-table v-loading="phase2Loading" :data="phase2.attachments" border size="small">
-          <el-table-column prop="category" label="类型" width="120" />
+          <el-table-column label="类型" width="140">
+            <template #default="{ row }">{{ surveyAttachmentCategoryLabel(row.category, attachmentCategoryOptions) }}</template>
+          </el-table-column>
           <el-table-column prop="originalName" label="文件名" min-width="200" />
           <el-table-column prop="description" label="说明" min-width="160" show-overflow-tooltip />
-          <el-table-column label="操作" width="130">
+          <el-table-column label="操作" width="170">
             <template #default="{ row }">
+              <el-button link type="success" size="small" @click="handlePreviewAttachment(row)">预览</el-button>
               <el-button link type="primary" size="small" @click="handleDownloadAttachment(row)">下载</el-button>
-              <el-button v-if="canManage && !isResultLocked" link type="danger" size="small" @click="handleDeleteAttachment(row)">删除</el-button>
+              <el-button v-if="canManage && canWrite && !isResultLocked" link type="danger" size="small" @click="handleDeleteAttachment(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -55,7 +67,7 @@
           <el-descriptions-item label="已生成申请">{{ resultForm.generatedRequestNo || "-" }}</el-descriptions-item>
           <el-descriptions-item label="建议业务类型">{{ inferRequestType(resultForm) }}</el-descriptions-item>
         </el-descriptions>
-        <el-form v-if="canManage && !resultForm.generatedRequestId" :model="requestForm" class="compact-form" label-position="top" style="margin-top:8px">
+        <el-form v-if="canManage && canWrite && !resultForm.generatedRequestId" :model="requestForm" class="compact-form" label-position="top" style="margin-top:8px">
           <div class="form-grid">
             <el-form-item label="业务类型"><el-select v-model="requestForm.requestType" size="small"><el-option label="变更登记" value="变更登记" /><el-option label="注销登记" value="注销登记" /><el-option label="首次登记" value="首次登记" /></el-select></el-form-item>
             <el-form-item label="申请标题"><el-input v-model="requestForm.requestTitle" size="small" /></el-form-item>
@@ -67,8 +79,8 @@
     </el-collapse>
     <template #footer>
       <el-button @click="close">取消</el-button>
-      <el-button v-if="canManage && !isResultLocked && (!savedTerminated || terminalPendingOperation)" :loading="savingResult || creatingContractor" type="success" @click="handleSaveResult">{{ isCreatingContractorResult ? "新增并保存" : "保存调查结果" }}</el-button>
-      <el-button v-if="canManage && !isCreatingContractorResult && !dataReadOnly && resultForm.surveyStatus !== 'not_surveyed'" :loading="confirmingResult" type="primary" @click="handleConfirmCurrent">确认调查结果</el-button>
+      <el-button v-if="canManage && canWrite && !isResultLocked && (!savedTerminated || terminalPendingOperation)" :loading="savingResult || creatingContractor" type="success" @click="handleSaveResult">{{ isCreatingContractorResult ? "新增并保存" : "保存调查结果" }}</el-button>
+      <el-button v-if="canManage && canWrite && !isCreatingContractorResult && !dataReadOnly && resultForm.surveyStatus !== 'not_surveyed'" :loading="confirmingResult" type="primary" @click="handleConfirmCurrent">确认调查结果</el-button>
     </template>
   </el-dialog>
   <DeregisterDialog ref="deregisterDialog" @done="handlePendingOperation" />
@@ -76,6 +88,15 @@
   <SplitHouseholdDialog ref="splitHouseholdDialog" @done="handlePendingOperation" />
   <MergeHouseholdDialog ref="mergeHouseholdDialog" @done="handlePendingOperation" />
   <RemoveParcelDialog ref="removeParcelDialog" @done="handlePendingOperation" />
+  <AttachmentPreviewDialog
+    v-model="previewAttachmentVisible"
+    :source="previewAttachment"
+    :loader="loadAttachmentPreviewBlob"
+    :navigation="attachmentPreviewNavigation"
+    @download="handleDownloadAttachment"
+    @prev="stepAttachmentPreview(-1)"
+    @next="stepAttachmentPreview(1)"
+  />
 </template>
 
 <script setup>
@@ -91,6 +112,7 @@ import SwapParcelsDialog from "../SwapParcelsDialog.vue";
 import SplitHouseholdDialog from "../SplitHouseholdDialog.vue";
 import MergeHouseholdDialog from "../MergeHouseholdDialog.vue";
 import RemoveParcelDialog from "../RemoveParcelDialog.vue";
+import AttachmentPreviewDialog from "../../requests/AttachmentPreviewDialog.vue";
 
 import {
   confirmSurveyResult, createSurveyAuthorization, createSurveyContractor,
@@ -98,15 +120,24 @@ import {
   deleteSurveyRestructure, disableSurveyTag, downloadSurveyAttachment,
   downloadSurveyAuthorizationFile, downloadSurveyAuthorizationTemplate,
   fetchSurveyChanges, fetchSurveyDiffs, fetchSurveyParcels, fetchSurveyPhase2,
-  fetchSurveyResult, fetchSurveyTasks, generateSurveyRequest, refreshSurveyTags,
+  fetchSurveyAttachmentCategories,
+  fetchSurveyResult, generateSurveyRequest, refreshSurveyTags,
+  fetchContractorCodes, fetchCadastralSurvey,
+  previewSurveyAttachment,
   revokeSurveyAuthorization, updateSurveyResult, uploadSurveyAttachment,
   uploadSurveyAuthorizationFile, rollbackSplitSurveyHousehold, rollbackMergeSurveyHousehold,
 } from "../../../api/survey";
+import { collectContractorCodes, fetchAllBatchTasks } from "../../../utils/surveyCandidates";
+import { FALLBACK_SURVEY_ATTACHMENT_CATEGORIES, surveyAttachmentCategoryLabel } from "../../../config/surveyAttachmentCategories";
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
   activeBatch: { type: Object, default: null },
   canManage: { type: Boolean, default: false },
+  // 任务归属：这一户是否分给当前用户（后端 SurveyTaskRead.canWrite）。
+  // false ⇒ 界面上一切照旧但全部只读：能看详细信息，不能录入。
+  // 默认 true 是为了不破坏「新增承包方」这类还没有归属行可判的入口。
+  canWrite: { type: Boolean, default: true },
   tasks: { type: Array, default: () => [] },
   activeRegionCode: { type: String, default: "" },
   activeRegionLabel: { type: String, default: "" },
@@ -118,9 +149,27 @@ const emit = defineEmits(["update:modelValue", "saved", "confirmed"]);
 const savingResult = ref(false);
 const creatingContractor = ref(false);
 const confirmingResult = ref(false);
+const printingCadastral = ref(false);
 const activeTask = ref(null);
 const isCreatingContractorResult = ref(false);
-const activeTab = ref("contractor");
+// 折叠面板：openPanels = 当前展开的面板；openedPanels = 展开过一次的面板。
+// el-collapse-item 的内容是常挂载（v-show），而地块/示意图/合同三个面板在 mount 时
+// 就会立刻拉数据，所以用 v-if 卡住首次展开 —— 不展开就不挂载，维持原 lazy tab 的请求数。
+const openPanels = ref(["contractor"]);
+const openAuxPanels = ref([]);
+const openedPanels = ref(["contractor"]);
+function isPanelMounted(name) { return openedPanels.value.includes(name); }
+async function handlePanelsChange(names) {
+  const list = Array.isArray(names) ? names : [names];
+  for (const name of list) if (!openedPanels.value.includes(name)) openedPanels.value = [...openedPanels.value, name];
+  if (list.includes("parcels")) {
+    // 地图容器需要先完成挂载，再初始化 OpenLayers。
+    await nextTick();
+    if (!parcelsLoaded.value && !parcelsLoading.value) {
+      await Promise.all([loadSurveyParcels(), loadSavedParcelChanges()]);
+    }
+  }
+}
 const plotSketchRefreshKey = ref(0);
 const contractorMemberPanel = ref(null);
 const deregisterDialog = ref(null);
@@ -154,9 +203,20 @@ const tagForm = reactive({ tagCode: "whole_family_urbanized", reason: "", policy
 const restructureForm = reactive(createEmptyRestructure());
 const authorizationForm = reactive(createEmptyAuthorization());
 const requestForm = reactive({ requestType: "变更登记", requestTitle: "", reason: "", note: "" });
-const attachmentCategory = ref("id_card");
+const attachmentCategory = ref(FALLBACK_SURVEY_ATTACHMENT_CATEGORIES[0].value);
+// 上传类别来自「附件组管理」页，加载成功就替换掉这份兜底。
+const attachmentCategoryOptions = ref([...FALLBACK_SURVEY_ATTACHMENT_CATEGORIES]);
 const attachmentDescription = ref("");
 const selectedAttachmentFile = ref(null);
+const previewAttachment = ref(null);
+const previewAttachmentVisible = ref(false);
+// 预览翻页的位置，按附件列表当前顺序（与表格同序，`phase2.attachments`）。
+const attachmentPreviewIndex = ref(-1);
+const attachmentPreviewNavigation = computed(() => {
+  const total = phase2.attachments.length;
+  if (!previewAttachmentVisible.value || attachmentPreviewIndex.value < 0 || total === 0) return null;
+  return { index: attachmentPreviewIndex.value, total };
+});
 const authorizationFileInput = ref(null);
 const authorizationUploadTarget = ref(null);
 
@@ -165,16 +225,25 @@ const resultForm = reactive(createEmptyResult());
 // ---- Computed ----
 const isResultLocked = computed(() => props.activeBatch?.status === "finished" || (!isCreatingContractorResult.value && resultForm.surveyStatus === "confirmed"));
 const terminalPendingOperation = computed(() => pendingOperations.value.find(op => ["deregister", "split_household", "merge_household"].includes(op?.type)) || null);
-const savedTerminated = computed(() => !isCreatingContractorResult.value && (resultForm.resultStatus === "cancelled" || ["deregister", "split_household", "merge_household"].includes(resultForm.changeType)));
-const dataReadOnly = computed(() => !props.canManage || isResultLocked.value || Boolean(terminalPendingOperation.value) || savedTerminated.value);
+// 这一户是否已被终结（注销 / 被合户并走 / 被分户拆走）——**只消费后端给的 isTerminal**，
+// 不自己拿 changeType 算：分户/合户**新生成**的户 changeType 与原户同值（merge_household /
+// split_household），自算会把新户一起判成"已注销"，整个表单变只读（2026-09-25 用户报
+// 「合户之后刘乃高不能修改」的界面侧根因）。与后端 `update_result` 的 400 闸门同源。
+const savedTerminated = computed(() => !isCreatingContractorResult.value && Boolean(resultForm.isTerminal));
+// 只读的四种来源：没有管理权限 / 批次已结束或成果已确认（isResultLocked）/
+// 还有未保存的终结操作 / **这一户没分给我**（!canWrite）。
+// 最后一条（2026-09-23 加）就是「未分配或已分给他人的户只能看详细信息」：
+// 界面照旧，但不给编辑、不给功能按钮。
+const dataReadOnly = computed(() => !props.canManage || !props.canWrite || isResultLocked.value || Boolean(terminalPendingOperation.value) || savedTerminated.value);
 const hasPendingOperations = computed(() => pendingOperations.value.length > 0);
-const canRollbackSavedParcelChange = computed(() => props.canManage && !isResultLocked.value && !hasPendingOperations.value);
-const canRollbackSplitHousehold = computed(() => props.canManage && props.activeBatch?.status !== "finished" && resultForm.resultStatus === "cancelled" && resultForm.changeType === "split_household" && !hasPendingOperations.value);
-const canRollbackMergeHousehold = computed(() => props.canManage && props.activeBatch?.status !== "finished" && resultForm.resultStatus === "cancelled" && resultForm.changeType === "merge_household" && !hasPendingOperations.value);
+const canRollbackSavedParcelChange = computed(() => props.canManage && props.canWrite && !isResultLocked.value && !hasPendingOperations.value);
+const canRollbackSplitHousehold = computed(() => props.canManage && props.canWrite && props.activeBatch?.status !== "finished" && resultForm.resultStatus === "cancelled" && resultForm.changeType === "split_household" && !hasPendingOperations.value);
+const canRollbackMergeHousehold = computed(() => props.canManage && props.canWrite && props.activeBatch?.status !== "finished" && resultForm.resultStatus === "cancelled" && resultForm.changeType === "merge_household" && !hasPendingOperations.value);
 
 const resultDialogTitle = computed(() => {
   const name = resultForm.name ? ` - ${resultForm.name}` : "";
-  return `${isCreatingContractorResult.value ? "新增承包方调查录入" : "承包方调查录入"}${name}`;
+  if (isCreatingContractorResult.value) return `新增承包方调查录入${name}`;
+  return `${dataReadOnly.value ? "承包方调查详情（只读）" : "承包方调查录入"}${name}`;
 });
 
 const computedChangedFields = computed(() => {
@@ -236,7 +305,7 @@ const savedRemoveRecords = computed(() =>
 
 // ---- Factories ----
 function createEmptyResult() {
-  return { contractorUid: "", code: "", typeCode: "1", name: "", idType: "1", idNo: "", address: "", postcode: "000000", mobile: "", memberCount: 0, groupRegionCode: "", groupRegionName: "", surveyDate: "", surveyorName: "", surveyNote: "", publicNoticeNote: "", publicNoticeRecorder: "", publicNoticeReviewDate: "", publicNoticeReviewer: "", surveyStatus: "surveyed", resultStatus: "normal", changeType: "none", changeReason: "", policyBasis: "", evidenceSummary: "", remark: "", baseContractor: null, issuer: null, baseIssuer: null, familyMembers: [], generatedRequestId: null, generatedRequestNo: "" };
+  return { contractorUid: "", code: "", typeCode: "1", name: "", idType: "1", idNo: "", address: "", postcode: "000000", mobile: "", memberCount: 0, groupRegionCode: "", groupRegionName: "", surveyDate: "", surveyorName: "", surveyNote: "", publicNoticeNote: "", publicNoticeRecorder: "", publicNoticeReviewDate: "", publicNoticeReviewer: "", surveyStatus: "surveyed", resultStatus: "normal", changeType: "none", changeReason: "", policyBasis: "", evidenceSummary: "", remark: "", isTerminal: false, baseContractor: null, issuer: null, baseIssuer: null, familyMembers: [], generatedRequestId: null, generatedRequestNo: "" };
 }
 function createEmptyRestructure() {
   return { restructureType: "split", sourceContractorUid: "", sourceCbfbm: "", sourceCbfmc: "", targetContractorUid: "", targetCbfbm: "", targetCbfmc: "", newCbfbm: "", newCbfmc: "", status: "draft", reason: "", policyBasis: "", rightsSummary: "", contractDisposition: "", certificateDisposition: "", remark: "", members: [] };
@@ -248,7 +317,6 @@ function createEmptyAuthorization() {
 // ---- Helpers ----
 function digitsOnly(value) { return String(value || "").replace(/\D/g, ""); }
 function cloneParcel(parcel) { return JSON.parse(JSON.stringify(parcel || {})); }
-function buildRegionParams() { const rc = props.activeBatch?.regionCode || props.activeRegionCode; return rc ? { regionCode: rc } : {}; }
 function inferRequestType(row) { return row.changeType === "extinct" || ["extinct", "cancelled"].includes(row.resultStatus) ? "注销登记" : "变更登记"; }
 function tagNameByCode(code) { return { whole_family_urbanized: "全家进城落户户", household_extinct: "整户消亡户", five_guarantees: "五保户", little_or_no_land: "无地少地户" }[code] || code; }
 function downloadBlob(data, filename) { const url = URL.createObjectURL(data); const link = document.createElement("a"); link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url); }
@@ -263,12 +331,20 @@ async function buildNextContractorCode(currentCode = "") {
   if (!prefix) return "";
   if (prefix.length >= 18) return prefix.slice(0, 18);
   const suffixLength = 18 - prefix.length;
-  let existingRows = props.tasks;
+  // 编码唯一性按「该前缀下全部承包方」判断。原实现用 page_size=10000 拉任务列表，
+  // 超出后端上限（200）会直接 422；改为专用接口，失败再退回循环分页。
+  let codes = [];
   if (props.activeBatch) {
-    const { data } = await fetchSurveyTasks(props.activeBatch.id, { page: 1, page_size: 10000, ...buildRegionParams() });
-    existingRows = data.data.items || [];
+    try {
+      const { data } = await fetchContractorCodes(props.activeBatch.id, { prefix });
+      codes = collectContractorCodes(data.data);
+    } catch {
+      codes = collectContractorCodes(await fetchAllBatchTasks(props.activeBatch.id));
+    }
+  } else {
+    codes = collectContractorCodes(props.tasks);
   }
-  const existingSuffixes = existingRows.map((i) => digitsOnly(i.cbfbm)).filter((c) => c.length === 18 && c.startsWith(prefix)).map((c) => Number(c.slice(prefix.length))).filter(Number.isFinite);
+  const existingSuffixes = codes.filter((c) => c.length === 18 && c.startsWith(prefix)).map((c) => Number(c.slice(prefix.length))).filter(Number.isFinite);
   const next = (existingSuffixes.length ? Math.max(...existingSuffixes) : 0) + 1;
   return `${prefix}${String(next).padStart(suffixLength, "0")}`.slice(0, 18);
 }
@@ -391,6 +467,39 @@ async function handleRollbackMergeHousehold() {
   } catch (error) {
     if (error !== "cancel" && error !== "close") ElMessage.error(error.response?.data?.detail || "撤回合户失败");
   } finally { rollbackingMergeHousehold.value = false; }
+}
+
+// 打印当前承包方的整套地籍调查表：封面 + 发包方调查表 + 承包方调查表
+// + 每地块一套（承包地块调查表 + 界址点坐标成果表）。
+async function handlePrintCadastral() {
+  const batchId = props.activeBatch?.id;
+  const contractorUid = resultForm.contractorUid;
+  if (!batchId || !contractorUid) {
+    ElMessage.warning("缺少批次或承包方信息，无法打印地籍调查表");
+    return;
+  }
+  printingCadastral.value = true;
+  try {
+    const { data } = await fetchCadastralSurvey(batchId, contractorUid);
+    const html = data.data?.renderedHtml || "";
+    if (!html) {
+      ElMessage.warning("无可用数据");
+      return;
+    }
+    const w = window.open("", "_blank", "width=1200,height=900");
+    if (!w) {
+      ElMessage.warning("浏览器拦截了打印窗口，请允许本站弹出窗口后重试");
+      return;
+    }
+    w.document.write(html);
+    w.document.close();
+    // 等浏览器完成排版再唤起打印对话框（多地块时 HTML 较大）。
+    setTimeout(() => w.print(), 800);
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.detail || "打印地籍调查表失败");
+  } finally {
+    printingCadastral.value = false;
+  }
 }
 
 function handlePendingOperation(operation) {
@@ -594,13 +703,46 @@ async function handleRevokeAuthorization(row) {
   await revokeSurveyAuthorization(row.id, { revokeReason: value.trim() }); await loadPhase2();
 }
 function handleAttachmentFileChange(event) { selectedAttachmentFile.value = event.target.files?.[0] || null; }
+// 类别选项来自「附件组管理」页；拿不到就退回本地兜底，别让上传功能跟着挂掉。
+async function loadAttachmentCategories() {
+  try {
+    const { data } = await fetchSurveyAttachmentCategories();
+    const items = (data.data || []).filter((item) => item.value);
+    if (items.length) attachmentCategoryOptions.value = items;
+  } catch { /* 保持兜底选项 */ }
+  if (!attachmentCategoryOptions.value.some((item) => item.value === attachmentCategory.value)) {
+    attachmentCategory.value = attachmentCategoryOptions.value[0]?.value || "";
+  }
+}
 async function handleUploadAttachment() {
+  if (!attachmentCategory.value) { ElMessage.warning("请先选择附件类型（可在「附件组管理」中配置）"); return; }
   if (!selectedAttachmentFile.value) { ElMessage.warning("请选择附件文件"); return; }
   const formData = new FormData(); formData.append("category", attachmentCategory.value); formData.append("description", attachmentDescription.value || ""); formData.append("file", selectedAttachmentFile.value);
   await uploadSurveyAttachment(props.activeBatch.id, activeTask.value.contractorUid, formData);
   selectedAttachmentFile.value = null; attachmentDescription.value = ""; await loadPhase2();
 }
 async function handleDownloadAttachment(row) { const { data } = await downloadSurveyAttachment(row.id); downloadBlob(data, row.originalName); }
+
+// 附件预览：图片 / PDF 直接在弹窗内渲染；其余类型弹窗给出提示并提供下载入口。
+// 与「业务申请附件」共用同一个预览弹窗，只是把取数换成调查附件的下载接口。
+function handlePreviewAttachment(row) {
+  const items = phase2.attachments;
+  const index = items.findIndex((item) => item.id === row.id);
+  attachmentPreviewIndex.value = index >= 0 ? index : 0;
+  previewAttachment.value = index >= 0 ? items[index] : row;
+  previewAttachmentVisible.value = true;
+}
+// 上一页 / 下一页：只换 source，弹窗内自行按新 source 重新取数。
+function stepAttachmentPreview(offset) {
+  const items = phase2.attachments;
+  const next = attachmentPreviewIndex.value + offset;
+  if (next < 0 || next >= items.length) return;
+  attachmentPreviewIndex.value = next;
+  previewAttachment.value = items[next];
+}
+function loadAttachmentPreviewBlob(item) {
+  return previewSurveyAttachment(item.id);
+}
 async function handleDeleteAttachment(row) { await ElMessageBox.confirm(`确定删除附件 ${row.originalName} 吗？`, "删除调查附件", { type: "warning" }); await deleteSurveyAttachment(row.id); await loadPhase2(); }
 async function handleGenerateRequest() {
   if (!requestForm.requestType) { ElMessage.warning("请选择业务类型"); return; }
@@ -615,7 +757,12 @@ async function handleSaveResult() {
   if (!props.activeBatch || (!activeTask.value && !isCreatingContractorResult.value)) return;
   resultForm.code = digitsOnly(resultForm.code).slice(0, 18);
   if (resultForm.code.length !== 18) { ElMessage.warning("承包方编码必须为18位数字"); return; }
-  if (!resultForm.name?.trim() || !resultForm.idNo?.trim() || !resultForm.address?.trim()) { ElMessage.warning("请填写承包方名称、证件号码和地址"); return; }
+  if (!resultForm.name?.trim() || !resultForm.address?.trim()) { ElMessage.warning("请填写承包方名称和地址"); return; }
+  // 证件号码（承包方 + 全部有效家庭成员）由录入面板统一校验，口径见 ContractorMemberPanel。
+  // `??` 兜底：万一面板 ref 尚未就绪，至少保证承包方证件号码非空。
+  const idNoProblem = contractorMemberPanel.value?.validateIdNos?.()
+    ?? (resultForm.idNo?.trim() ? "" : "承包方证件号码：请输入证件号码");
+  if (idNoProblem) { ElMessage.warning(idNoProblem.split("\n").join("；")); return; }
   savingResult.value = true;
   creatingContractor.value = isCreatingContractorResult.value;
   try {
@@ -656,7 +803,7 @@ async function reloadSurveyResult() {
     const { data } = await fetchSurveyResult(props.activeBatch.id, activeTask.value.contractorUid);
     Object.assign(resultForm, createEmptyResult(), data.data, { familyMembers: (data.data.familyMembers || []).map((item) => ({ ...item })) });
     await loadDiffs();
-    if (parcelsLoaded.value || activeTab.value === "parcels") {
+    if (parcelsLoaded.value || isPanelMounted("parcels")) {
       await loadSavedParcelChanges();
       await loadSurveyParcels();
     }
@@ -667,10 +814,11 @@ async function reloadSurveyResult() {
 // ---- Open / Close ----
 async function openForResult(batch, row) {
   isCreatingContractorResult.value = false; activeTask.value = row; selectedParcel.value = null; parcels.value = []; parcelsLoaded.value = false;
+  previewAttachmentVisible.value = false; previewAttachment.value = null; attachmentPreviewIndex.value = -1;
   pendingOperations.value = []; savedSwapChanges.value = []; savedSplitChanges.value = []; savedRemoveChanges.value = []; savedParcelChangeLoading.value = false; rollbackingSavedChangeId.value = null;
   const { data } = await fetchSurveyResult(row.batchId, row.contractorUid);
   Object.assign(resultForm, createEmptyResult(), data.data, { familyMembers: (data.data.familyMembers || []).map((item) => ({ ...item })) });
-  resetPhase2Forms(); activeTab.value = "contractor"; emit("update:modelValue", true);
+  resetPhase2Forms(); openPanels.value = ["contractor"]; openedPanels.value = ["contractor"]; openAuxPanels.value = []; emit("update:modelValue", true);
   await loadDiffs(); await loadPhase2();
 }
 
@@ -679,30 +827,27 @@ function openForCreate(batch) {
   diffRows.value = []; savedSwapChanges.value = []; savedSplitChanges.value = []; savedRemoveChanges.value = []; savedParcelChangeLoading.value = false;
   pendingOperations.value = []; rollbackingSavedChangeId.value = null;
   Object.assign(resultForm, createEmptyResult(), { code: batch?.regionCode || props.activeRegionCode || "", groupRegionCode: batch?.regionCode || props.activeRegionCode || "", groupRegionName: batch?.regionName || props.activeRegionLabel || "", resultStatus: "added", changeType: "add_contractor", isChanged: false });
-  resetPhase2Forms(); activeTab.value = "contractor"; emit("update:modelValue", true);
+  resetPhase2Forms(); openPanels.value = ["contractor"]; openedPanels.value = ["contractor"]; openAuxPanels.value = []; emit("update:modelValue", true);
 }
 
 function close() {
   emit("update:modelValue", false); isCreatingContractorResult.value = false;
+  previewAttachmentVisible.value = false; previewAttachment.value = null; attachmentPreviewIndex.value = -1;
   pendingOperations.value = []; savedSwapChanges.value = []; savedSplitChanges.value = []; savedRemoveChanges.value = []; savedParcelChangeLoading.value = false; rollbackingSavedChangeId.value = null;
 }
 
 // ---- Watchers ----
-watch(activeTab, async (tab) => {
-  if (tab === "parcels") {
-    // lazy tab 的地图容器需要先完成挂载，再初始化 OpenLayers。
-    await nextTick();
-    if (!parcelsLoaded.value && !parcelsLoading.value) {
-      await Promise.all([loadSurveyParcels(), loadSavedParcelChanges()]);
-    }
-  }
+watch(() => props.modelValue, (visible) => {
+  if (visible) { void loadAttachmentCategories(); return; }
+  selectedParcel.value = null;
 });
-watch(() => props.modelValue, (visible) => { if (!visible) selectedParcel.value = null; });
 
 defineExpose({ openForResult, openForCreate });
 </script>
 
 <style scoped>
+.survey-toolbar { display: flex; align-items: center; flex-wrap: wrap; row-gap: 8px; margin-bottom: 12px; }
+.toolbar-print { margin-left: auto; }
 .survey-dialog-form { margin-top: 16px; }
 .snapshot-member-title { color: #334155; font-size: 14px; font-weight: 700; margin: 16px 0 10px; }
 .snapshot-changed-value { background: #fef3c7; border: 1px solid #f59e0b; border-radius: 4px; color: #92400e; display: inline-block; font-weight: 600; line-height: 1.5; padding: 0 6px; }
@@ -713,6 +858,71 @@ defineExpose({ openForResult, openForCreate });
 .pending-operation-list { display: flex; flex-direction: column; gap: 8px; margin: -4px 0 12px; }
 .pending-operation-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border: 1px solid #f3d19e; border-radius: 8px; background: #fdf6ec; }
 .pending-operation-text { color: #8a5a12; font-size: 13px; }
+
+/* ---- 折叠面板：主数据区与「调查附件」区共用同一套样式，卡片式、与正文明确分区 ---- */
+.survey-collapse {
+  border: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.survey-collapse :deep(.el-collapse-item) {
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid rgba(56, 122, 196, 0.28);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 1px 4px rgba(25, 74, 128, 0.07);
+}
+
+.survey-collapse :deep(.el-collapse-item:last-child) { margin-bottom: 0; }
+
+.survey-collapse :deep(.el-collapse-item__header) {
+  height: auto;
+  min-height: 46px;
+  padding: 10px 16px;
+  border-bottom: 1px solid transparent;
+  border-left: 4px solid var(--accent);
+  background: #eef4fb;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.survey-collapse :deep(.el-collapse-item__header:hover) { background: #e2effc; }
+
+.survey-collapse :deep(.el-collapse-item__header.is-active) {
+  border-bottom-color: rgba(56, 122, 196, 0.28);
+  background: #d7e8fa;
+}
+
+.survey-collapse :deep(.el-collapse-item__arrow) { color: var(--accent); font-weight: 700; }
+
+.survey-collapse :deep(.el-collapse-item__wrap) {
+  border-bottom: 0;
+  background: transparent;
+}
+
+.survey-collapse :deep(.el-collapse-item__content) {
+  padding: 16px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.survey-collapse :deep(.el-collapse-item__title) { color: inherit; font-size: inherit; font-weight: inherit; }
+
+.survey-collapse :deep(.el-collapse-item.is-disabled .el-collapse-item__header) {
+  border-left-color: #c3cfdd;
+  background: #eef1f5;
+}
+
+.survey-collapse :deep(.el-collapse-item.is-disabled .el-collapse-item__title) { color: var(--muted); }
+
+/* 附属区与主数据区同一套样式，只在间距上留一道分隔；不另设配色，保持两处观感一致。 */
+.survey-collapse--aux { margin-top: 6px; }
 </style>
 
 

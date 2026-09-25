@@ -7,7 +7,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, Response, UploadFile, File, HTTPException
 from app.core.license import license_validator, LicenseStatus
 from app.core.license.machine_fingerprint import get_machine_fingerprint
 from app.schemas.response import ApiResponse
@@ -16,6 +16,9 @@ router = APIRouter()
 
 LICENSE_DIR = Path(__file__).resolve().parents[4] / "storage"
 LICENSE_FILE = LICENSE_DIR / "license.dat"
+
+# 授权状态必须实时，禁止任何中间层缓存
+NO_STORE = {"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"}
 
 
 @router.get("/machine-code")
@@ -31,8 +34,13 @@ def get_machine_code() -> ApiResponse:
 
 
 @router.get("/status")
-def get_license_status() -> ApiResponse:
-    """获取授权状态"""
+def get_license_status(response: Response) -> ApiResponse:
+    """获取授权状态
+
+    每次调用都会依据授权文件的当前状态判断：文件被替换、删除或改名后立即生效，
+    不需要重启后端。
+    """
+    response.headers.update(NO_STORE)
     result = license_validator.validate()
 
     data = {

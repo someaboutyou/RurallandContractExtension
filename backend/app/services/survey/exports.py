@@ -29,7 +29,7 @@ class SurveyServiceExportsMixin:
         normalized_region_code = data_access_service.normalize_region_code(region_code)
         effective_region_code = normalized_region_code or data_access_service.normalize_region_code(batch.region_code)
         if normalized_region_code:
-            data_access_service.ensure_region_in_scope(current_user, normalized_region_code)
+            data_access_service.ensure_region_filter_in_scope(current_user, normalized_region_code)
         task_filters = self._tenant_filters(SurveyCbfBase, current_user)
         task_filters.append(SurveyCbfBase.batch_id == batch_id)
         contractor_filters = self._tenant_filters(SurveyCbfResult, current_user)
@@ -158,31 +158,31 @@ class SurveyServiceExportsMixin:
     def _build_contractor_results_csv(self, contractors: list[SurveyCbfResult]) -> bytes:
         return self._csv_bytes(
             [
-                "閹佃顐奸崘鍛暜娑撯偓閺嶅洩鐦?",
+                "批次内唯一标识",
                 "field",
                 "field",
                 "field",
-                "鐠囦椒娆㈢猾璇茬€?",
-                "鐠囦椒娆㈤崣椋庣垳",
-                "閹靛灝瀵橀弬鐟版勾閸р偓",
-                "闁喗鏂傜紓鏍垳",
-                "閼辨梻閮撮悽浣冪樈",
+                "证件类型",
+                "证件号码",
+                "承包方地址",
+                "邮政编码",
+                "联系电话",
                 "field",
                 "field",
                 "field",
-                "閺勵垰鎯侀崣妯哄",
-                "閸欐ê瀵茬猾璇茬€?",
-                "閸欐ê瀵查崢鐔锋礈",
-                "閺€璺ㄧ摜娓氭繃宓?",
-                "娓氭繃宓侀弶鎰灐閹芥顩?",
+                "是否变化",
+                "变化类型",
+                "变化原因",
+                "政策依据",
+                "依据材料描述",
                 "field",
-                "鐠嬪啯鐓￠弮鍫曟？",
+                "调查时间",
                 "field",
-                "绾喛顓婚弮鍫曟？",
-                "閺夈儲绨€电厧鍙嗛幍瑙勵偧ID",
-                "閺夈儲绨€电厧鍙嗙悰瀛朌",
-                "閺堚偓鏉╂垵顕遍崗銉﹀濞嗩搹D",
-                "閺堚偓鏉╂垵顕遍崗銉攽ID",
+                "确认时间",
+                "来源导入批次ID",
+                "来源导入行ID",
+                "最近导入批次ID",
+                "最近导入行ID",
             ],
             [
                 [
@@ -220,23 +220,23 @@ class SurveyServiceExportsMixin:
     def _build_issuer_results_csv(self, issuers: list[SurveyFbfResult]) -> bytes:
         return self._csv_bytes(
             [
-                "閸欐垵瀵橀弬鐟版暜娑撯偓閺嶅洩鐦?",
+                "发包方唯一标识",
                 "field",
                 "field",
                 "field",
                 "field",
                 "field",
-                "閼辨梻閮撮悽浣冪樈",
-                "閸欐垵瀵橀弬鐟版勾閸р偓",
-                "闁喗鏂傜紓鏍垳",
+                "联系电话",
+                "发包方地址",
+                "邮政编码",
                 "field",
-                "鐠嬪啯鐓￠弮銉︽埂",
-                "鐠嬪啯鐓＄拋棰佺皑",
+                "调查日期",
+                "调查记事",
                 "field",
-                "閺勵垰鎯侀崣妯哄",
-                "閸欐ê瀵茬猾璇茬€?",
-                "閸欐ê瀵查崢鐔锋礈",
-                "閺€璺ㄧ摜娓氭繃宓?",
+                "是否变化",
+                "变化类型",
+                "变化原因",
+                "政策依据",
             ],
             [
                 [
@@ -266,28 +266,28 @@ class SurveyServiceExportsMixin:
     def _build_member_results_csv(self, members: list[SurveyCbfJtcyResult]) -> bytes:
         return self._csv_bytes(
             [
-                "閹佃顐奸崘鍛煕閸烆垯绔撮弽鍥槕",
-                "閹存劕鎲抽崬顖欑閺嶅洩鐦?",
+                "批次内户唯一标识",
+                "成员唯一标识",
                 "field",
-                "閹存劕鎲虫慨鎾虫倳",
-                "鐠囦椒娆㈢猾璇茬€?",
-                "鐠囦椒娆㈤崣椋庣垳",
-                "閹冨焼",
+                "成员姓名",
+                "证件类型",
+                "证件号码",
+                "性别",
                 "field",
                 "field",
-                "閺勵垰鎯侀崣妯哄",
-                "閺勵垰鎯侀幋铚傚瘜",
-                "閺勵垰鎯佹潻娑樼厔閽€鑺ュ煕",
+                "是否变化",
+                "是否户主",
+                "是否进城落户",
                 "field",
-                "閺勵垰鎯佸璁抽",
-                "閺勵垰鎯佹禍鏂剧箽",
-                "閸欐ê瀵查崢鐔锋礈",
-                "閺€璺ㄧ摜娓氭繃宓?",
-                "閺夊啰娉径鍕枂",
-                "閺夈儲绨€电厧鍙嗛幍瑙勵偧ID",
-                "閺夈儲绨€电厧鍙嗙悰瀛朌",
-                "閺堚偓鏉╂垵顕遍崗銉﹀濞嗩搹D",
-                "閺堚偓鏉╂垵顕遍崗銉攽ID",
+                "是否死亡",
+                "是否五保",
+                "变化原因",
+                "政策依据",
+                "权益处置",
+                "来源导入批次ID",
+                "来源导入行ID",
+                "最近导入批次ID",
+                "最近导入行ID",
             ],
             [
                 [

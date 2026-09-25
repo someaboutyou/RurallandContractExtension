@@ -3,6 +3,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
+from app.domain.region_code import normalize_region_codes
+from app.models.region import Region
 from app.models.user import User
 from app.models.user_region_permission import UserRegionPermission
 from app.repositories.region_repository import region_repository
@@ -149,11 +151,13 @@ class UserService:
         *,
         user: User | None = None,
     ) -> list[UserRegionPermission]:
-        normalized_codes = []
-        for code in region_codes:
-            normalized = self._normalize_region_code(code)
-            if normalized and normalized not in normalized_codes:
-                normalized_codes.append(normalized)
+        # 归一化（幂等）：先按长度截断，再做「去冗余 + 子孙全选塌缩」。
+        # 前端勾父节点会把整棵子树显示成已授权，展开过的分支会在 v-model 里堆出成百上千个
+        # 子码；这里把它们塌缩回父节点一行，既省表行也避免撞上「组级区域独占」的校验。
+        normalized_codes = normalize_region_codes(
+            [self._normalize_region_code(code) for code in region_codes],
+            self._region_parent_map(db),
+        )
         if not normalized_codes:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="至少需要配置一个数据权限区域")
         tenant_codes = {code[:6] for code in normalized_codes}
@@ -196,7 +200,21 @@ class UserService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"组级区域已分配给其他用户：{code}")
 
     def _get_home_region_from_permissions(self, db: Session, permissions: list[UserRegionPermission]):
-        first_code = permissions[0].region_code if permissions else None
+        """按授权集合推导 `users.region_id`（「所属区域」）。
+
+        ⛔ 不能取 `permissions[0]`：这个列表的顺序**由前端提交顺序决定**，而用户在
+        编辑框里「取消再勾回」某个节点时，`handleRegionPermissionCheck` 会把它追加到
+        数组末尾（前端 `[...withoutCode, code]`）⇒ 同一个授权集合，两次保存会算出不同的
+        「所属区域」。真实事故：`multi_scope_user`（青阳镇 + 双沟镇/草湾村）在一次保存后
+        「家」从青阳镇漂到草湾村，而前端列表页**拿所属区域当默认区域筛选值**
+        （见 `data_access_service.ensure_region_filter_in_scope` 的说明），于是调查批次
+        按 `region_code LIKE '321324101203%'` 去筛，青阳镇下的 2 个批次全部消失，
+        界面显示「暂无调查批次」——看起来像数据权限丢了，其实权限一行都没少。
+
+        改为按 `(码长, 码)` 升序取：区域码越短层级越高，越能代表「家」；同层用码值兜底，
+        结果**与提交顺序无关**、可重复。
+        """
+        first_code = self._home_region_code(permissions)
         if not first_code:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="至少需要配置一个数据权限区域")
         lookup_code = first_code[:12] if len(first_code) >= 12 else first_code
@@ -205,11 +223,29 @@ class UserService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"数据权限区域不存在：{first_code}")
         return region
 
+    @staticmethod
+    def _home_region_code(permissions: list[UserRegionPermission]) -> str | None:
+        """「所属区域」的取值口径：授权码里**层级最高**（码最短）的那条；同长取码值最小。"""
+        codes = [permission.region_code for permission in permissions if permission.region_code]
+        if not codes:
+            return None
+        return min(codes, key=lambda code: (len(code), code))
+
     def _ensure_region_code_exists(self, db: Session, code: str) -> None:
         lookup_code = code[:12] if len(code) >= 12 else code
         region = region_repository.get_region_by_code(db, lookup_code)
         if region is None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"数据权限区域不存在：{code}")
+
+    def _region_parent_map(self, db: Session) -> dict[str, str]:
+        """regions 表的 code → 父 code 映射，供「子孙全选塌缩」判断用。
+
+        regions 表整表约 4 千行（省/县/镇/村/组各一级），一次全量读进内存比按前缀反复查库
+        简单得多，也避免「前缀相同但层级不同」的歧义（真正的父子关系以 parent_id 为准）。
+        """
+        rows = db.execute(select(Region.id, Region.code, Region.parent_id)).all()
+        code_by_id = {region_id: code for region_id, code, _ in rows}
+        return {code: code_by_id.get(parent_id) or "" for _, code, parent_id in rows}
 
     def _normalize_region_code(self, code: str | None) -> str | None:
         if code is None:

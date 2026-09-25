@@ -5,6 +5,7 @@
       <div class="toolbar-actions">
         <el-button plain @click="loadRegions">刷新</el-button>
         <el-button v-if="canManage" type="success" @click="openCreateDialog()">新增区域</el-button>
+        <el-button v-if="canManage" type="warning" :loading="syncing" @click="handleSyncFromFbf">同步fbf数据</el-button>
       </div>
     </div>
 
@@ -90,13 +91,13 @@
 <script setup>
 import { computed, onUnmounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-
-import { createRegion, deleteRegion, fetchRegionChildren, fetchRegionTree, searchRegions, updateRegion } from "../api/region";
+import { createRegion, deleteRegion, fetchRegionChildren, fetchRegionTree, searchRegions, updateRegion, syncRegionsFromFbf } from "../api/region";
 import { useAuthStore } from "../stores/auth";
 
 const authStore = useAuthStore();
 const canManage = computed(() => authStore.hasPermission("regions.manage"));
 const loading = ref(false);
+const syncing = ref(false);
 const submitting = ref(false);
 const dialogVisible = ref(false);
 const editingId = ref(0);
@@ -113,15 +114,7 @@ const rules = {
 };
 
 function createEmptyForm() {
-  return {
-    name: "",
-    code: "",
-    level: "village",
-    parentId: undefined,
-    status: "active",
-    sortOrder: 0,
-    remark: "",
-  };
+  return { name: "", code: "", level: "village", parentId: undefined, status: "active", sortOrder: 0, remark: "" };
 }
 
 function levelLabel(value) {
@@ -143,10 +136,7 @@ async function loadRegions() {
 }
 
 async function loadParentRegionNode(node, resolve) {
-  if (node.level === 0) {
-    resolve(regionTree.value);
-    return;
-  }
+  if (node.level === 0) { resolve(regionTree.value); return; }
   const { data } = await fetchRegionChildren({ parentId: node.data.id, includeGroups: true });
   resolve(data.data);
 }
@@ -154,11 +144,7 @@ async function loadParentRegionNode(node, resolve) {
 function handleParentRegionFilter(keyword) {
   window.clearTimeout(parentRegionSearchTimer);
   parentRegionSearchTimer = window.setTimeout(async () => {
-    if (!keyword) {
-      const { data } = await fetchRegionTree();
-      regionTree.value = data.data;
-      return;
-    }
+    if (!keyword) { const { data } = await fetchRegionTree(); regionTree.value = data.data; return; }
     const { data } = await searchRegions({ keyword, includeGroups: true, limit: 80 });
     regionTree.value = data.data;
   }, 250);
@@ -166,35 +152,21 @@ function handleParentRegionFilter(keyword) {
 
 function openCreateDialog(parent) {
   editingId.value = 0;
-  Object.assign(form, createEmptyForm(), {
-    parentId: parent?.id,
-    level: parent ? childLevel(parent.level) : "county",
-    code: parent?.code || "",
-  });
+  Object.assign(form, createEmptyForm(), { parentId: parent?.id, level: parent ? childLevel(parent.level) : "county", code: parent?.code || "" });
   formRef.value?.clearValidate();
   dialogVisible.value = true;
 }
 
 function openEditDialog(row) {
   editingId.value = row.id;
-  Object.assign(form, {
-    name: row.name,
-    code: row.code,
-    level: row.level,
-    parentId: row.parentId || undefined,
-    status: row.status || "active",
-    sortOrder: row.sortOrder || 0,
-    remark: row.remark || "",
-  });
+  Object.assign(form, { name: row.name, code: row.code, level: row.level, parentId: row.parentId || undefined, status: row.status || "active", sortOrder: row.sortOrder || 0, remark: row.remark || "" });
   formRef.value?.clearValidate();
   dialogVisible.value = true;
 }
 
 async function handleSubmit() {
   const valid = await formRef.value.validate().catch(() => false);
-  if (!valid) {
-    return;
-  }
+  if (!valid) return;
   const payload = { ...form, name: form.name.trim(), code: form.code.trim(), remark: form.remark?.trim() || null };
   submitting.value = true;
   try {
@@ -216,11 +188,7 @@ async function handleSubmit() {
 
 async function handleDelete(row) {
   try {
-    await ElMessageBox.confirm(`确定删除区域“${row.fullName}”吗？`, "删除区域", {
-      type: "warning",
-      confirmButtonText: "删除",
-      cancelButtonText: "取消",
-    });
+    await ElMessageBox.confirm(`确定删除区域"${row.fullName}"吗？`, "删除区域", { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" });
     await deleteRegion(row.id);
     ElMessage.success("区域已删除");
     await loadRegions();
@@ -231,8 +199,39 @@ async function handleDelete(row) {
   }
 }
 
+async function handleSyncFromFbf() {
+  try {
+    const { action } = await ElMessageBox.confirm(
+      "此操作将从fbf（发包方）数据中同步行政区域记录。<br/><br/>请选择同步模式：",
+      "同步fbf数据",
+      {
+        type: "info",
+        distinguishCancelAndClose: true,
+        confirmButtonText: "仅同步缺失数据",
+        cancelButtonText: "覆盖所有数据",
+        dangerouslyUseHTMLString: true,
+      }
+    ).catch((e) => {
+      if (e === "cancel") return { action: "overwrite" };
+      throw e;
+    });
+    const overwrite = action === "overwrite";
+    syncing.value = true;
+    const { data } = await syncRegionsFromFbf(overwrite);
+    ElMessage.success(data.data.message);
+    await loadRegions();
+  } catch (error) {
+    if (error !== "close") {
+      ElMessage.error(error.response?.data?.detail || "同步fbf数据失败");
+    }
+  } finally {
+    syncing.value = false;
+  }
+}
+
 loadRegions();
-onUnmounted(() => {
-  window.clearTimeout(parentRegionSearchTimer);
-});
+onUnmounted(() => { window.clearTimeout(parentRegionSearchTimer); });
 </script>
+
+
+

@@ -2,14 +2,16 @@ from datetime import date, datetime, timezone
 from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import HTTPException, status
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.db.sequences import next_no as generate_business_no
 from app.models.region import Region
 from app.models.survey import SurveyBatch, SurveyCbfBase, SurveyCbfJtcyBase, SurveyCbfJtcyResult, SurveyCbfResult
 from app.models.user import User
 from app.repositories.contractor_repository import contractor_repository
 from app.services.data_access_service import data_access_service
+from app.services.relation_codes import sync_household_head_flags
 
 
 class ContractorService:
@@ -28,7 +30,7 @@ class ContractorService:
         region_code: str | None = None,
     ) -> dict:
         if region_code:
-            data_access_service.ensure_region_in_scope(current_user, region_code, detail="区域不在当前数据权限范围内")
+            data_access_service.ensure_region_filter_in_scope(current_user, region_code, detail="区域不在当前数据权限范围内")
         contractors, total = contractor_repository.list_contractors(
             db,
             page=page,
@@ -52,12 +54,12 @@ class ContractorService:
     def get_contractor(self, db: Session, code: str, current_user: User) -> dict:
         contractor = contractor_repository.get_contractor(db, code)
         if contractor is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="鎵垮寘鏂硅皟鏌ユ垚鏋滀笉瀛樺湪")
-        data_access_service.ensure_code_in_scope(current_user, contractor.cbfbm, detail="鎵垮寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="承包方调查成果不存在")
+        data_access_service.ensure_code_in_scope(current_user, contractor.cbfbm, detail="承包方不在当前数据权限范围内")
         return self._serialize_detail(db, contractor)
 
     def create_contractor(self, db: Session, payload: dict, current_user: User) -> dict:
-        data_access_service.ensure_code_in_scope(current_user, payload["code"], detail="鎵垮寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
+        data_access_service.ensure_code_in_scope(current_user, payload["code"], detail="承包方不在当前数据权限范围内")
         group_region_code, group_region_name = self._resolve_group_region(db, payload, current_user)
         batch = self._ensure_edit_batch(db, payload, current_user)
         if contractor_repository.get_contractor_in_batch(db, batch.id, payload["code"]) is not None:
@@ -65,9 +67,21 @@ class ContractorService:
 
         now = datetime.now(timezone.utc)
         contractor_uid = str(uuid5(NAMESPACE_URL, f"survey:{batch.id}:cbf:{payload['code']}"))
+        # 先建结果行：survey_cbf_base.result_id 是 NOT NULL，快照行必须挂在结果行之后。
+        result = SurveyCbfResult(
+            contractor_uid=contractor_uid,
+            initialized_at=now,
+            survey_status="surveyed",
+            result_status="normal",
+        )
+        self._apply_contractor_payload(result, payload, current_user, group_region_code, group_region_name)
+        db.add(result)
+        db.flush()
+
         base = SurveyCbfBase(
             batch_id=batch.id,
             contractor_uid=contractor_uid,
+            result_id=result.id,
             source_cbfbm=payload["code"],
             initialized_from_key=payload["code"],
             initialized_at=now,
@@ -77,18 +91,7 @@ class ContractorService:
         db.add(base)
         db.flush()
 
-        result = SurveyCbfResult(
-            contractor_uid=contractor_uid,
-            base_id=base.id,
-            initialized_from_base_id=base.id,
-            initialized_at=now,
-            survey_status="surveyed",
-            result_status="normal",
-        )
-        self._copy_base_to_result(result, base)
-        db.add(result)
-        db.flush()
-        self._replace_family_members(db, result, payload.get("familyMembers", []), now, sync_base=True)
+        self._replace_family_members(db, result, payload.get("familyMembers", []), now, base=base)
         db.commit()
         db.refresh(result)
         return self._serialize_detail(db, result)
@@ -96,22 +99,21 @@ class ContractorService:
     def update_contractor(self, db: Session, code: str, payload: dict, current_user: User) -> dict:
         contractor = contractor_repository.get_contractor(db, code)
         if contractor is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="鎵垮寘鏂硅皟鏌ユ垚鏋滀笉瀛樺湪")
-        data_access_service.ensure_code_in_scope(current_user, contractor.cbfbm, detail="鎵垮寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
-        data_access_service.ensure_code_in_scope(current_user, payload["code"], detail="鎵垮寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="承包方调查成果不存在")
+        data_access_service.ensure_code_in_scope(current_user, contractor.cbfbm, detail="承包方不在当前数据权限范围内")
+        data_access_service.ensure_code_in_scope(current_user, payload["code"], detail="承包方不在当前数据权限范围内")
         group_region_code, group_region_name = self._resolve_group_region(db, payload, current_user)
-        base = db.get(SurveyCbfBase, contractor.base_id)
+        base = contractor_repository.get_base_for_result(db, contractor)
         existed = contractor_repository.get_contractor_in_batch(db, base.batch_id, payload["code"]) if base else None
         if payload["code"] != code and existed is not None and existed.id != contractor.id:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="当前调查批次内承包方代码已存在")
 
         self._apply_contractor_payload(contractor, payload, current_user, group_region_code, group_region_name)
-        base = db.get(SurveyCbfBase, contractor.base_id)
         if base is not None:
             self._apply_contractor_payload(base, payload, current_user, group_region_code, group_region_name)
             base.source_cbfbm = payload["code"]
             base.snapshot_at = datetime.now(timezone.utc)
-        self._replace_family_members(db, contractor, payload.get("familyMembers", []), datetime.now(timezone.utc), sync_base=True)
+        self._replace_family_members(db, contractor, payload.get("familyMembers", []), datetime.now(timezone.utc), base=base)
         db.commit()
         db.refresh(contractor)
         return self._serialize_detail(db, contractor)
@@ -119,8 +121,8 @@ class ContractorService:
     def delete_contractor(self, db: Session, code: str, current_user: User) -> None:
         contractor = contractor_repository.get_contractor(db, code)
         if contractor is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="鎵垮寘鏂硅皟鏌ユ垚鏋滀笉瀛樺湪")
-        data_access_service.ensure_code_in_scope(current_user, contractor.cbfbm, detail="鎵垮寘鏂逛笉鍦ㄥ綋鍓嶆暟鎹潈闄愯寖鍥村唴")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="承包方调查成果不存在")
+        data_access_service.ensure_code_in_scope(current_user, contractor.cbfbm, detail="承包方不在当前数据权限范围内")
         contractor_repository.delete_contractor(db, contractor)
 
     def _serialize_summary(self, contractor: SurveyCbfResult) -> dict:
@@ -180,7 +182,7 @@ class ContractorService:
             status="active",
             started_at=now,
             created_by=current_user.id,
-            remark="鐢辨壙鍖呮柟绠＄悊鏂板鎵垮寘鏂规椂鑷姩鍒涘缓",
+            remark="由承包方管理新增承包方时自动创建",
         )
         db.add(batch)
         db.flush()
@@ -212,75 +214,93 @@ class ContractorService:
         target.gsshr = payload.get("publicNoticeReviewer")
         target.group_region_code = group_region_code
         target.group_region_name = group_region_name
+        target.region_code = data_access_service.normalize_region_code(group_region_code or payload["code"])
+        target.tenant_code = data_access_service.derive_tenant_code(target.region_code)
 
-    def _copy_base_to_result(self, result: SurveyCbfResult, base: SurveyCbfBase) -> None:
-        result.cbfbm = base.cbfbm
-        result.cbflx = base.cbflx
-        result.cbfmc = base.cbfmc
-        result.cbfzjlx = base.cbfzjlx
-        result.cbfzjhm = base.cbfzjhm
-        result.cbfdz = base.cbfdz
-        result.yzbm = base.yzbm
-        result.lxdh = base.lxdh
-        result.cbfcysl = base.cbfcysl
-        result.cbfdcrq = base.cbfdcrq
-        result.cbfdcy = base.cbfdcy
-        result.cbfdcjs = base.cbfdcjs
-        result.gsjs = base.gsjs
-        result.gsjsr = base.gsjsr
-        result.gsshrq = base.gsshrq
-        result.gsshr = base.gsshr
-        result.group_region_code = base.group_region_code
-        result.group_region_name = base.group_region_name
+    def _replace_family_members(
+        self,
+        db: Session,
+        contractor: SurveyCbfResult,
+        family_members: list[dict],
+        now: datetime,
+        base: SurveyCbfBase | None = None,
+    ) -> None:
+        """整体替换某户的家庭成员（结果表全删重建，快照表随之同步）。
 
-    def _replace_family_members(self, db: Session, contractor: SurveyCbfResult, family_members: list[dict], now: datetime, sync_base: bool) -> None:
+        ``base`` 为该户的批次快照行；为 ``None`` 表示这户只有结果行
+        （数据导入直写的户），此时只维护结果表——``survey_cbf_jtcy_base.batch_id``
+        是 NOT NULL，没有批次就无从写快照。
+
+        ``member_uid`` 优先沿用该成员原有值（证件号为键），否则退回与数据导入
+        一致的推导式 ``survey:member:{cbfbm}:{idNo}``，避免同一个人在库里
+        因编辑一次就换一个身份标识。
+        """
+        existing_uids = {
+            item.cyzjhm: item.member_uid
+            for item in db.scalars(
+                select(SurveyCbfJtcyResult).where(
+                    SurveyCbfJtcyResult.contractor_uid == contractor.contractor_uid,
+                )
+            ).all()
+            if item.cyzjhm and item.member_uid
+        }
         db.execute(
             delete(SurveyCbfJtcyResult).where(
                 SurveyCbfJtcyResult.contractor_uid == contractor.contractor_uid,
             )
         )
-        if sync_base:
+        if base is not None:
             db.execute(
                 delete(SurveyCbfJtcyBase).where(
-                    SurveyCbfJtcyBase.batch_id == db.get(SurveyCbfBase, contractor.base_id).batch_id,
+                    SurveyCbfJtcyBase.batch_id == base.batch_id,
                     SurveyCbfJtcyBase.contractor_uid == contractor.contractor_uid,
                 )
             )
         seen_ids: set[str] = set()
+        pending: list[tuple[SurveyCbfJtcyBase | None, SurveyCbfJtcyResult]] = []
         for item in family_members:
             member_id = item["idNo"]
             if member_id in seen_ids:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="家庭成员证件号不能重复")
             seen_ids.add(member_id)
-            base_batch_id = db.get(SurveyCbfBase, contractor.base_id).batch_id if contractor.base_id and db.get(SurveyCbfBase, contractor.base_id) else 0
-            member_uid = str(uuid5(NAMESPACE_URL, f"survey:{base_batch_id}:member:{contractor.cbfbm}:{member_id}"))
-            base = None
-            if sync_base:
-                base = SurveyCbfJtcyBase(
-                    batch_id=base_batch_id,
+            member_uid = existing_uids.get(member_id) or str(
+                uuid5(NAMESPACE_URL, f"survey:member:{contractor.cbfbm}:{member_id}")
+            )
+            member_base = None
+            if base is not None:
+                member_base = SurveyCbfJtcyBase(
+                    batch_id=base.batch_id,
                     contractor_uid=contractor.contractor_uid,
                     member_uid=member_uid,
                     base_contractor_code=contractor.cbfbm,
                     base_member_id_no=member_id,
+                    initialized_from_table="survey_cbf_jtcy_result",
                     initialized_from_key=f"{contractor.cbfbm}:{member_id}",
                     initialized_at=now,
                     snapshot_at=now,
                 )
-                self._apply_member_payload(base, contractor, item)
-                db.add(base)
-                db.flush()
+                self._apply_member_payload(member_base, contractor, item)
+                db.add(member_base)
             result = SurveyCbfJtcyResult(
                 contractor_uid=contractor.contractor_uid,
                 member_uid=member_uid,
-                base_id=base.id if base else None,
-                initialized_from_base_id=base.id if base else None,
                 initialized_at=now,
                 survey_status="surveyed",
                 member_result_status="normal",
-                is_household_head=item.get("relationToHead") == "01",
+                is_household_head=False,  # 由下方 sync_household_head_flags 按统一口径收敛
             )
             self._apply_member_payload(result, contractor, item)
             db.add(result)
+            pending.append((member_base, result))
+        db.flush()
+        for member_base, result in pending:
+            if member_base is not None:
+                member_base.result_id = result.id
+        # 户主标记必须按统一口径收敛（优先 户主 02 → 本人 01 → 兜底第一条）。
+        # ⛔ 旧实现是 `is_household_head = (relationToHead == "01")`，而字典与真实数据里
+        # 户主是 "02" ⇒ 这个标记几乎恒为 False，「确认调查结果」的户主校验随之失败
+        # （2026-09-25 修）。只标定 result 侧：base 是批次基线快照，不该被就地推进。
+        sync_household_head_flags([row for _base_row, row in pending if row is not None])
 
     def _apply_member_payload(self, target, contractor: SurveyCbfResult, item: dict) -> None:
         target.cbfbm = contractor.cbfbm
@@ -307,9 +327,10 @@ class ContractorService:
         name = region.full_name if region else (payload.get("groupRegionName") or "")
         return code, name.strip() or None
 
-    def _next_no(self, db: Session, prefix: str, id_column) -> str:
-        next_id = (db.scalar(select(func.max(id_column))) or 0) + 1
-        return f"{prefix}{datetime.now():%Y%m%d}{next_id:04d}"
+    def _next_no(self, db: Session, prefix: str, id_column=None) -> str:
+        # 走 PostgreSQL 序列（app.db.sequences），不再用 max(id)+1：
+        # 后者在"删掉最大 id 的行"之后会回退，导致编号被重复使用（撞唯一约束）。
+        return generate_business_no(db, prefix, id_column)
 
 
 contractor_service = ContractorService()

@@ -8,7 +8,7 @@ from sqlalchemy import select as sa_select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_permission
-from app.models.cbht import Cbht
+from app.models.cbht import CONTRACT_SOURCE_GENERATED, Cbht
 from app.models.survey import SurveyCbdkxxBase, SurveyCbdkxxResult
 from app.models.user import User
 from app.schemas.pagination import PageResponse
@@ -27,6 +27,8 @@ from app.schemas.survey import (
     SurveyContractorRead,
     SurveyContractorUpdate,
     SurveyContractRead,
+    SurveyContractGenerate,
+    SurveyContractPrint,
     SurveyIssuerCreate,
     SurveyIssuerRead,
     SurveyIssuerRowRead,
@@ -47,11 +49,19 @@ from app.schemas.survey import (
     SurveyTagCreate,
     SurveyTagDisable,
     SurveyTaskSkip,
+    SurveyTaskAssignRequest,
     SurveyTaskRead,
     SurveyParcelGeometryValidateRead,
     SurveyParcelGeometryValidateRequest,
+    SurveyParcelBoundaryRead,
+    SurveyParcelBoundaryUpdate,
 )
 from app.services.contract_template_service import contract_template_service
+from app.services.dictionary_service import (
+    DEFAULT_SURVEY_ORG,
+    SURVEY_ORG_DICT_TYPE,
+    dictionary_service,
+)
 from app.services.land_parcel_service import land_parcel_service
 from app.services.survey_service import survey_service
 
@@ -66,10 +76,37 @@ def list_survey_batches(
     keyword: str | None = Query(default=None),
     batch_status: str | None = Query(default=None, alias="status"),
     region_code: str | None = Query(default=None, alias="regionCode"),
+    assignee_id: int | None = Query(default=None, alias="assigneeId", description="只看分派给该调查员的批次"),
+    mine_only: bool = Query(
+        default=False,
+        alias="mineOnly",
+        description="只看与我相关的批次（我创建 / 有户分给我）",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contractors.view")),
 ):
-    return {"data": survey_service.list_batches(db, page, page_size, keyword, batch_status, region_code, current_user)}
+    return {
+        "data": survey_service.list_batches(
+            db,
+            page,
+            page_size,
+            keyword,
+            batch_status,
+            region_code,
+            current_user,
+            assignee_id=assignee_id,
+            mine_only=mine_only,
+        )
+    }
+
+
+@router.get("/active-batches", response_model=ApiResponse[list[dict]])
+def list_active_survey_batches(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """进行中的调查批次（含区域与创建人），供新建批次时把已初始化区域置灰不可选。"""
+    return {"data": survey_service.list_active_regions(db, current_user)}
 
 
 @router.post("/batches", response_model=ApiResponse[SurveyBatchRead])
@@ -89,6 +126,7 @@ def list_survey_tasks(
     keyword: str | None = Query(default=None),
     task_status: str | None = Query(default=None, alias="taskStatus"),
     region_code: str | None = Query(default=None, alias="regionCode"),
+    mine: bool = Query(default=False, description="只看分配给当前用户的任务"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contractors.view")),
 ):
@@ -101,6 +139,111 @@ def list_survey_tasks(
             keyword=keyword,
             task_status=task_status,
             region_code=region_code,
+            current_user=current_user,
+            mine=mine,
+        )
+    }
+
+
+@router.put("/batches/{batch_id}/tasks/assign", response_model=ApiResponse[dict])
+def assign_survey_tasks(
+    batch_id: int,
+    payload: SurveyTaskAssignRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """批量分配 / 改派承包方调查任务；assigneeId 传 null 表示收回分配。"""
+    return {"data": survey_service.assign_tasks(db, batch_id, payload.model_dump(), current_user)}
+
+
+@router.get("/batches/{batch_id}/assignable-users", response_model=ApiResponse[list[dict]])
+def list_survey_assignable_users(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """可被分配任务的调查员（同区县、在职），供分配对话框选题。"""
+    return {"data": survey_service.list_assignable_users(db, batch_id, current_user)}
+
+
+@router.get("/assignees", response_model=ApiResponse[list[dict]])
+def list_survey_assignees(
+    region_code: str | None = Query(default=None, alias="regionCode"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """可指派为调查员的用户（不绑定批次）。
+
+    供两处使用：① 批次列表的「按调查员筛选」下拉；② 新建批次时的「指派调查员」。
+    传 ``regionCode`` 时会顺带返回 ``coversRegion``，前端可把管辖范围不含该区域的人置灰。
+    """
+    return {"data": survey_service.list_assignees(db, current_user, region_code=region_code)}
+
+
+@router.get(
+    "/batches/{batch_id}/tasks/{contractor_uid}/merge-candidates",
+    response_model=ApiResponse[list[SurveyTaskRead]],
+)
+def list_survey_merge_candidates(
+    batch_id: int,
+    contractor_uid: str,
+    keyword: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """合户候选承包方：同批次、同村组、状态可参与合户。"""
+    return {
+        "data": survey_service.list_contractor_candidates(
+            db,
+            batch_id=batch_id,
+            contractor_uid=contractor_uid,
+            keyword=keyword,
+            purpose="merge",
+            current_user=current_user,
+        )
+    }
+
+
+@router.get(
+    "/batches/{batch_id}/tasks/{contractor_uid}/swap-candidates",
+    response_model=ApiResponse[list[SurveyTaskRead]],
+)
+def list_survey_swap_candidates(
+    batch_id: int,
+    contractor_uid: str,
+    keyword: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """地块互换候选承包方：同批次、同村组、未注销且还有可互换地块。"""
+    return {
+        "data": survey_service.list_contractor_candidates(
+            db,
+            batch_id=batch_id,
+            contractor_uid=contractor_uid,
+            keyword=keyword,
+            purpose="swap",
+            current_user=current_user,
+        )
+    }
+
+
+@router.get(
+    "/batches/{batch_id}/contractor-codes",
+    response_model=ApiResponse[list[str]],
+)
+def list_survey_contractor_codes(
+    batch_id: int,
+    prefix: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """已占用的承包方编码（可加前缀过滤），供前端生成新编码时去重。"""
+    return {
+        "data": survey_service.list_contractor_codes(
+            db,
+            batch_id=batch_id,
+            prefix=prefix,
             current_user=current_user,
         )
     }
@@ -213,6 +356,43 @@ def get_survey_parcels(
     result = survey_service.get_result(db, batch_id, contractor_uid, current_user)
     cbfbm = result.get("code", "")
     return {"data": land_parcel_service.get_survey_parcels(db, result.get("batchId") or batch_id, cbfbm, current_user)}
+
+
+@router.get("/batches/{batch_id}/results/{contractor_uid}/parcels/{dkbm}/boundary", response_model=ApiResponse[SurveyParcelBoundaryRead])
+def get_survey_parcel_boundary(
+    batch_id: int,
+    contractor_uid: str,
+    dkbm: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """读取地块的界址点 / 界址线（含已维护的界标类型、界址线类别与位置）。"""
+    return {
+        "data": survey_service.get_parcel_boundary(
+            db, batch_id, contractor_uid, dkbm, current_user
+        )
+    }
+
+
+@router.put("/batches/{batch_id}/results/{contractor_uid}/parcels/{dkbm}/boundary", response_model=ApiResponse[SurveyParcelBoundaryRead])
+def save_survey_parcel_boundary(
+    batch_id: int,
+    contractor_uid: str,
+    dkbm: str,
+    payload: SurveyParcelBoundaryUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """保存地块的界址点 / 界址线属性。
+
+    点位与边的结构来自地块图形，前端按显示序号 (``J1..Jn``) 回传属性；
+    界址点与界址线是独立实体，共点共线在库内复用同一条记录，不会重复生成。
+    """
+    return {
+        "data": survey_service.save_parcel_boundary(
+            db, batch_id, contractor_uid, dkbm, payload.model_dump(), current_user
+        )
+    }
 
 
 @router.post("/batches/{batch_id}/results/{contractor_uid}/parcels/validate-geometry", response_model=ApiResponse[SurveyParcelGeometryValidateRead])
@@ -414,6 +594,15 @@ def revoke_survey_authorization(
     return {"data": survey_service.revoke_authorization(db, authorization_id, payload.revokeReason, current_user)}
 
 
+@router.get("/attachment-categories", response_model=ApiResponse[list[dict]])
+def list_survey_attachment_categories(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """调查附件上传时的类别选项，配置入口在「附件组管理」页（见 app/domain/survey_attachment.py）。"""
+    return {"data": survey_service.list_attachment_categories(db, current_user)}
+
+
 @router.post("/batches/{batch_id}/results/{contractor_uid}/attachments", response_model=ApiResponse[dict], status_code=status.HTTP_201_CREATED)
 async def upload_survey_attachment(
     batch_id: int,
@@ -549,7 +738,7 @@ def skip_survey_task(
     return {"data": survey_service.skip_task(db, batch_id, contractor_uid, payload.skipReason, current_user)}
 
 
-# 鈹€鈹€ 鍚堝悓淇℃伅 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+# ── 合同信息 ──────────────────────────────────────────
 
 def _get_cbhtbm_for_contractor(db: Session, cbfbm: str, batch_id: int) -> str | None:
     """Find a contract code for a contractor."""
@@ -685,6 +874,33 @@ def get_registration_application(
     }
 
 
+@router.get("/batches/{batch_id}/results/{contractor_uid}/cadastral-survey")
+def get_cadastral_survey(
+    batch_id: int,
+    contractor_uid: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """Render the 地籍调查表 for one contractor.
+
+    一户一整套：封面 + 发包方调查表 + 承包方调查表 + 每地块一套
+    （承包地块调查表 + 界址点坐标成果表）。
+    """
+    result = survey_service.get_result(db, batch_id, contractor_uid, current_user)
+    cbfbm = result.get("code", "")
+    data_batch_id = result.get("batchId") or batch_id
+    rendered = contract_template_service.render_cadastral_survey(
+        db, cbfbm=cbfbm, batch_id=data_batch_id,
+    )
+    return {
+        "data": {
+            "cbfbm": cbfbm,
+            "cbfmc": result.get("name") or result.get("cbfmc") or "",
+            "renderedHtml": rendered,
+        }
+    }
+
+
 @router.get("/batches/{batch_id}/results/{contractor_uid}/plot-sketch-map", response_model=ApiResponse[SurveyPlotSketchMapRead])
 def get_survey_plot_sketch_map(
     batch_id: int,
@@ -731,6 +947,9 @@ def get_survey_plot_sketch_map(
         auditor=f"审核者：{notice_reviewer}　{review_date_cn}" if notice_reviewer and review_date_cn else "",
         mapper=f"制图者：{notice_reviewer}　{review_date_cn}" if notice_reviewer and review_date_cn else "",
         publisher="",
+        compile_unit=dictionary_service.get_setting(
+            db, SURVEY_ORG_DICT_TYPE, DEFAULT_SURVEY_ORG,
+        ),
         audit_date=review_date_cn or today_text,
         map_date=review_date_cn or today_text,
     )
@@ -749,23 +968,79 @@ def get_survey_plot_sketch_map(
 def print_survey_contract(
     batch_id: int,
     contractor_uid: str,
+    payload: SurveyContractPrint | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contractors.view")),
 ):
-    # Return rendered HTML for printing.
+    """打印指定合同；不传 cbhtbm 时打印现行合同（没有延包合同就是上次承包合同）。"""
     result = survey_service.get_result(db, batch_id, contractor_uid, current_user)
     cbfbm = result.get("code", "")
     data_batch_id = result.get("batchId") or batch_id
-    cbhtbm = _get_cbhtbm_for_contractor(db, cbfbm, data_batch_id)
+    catalog = survey_service.list_survey_contracts(db, batch_id, contractor_uid, current_user)
+    cbhtbm = (payload.cbhtbm if payload else None) or catalog.get("currentCode") or catalog.get("originalCode")
     if not cbhtbm:
         return Response(content="", media_type="text/html")
+    contract = db.get(Cbht, cbhtbm)
     rendered = contract_template_service.render_survey_contract(
         db, cbhtbm=cbhtbm, batch_id=data_batch_id, cbfbm=cbfbm,
+        parcels_by_contractor=bool(contract and contract.contract_source == CONTRACT_SOURCE_GENERATED),
     )
     return Response(content=rendered, media_type="text/html; charset=utf-8")
 
 
-# 鈹€鈹€ 璋冩煡鎿嶄綔 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+@router.get("/batches/{batch_id}/results/{contractor_uid}/contracts", response_model=ApiResponse[dict])
+def list_survey_contracts(
+    batch_id: int,
+    contractor_uid: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """该承包方的全部合同：现行延包合同 + 历史合同 + 上次承包合同。
+
+    ``defaultTermStart`` 是生成延包合同时「承包期限起」的默认值
+    （上次合同到期时间；没有上次合同则为 null）。
+    """
+    return {"data": survey_service.list_survey_contracts(db, batch_id, contractor_uid, current_user)}
+
+
+@router.get(
+    "/batches/{batch_id}/results/{contractor_uid}/contracts/{cbhtbm}",
+    response_model=ApiResponse[dict],
+)
+def get_survey_contract_detail(
+    batch_id: int,
+    contractor_uid: str,
+    cbhtbm: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """指定合同的明细与渲染 HTML（历史合同照样可查看）。"""
+    return {
+        "data": survey_service.get_survey_contract_detail(db, batch_id, contractor_uid, cbhtbm, current_user)
+    }
+
+
+@router.post(
+    "/batches/{batch_id}/results/{contractor_uid}/contract/generate",
+    response_model=ApiResponse[dict],
+    status_code=status.HTTP_201_CREATED,
+)
+def generate_survey_contract(
+    batch_id: int,
+    contractor_uid: str,
+    payload: SurveyContractGenerate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """按新的调查信息生成延包合同，并把上次合同置为历史状态。"""
+    return {
+        "data": survey_service.generate_extension_contract(
+            db, batch_id, contractor_uid, payload.model_dump(), current_user,
+        )
+    }
+
+
+# ── 调查操作 ──────────────────────────────────────────
 
 @router.post("/batches/{batch_id}/results/{contractor_uid}/change-head", response_model=ApiResponse[SurveyContractorRead])
 def change_household_head(

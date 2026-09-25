@@ -72,7 +72,7 @@ class SurveyServiceChangesMixin:
         batch = self._ensure_batch(db, batch_id)
         normalized_region_code = data_access_service.normalize_region_code(region_code)
         if normalized_region_code:
-            data_access_service.ensure_region_in_scope(current_user, normalized_region_code)
+            data_access_service.ensure_region_filter_in_scope(current_user, normalized_region_code)
         stmt = (
             select(SurveyChangeRecord)
             .where(SurveyChangeRecord.tenant_code == batch.tenant_code, SurveyChangeRecord.batch_id == batch_id)
@@ -107,7 +107,7 @@ class SurveyServiceChangesMixin:
         result = self._get_result(db, batch_id, contractor_uid)
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
         if result.generated_request_id:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="鐠囥儴鐨熼弻銉﹀灇閺嬫粌鍑￠悽鐔稿灇娑撴艾濮熼悽瀹狀嚞")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该调查成果已生成业务申请")
         request_type = payload.get("requestType") or self._infer_request_type(result)
         issuer_code = self._resolve_issuer_code(db, result.cbfbm)
         request_payload = {
@@ -146,8 +146,8 @@ class SurveyServiceChangesMixin:
 
     def _infer_request_type(self, result: SurveyCbfResult) -> str:
         if result.change_type in {"extinct"} or result.result_status in {"extinct", "cancelled"}:
-            return "濞夈劑鏀㈤惂鏄忣唶"
-        return "閸欐ɑ娲块惂鏄忣唶"
+            return "注销登记"
+        return "变更登记"
 
 
     def _resolve_issuer_code(self, db: Session, cbfbm: str) -> str:
@@ -283,6 +283,17 @@ class SurveyServiceChangesMixin:
         base_issuer: SurveyFbfBase | None = None,
         deleted_member_reasons: dict[str, str | None] | None = None,
     ) -> None:
+        # 差异行没有业务编码列，若不在构造时显式给定区域，before_flush 只能退化成
+        # 取当前用户的 region.code（村码/县码），会出现两个问题：
+        #   1) 组级权限用户（权限码 14 位）保存时 region_code 前缀匹配落空 → 403；
+        #   2) 同一条差异行的区域与所属承包方不一致，按授权区域过滤时数据看不到。
+        # 因此统一继承承包方结果的租户/村组码，与 survey_*_result 口径一致。
+        scope_tenant = getattr(result, "tenant_code", None)
+        scope_region = (
+            getattr(result, "group_region_code", None)
+            or getattr(result, "region_code", None)
+            or getattr(result, "cbfbm", None)
+        )
         db.execute(
             delete(SurveyChangeDiff).where(
                 SurveyChangeDiff.batch_id == batch_id,
@@ -303,21 +314,21 @@ class SurveyServiceChangesMixin:
                 ("cbfbm", "cbfbm"),
                 ("cbflx", "cbflx"),
                 ("cbfmc", "cbfmc"),
-                ("cbfzjlx", "鐠囦椒娆㈢猾璇茬€?",),
-                ("cbfzjhm", "鐠囦椒娆㈤崣椋庣垳"),
-                ("cbfdz", "閹靛灝瀵橀弬鐟版勾閸р偓"),
-                ("yzbm", "闁喗鏂傜紓鏍垳"),
-                ("lxdh", "閼辨梻閮撮悽浣冪樈"),
+                ("cbfzjlx", "证件类型",),
+                ("cbfzjhm", "证件号码"),
+                ("cbfdz", "承包方地址"),
+                ("yzbm", "邮政编码"),
+                ("lxdh", "联系电话"),
                 ("cbfcysl", "cbfcysl"),
-                ("cbfdcrq", "鎵垮寘鏂硅皟鏌ユ棩鏈?",),
-                ("cbfdcy", "鎵垮寘鏂硅皟鏌ュ憳"),
-                ("cbfdcjs", "鎵垮寘鏂硅皟鏌ヨ浜?",),
-                ("gsjs", "鍏ず璁颁簨"),
-                ("gsjsr", "鍏ず璁颁簨浜?",),
-                ("gsshrq", "鍏ず瀹℃牳鏃ユ湡"),
-                ("gsshr", "鍏ず瀹℃牳浜?",),
-                ("group_region_code", "閹碘偓鐏炵偟绮嶆禒锝囩垳"),
-                ("group_region_name", "閹碘偓鐏炵偟绮嶉崥宥囆?",),
+                ("cbfdcrq", "承包方调查日期",),
+                ("cbfdcy", "承包方调查员"),
+                ("cbfdcjs", "承包方调查记事",),
+                ("gsjs", "公示记事"),
+                ("gsjsr", "公示记事人",),
+                ("gsshrq", "公示审核日期"),
+                ("gsshr", "公示审核人",),
+                ("group_region_code", "村民小组编码"),
+                ("group_region_name", "村民小组名称",),
             ]
             for field_name, field_label in contractor_fields:
                 before = getattr(base, field_name)
@@ -328,6 +339,8 @@ class SurveyServiceChangesMixin:
                             batch_id=batch_id,
                             contractor_uid=contractor_uid,
                             change_id=change_id,
+                            tenant_code=scope_tenant,
+                            region_code=scope_region,
                             entity_type="contractor",
                             entity_uid=contractor_uid,
                             entity_name=result.cbfmc,
@@ -343,15 +356,15 @@ class SurveyServiceChangesMixin:
             issuer_fields = [
                 ("fbfbm", "fbfbm"),
                 ("fbfmc", "fbfmc"),
-                ("fbffzrxm", "閸欐垵瀵橀弬纭呯鐠愶絼姹?",),
+                ("fbffzrxm", "发包方负责人姓名",),
                 ("fzrzjlx", "fzrzjlx"),
                 ("fzrzjhm", "fzrzjhm"),
-                ("lxdh", "閼辨梻閮撮悽浣冪樈"),
-                ("fbfdz", "閸欐垵瀵橀弬鐟版勾閸р偓"),
-                ("yzbm", "闁喗鏂傜紓鏍垳"),
+                ("lxdh", "联系电话"),
+                ("fbfdz", "发包方地址"),
+                ("yzbm", "邮政编码"),
                 ("fbfdcy", "fbfdcy"),
-                ("fbfdcrq", "鐠嬪啯鐓￠弮銉︽埂"),
-                ("fbfdcjs", "鐠嬪啯鐓＄拋棰佺皑"),
+                ("fbfdcrq", "调查日期"),
+                ("fbfdcjs", "调查记事"),
             ]
             for field_name, field_label in issuer_fields:
                 before = getattr(base_issuer, field_name)
@@ -362,6 +375,8 @@ class SurveyServiceChangesMixin:
                             batch_id=batch_id,
                             contractor_uid=contractor_uid,
                             change_id=change_id,
+                            tenant_code=scope_tenant,
+                            region_code=scope_region,
                             entity_type="issuer",
                             entity_uid=issuer.issuer_uid,
                             entity_name=issuer.fbfmc,
@@ -388,20 +403,20 @@ class SurveyServiceChangesMixin:
             )
         ).all()
         member_fields = [
-            ("cyxm", "婵挸鎮?",),
-            ("cyzjlx", "鐠囦椒娆㈢猾璇茬€?",),
-            ("cyzjhm", "鐠囦椒娆㈤崣椋庣垳"),
-            ("cyxb", "閹冨焼"),
+            ("cyxm", "姓名",),
+            ("cyzjlx", "证件类型",),
+            ("cyzjhm", "证件号码"),
+            ("cyxb", "性别"),
             ("yhzgx", "yhzgx"),
-            ("cybz", "閹存劕鎲虫径鍥ㄦ暈娴狅絿鐖?",),
+            ("cybz", "成员备注",),
             ("sfgyr", "sfgyr"),
-            ("cybzsm", "閹存劕鎲虫径鍥ㄦ暈鐠囧瓨妲?",),
+            ("cybzsm", "成员备注说明",),
             ("member_result_status", "member_result_status"),
-            ("is_urban_settled", "閺勵垰鎯佹潻娑樼厔閽€鑺ュ煕"),
+            ("is_urban_settled", "是否进城落户"),
             ("is_married_out_woman", "is_married_out_woman"),
-            ("is_deceased", "閺勵垰鎯佸璁抽"),
-            ("is_five_guarantees", "閺勵垰鎯佹禍鏂剧箽"),
-            ("rights_disposition", "閺夊啰娉径鍕枂"),
+            ("is_deceased", "是否死亡"),
+            ("is_five_guarantees", "是否五保"),
+            ("rights_disposition", "权益处置"),
         ]
         for member in result_members:
             member_base = base_members.get(member.member_uid)
@@ -411,11 +426,13 @@ class SurveyServiceChangesMixin:
                         batch_id=batch_id,
                         contractor_uid=contractor_uid,
                         change_id=change_id,
+                        tenant_code=scope_tenant,
+                        region_code=scope_region,
                         entity_type="member",
                         entity_uid=member.member_uid,
                         entity_name=member.cyxm,
                         field_name="member",
-                        field_label="閺傛澘顤冮幋鎰喅",
+                        field_label="新增成员",
                         before_value=None,
                         after_value=f"{member.cyxm} / {member.cyzjhm}",
                         change_reason=member.change_reason,
@@ -427,14 +444,16 @@ class SurveyServiceChangesMixin:
                 after = getattr(member, field_name, None)
                 if self._diff_value(before) != self._diff_value(after):
                     db.add(
-                        SurveyChangeDiff(
-                            batch_id=batch_id,
-                            contractor_uid=contractor_uid,
-                            change_id=change_id,
-                            entity_type="member",
-                            entity_uid=member.member_uid,
-                            entity_name=member.cyxm,
-                            field_name=field_name,
+                    SurveyChangeDiff(
+                        batch_id=batch_id,
+                        contractor_uid=contractor_uid,
+                        change_id=change_id,
+                        tenant_code=scope_tenant,
+                        region_code=scope_region,
+                        entity_type="member",
+                        entity_uid=member.member_uid,
+                        entity_name=member.cyxm,
+                        field_name=field_name,
                             field_label=field_label,
                             before_value=self._diff_value(before),
                             after_value=self._diff_value(after),
@@ -450,11 +469,13 @@ class SurveyServiceChangesMixin:
                         batch_id=batch_id,
                         contractor_uid=contractor_uid,
                         change_id=change_id,
+                        tenant_code=scope_tenant,
+                        region_code=scope_region,
                         entity_type="member",
                         entity_uid=member_uid,
                         entity_name=member_base.cyxm,
                         field_name="member",
-                        field_label="閸掔娀娅庨幋鎰喅",
+                        field_label="删除成员",
                         before_value=f"{member_base.cyxm} / {member_base.cyzjhm}",
                         after_value=None,
                         change_reason=delete_reason,
@@ -479,6 +500,12 @@ class SurveyServiceChangesMixin:
         base: SurveyCbfBase | None,
         change_id: int | None,
     ) -> None:
+        scope_tenant = getattr(result, "tenant_code", None)
+        scope_region = (
+            getattr(result, "group_region_code", None)
+            or getattr(result, "region_code", None)
+            or getattr(result, "cbfbm", None)
+        )
         base_cbfbm = base.cbfbm if base is not None else result.cbfbm
         base_relations = db.scalars(
             select(SurveyCbdkxxBase).where(
@@ -496,18 +523,18 @@ class SurveyServiceChangesMixin:
         active_relations_by_uid = {item.parcel_info_uid: item for item in active_result_relations}
 
         relation_fields = [
-            ("dkbm", "鍦板潡缂栫爜"),
-            ("fbfbm", "鍙戝寘鏂逛唬鐮?",),
-            ("cbfbm", "鎵垮寘鏂逛唬鐮?",),
-            ("cbjyqqdfs", "鎵垮寘缁忚惀鏉冨彇寰楁柟寮?",),
-            ("htmj", "鍚堝悓闈㈢Н"),
-            ("cbhtbm", "鎵垮寘鍚堝悓缂栫爜"),
-            ("lzhtbm", "娴佽浆鍚堝悓缂栫爜"),
-            ("cbjyqzbm", "鎵垮寘缁忚惀鏉冭瘉缂栫爜"),
-            ("yhtmj", "鍘熷悎鍚岄潰绉?",),
-            ("htmjm", "鍚堝悓闈㈢Н(浜?"),
-            ("yhtmjm", "鍘熷悎鍚岄潰绉?浜?"),
-            ("sfqqqg", "鏄惁纭潈纭偂"),
+            ("dkbm", "地块编码"),
+            ("fbfbm", "发包方代码",),
+            ("cbfbm", "承包方代码",),
+            ("cbjyqqdfs", "承包经营权取得方式",),
+            ("htmj", "合同面积"),
+            ("cbhtbm", "承包合同编码"),
+            ("lzhtbm", "流转合同编码"),
+            ("cbjyqzbm", "承包经营权证编码"),
+            ("yhtmj", "原合同面积",),
+            ("htmjm", "合同面积(亩)"),
+            ("yhtmjm", "原合同面积(亩)"),
+            ("sfqqqg", "是否确权确股"),
         ]
         relation_uids = set(base_relations_by_uid) | set(active_relations_by_uid)
         for relation_uid in relation_uids:
@@ -516,6 +543,8 @@ class SurveyServiceChangesMixin:
             if base_relation is None and result_relation is not None:
                 self._add_change_diff(
                     db,
+                    tenant_code=scope_tenant,
+                    region_code=scope_region,
                     batch_id=batch_id,
                     contractor_uid=contractor_uid,
                     change_id=change_id,
@@ -523,7 +552,7 @@ class SurveyServiceChangesMixin:
                     entity_uid=relation_uid,
                     entity_name=result_relation.dkbm,
                     field_name="parcel_relation",
-                    field_label="鏂板鍦板潡鍏宠仈",
+                    field_label="新增地块关联",
                     before_value=None,
                     after_value=f"{result_relation.dkbm} -> {result_relation.cbfbm}",
                     change_reason=result_relation.change_reason or result.change_reason,
@@ -532,6 +561,8 @@ class SurveyServiceChangesMixin:
             if base_relation is not None and result_relation is None:
                 self._add_change_diff(
                     db,
+                    tenant_code=scope_tenant,
+                    region_code=scope_region,
                     batch_id=batch_id,
                     contractor_uid=contractor_uid,
                     change_id=change_id,
@@ -539,7 +570,7 @@ class SurveyServiceChangesMixin:
                     entity_uid=relation_uid,
                     entity_name=base_relation.dkbm,
                     field_name="parcel_relation",
-                    field_label="绉婚櫎鍦板潡鍏宠仈",
+                    field_label="移除地块关联",
                     before_value=f"{base_relation.dkbm} -> {base_relation.cbfbm}",
                     after_value=None,
                     change_reason=result.change_reason,
@@ -551,6 +582,8 @@ class SurveyServiceChangesMixin:
                 if self._diff_value(before) != self._diff_value(after):
                     self._add_change_diff(
                         db,
+                        tenant_code=scope_tenant,
+                        region_code=scope_region,
                         batch_id=batch_id,
                         contractor_uid=contractor_uid,
                         change_id=change_id,
@@ -586,19 +619,19 @@ class SurveyServiceChangesMixin:
             result_parcels_by_dkbm.setdefault(item.dkbm, item)
 
         parcel_fields = [
-            ("dkmc", "鍦板潡鍚嶇О"),
-            ("scmj", "瀹炴祴闈㈢Н"),
-            ("syqxz", "鎵€鏈夋潈鎬ц川"),
-            ("dklb", "鍦板潡绫诲埆"),
-            ("tdlylx", "鍦熷湴鍒╃敤绫诲瀷"),
-            ("dldj", "鍦扮被绛夌骇"),
-            ("tdyt", "鍦熷湴鐢ㄩ€?",),
-            ("sfjbnt", "鏄惁鍩烘湰鍐滅敯"),
-            ("dkdz", "鍦板潡涓滆嚦"),
-            ("dkxz", "鍦板潡瑗胯嚦"),
-            ("dknz", "鍦板潡鍗楄嚦"),
-            ("dkbz", "鍦板潡鍖楄嚦"),
-            ("dkbzxx", "鍦板潡澶囨敞淇℃伅"),
+            ("dkmc", "地块名称"),
+            ("scmj", "实测面积"),
+            ("syqxz", "所有权性质"),
+            ("dklb", "地块类别"),
+            ("tdlylx", "土地利用类型"),
+            ("dldj", "地类等级"),
+            ("tdyt", "土地用途",),
+            ("sfjbnt", "是否基本农田"),
+            ("dkdz", "地块东至"),
+            ("dkxz", "地块西至"),
+            ("dknz", "地块南至"),
+            ("dkbz", "地块北至"),
+            ("dkbzxx", "地块备注信息"),
         ]
         candidate_result_dkbms = {
             item.dkbm
@@ -612,6 +645,8 @@ class SurveyServiceChangesMixin:
             if base_parcel is None and result_parcel is not None:
                 self._add_change_diff(
                     db,
+                    tenant_code=scope_tenant,
+                    region_code=scope_region,
                     batch_id=batch_id,
                     contractor_uid=contractor_uid,
                     change_id=change_id,
@@ -619,7 +654,7 @@ class SurveyServiceChangesMixin:
                     entity_uid=result_parcel.parcel_uid,
                     entity_name=result_parcel.dkmc,
                     field_name="parcel",
-                    field_label="鏂板鍦板潡",
+                    field_label="新增地块",
                     before_value=None,
                     after_value=f"{result_parcel.dkbm} / {result_parcel.dkmc}",
                     change_reason=result_parcel.change_reason or result.change_reason,
@@ -628,6 +663,8 @@ class SurveyServiceChangesMixin:
             if base_parcel is not None and result_parcel is None:
                 self._add_change_diff(
                     db,
+                    tenant_code=scope_tenant,
+                    region_code=scope_region,
                     batch_id=batch_id,
                     contractor_uid=contractor_uid,
                     change_id=change_id,
@@ -635,7 +672,7 @@ class SurveyServiceChangesMixin:
                     entity_uid=base_parcel.parcel_uid,
                     entity_name=base_parcel.dkmc,
                     field_name="parcel",
-                    field_label="绉婚櫎鍦板潡",
+                    field_label="移除地块",
                     before_value=f"{base_parcel.dkbm} / {base_parcel.dkmc}",
                     after_value=None,
                     change_reason=result.change_reason,
@@ -647,6 +684,8 @@ class SurveyServiceChangesMixin:
                 if self._diff_value(before) != self._diff_value(after):
                     self._add_change_diff(
                         db,
+                        tenant_code=scope_tenant,
+                        region_code=scope_region,
                         batch_id=batch_id,
                         contractor_uid=contractor_uid,
                         change_id=change_id,
@@ -688,12 +727,16 @@ class SurveyServiceChangesMixin:
         before_value=None,
         after_value=None,
         change_reason: str | None = None,
+        tenant_code: str | None = None,
+        region_code: str | None = None,
     ) -> None:
         db.add(
             SurveyChangeDiff(
                 batch_id=batch_id,
                 contractor_uid=contractor_uid,
                 change_id=change_id,
+                tenant_code=tenant_code,
+                region_code=region_code,
                 entity_type=entity_type,
                 entity_uid=entity_uid,
                 entity_name=entity_name,

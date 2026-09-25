@@ -17,6 +17,7 @@ class DataImportBatch(TenantScopedMixin, TimestampMixin, Base):
     source_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_org: Mapped[str | None] = mapped_column(String(120), nullable=True)
     region_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    region_code: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="uploaded")
     total_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     success_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

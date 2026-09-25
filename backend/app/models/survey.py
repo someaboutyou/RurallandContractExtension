@@ -551,6 +551,76 @@ class SurveyAuthorization(TenantScopedMixin, TimestampMixin, Base):
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class SurveyJzdResult(TenantScopedMixin, TimestampMixin, Base):
+    """界址点成果。界址点是**独立实体**，不隶属于某个地块。
+
+    一个界址点在库里只存一条，相邻地块共用同一个界址点时复用同一行——
+    这正是"共点不重复生成"的落点。判重键是坐标 ``(x, y)``（毫米级），
+    因为地块图形 ``survey_dk_result.geom`` 才是界址点位置的唯一来源。
+
+    两个编号要分清：
+
+    - ``jzdh``：**全库唯一**的内部编号（``JZD`` + 12 位序号），只用于库内引用
+      （界址线用它指两端）与数据交换，不直接出现在调查表上。
+    - 出图出表用的 ``J1``、``J2``… 是**每户内部按外环顶点顺序**临时编的序号，
+      不落库——同一个界址点在相邻两户的打印件里可以是 ``J3`` 和 ``J7``。
+
+    界址点的位置（点号、顺序号、X/Y、闭合边长）全部由图形推导，本表只存
+    人工补充的属性，避免图形重算后与已维护的属性脱节。
+    """
+
+    __tablename__ = "survey_jzd_result"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    #: 全库唯一界址点号，如 ``JZD000000000123``
+    jzdh: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    #: 北坐标（EPSG:4527 原值，米，毫米对齐）——与 y 一起构成判重键
+    x: Mapped[Decimal] = mapped_column(Numeric(15, 3), nullable=False)
+    #: 东坐标（EPSG:4527 原值，米，含 39 带前缀）
+    y: Mapped[Decimal] = mapped_column(Numeric(15, 3), nullable=False)
+    #: 界标类型码，取自字典 ``nyt2539_c12_boundary_marker_type``（C.12 界标类型
+    #: 代码表）：1 钢钉 / 2 水泥桩 / 3 石灰桩 / 4 喷涂标志 / 5 木桩 / 6 塑料桩 /
+    #: 7 带钢帽水泥桩 / 8 瓷标志 / 9 其他。
+    #: 打印到甲方《承包地块调查表》时只映射到「木桩 / 埋石 / 无」三格，
+    #: 见 ``services/survey/boundary.py`` 的 ``CADASTRAL_MARK_TYPE_COLUMNS``。
+    jblx: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    #: 备注，打印在《界址点坐标成果表》的「备注」列
+    bz: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: 首次生成该界址点的地块编码；仅用于追溯与区域归属推导，不参与判重
+    source_dkbm: Mapped[str | None] = mapped_column(String(19), nullable=True, index=True)
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class SurveyJzxResult(TenantScopedMixin, TimestampMixin, Base):
+    """界址线成果。界址线是**独立实体**，由两端界址点定义，不隶属于某个地块。
+
+    共用一条界址线的相邻地块复用同一行（"共线不重复生成"）。业务键是
+    ``(tenant_code, qdjzdh, zdjzdh)``，两端界址点号在写入时按字典序**规范化**
+    排序，因此 A→B 与 B→A 落到同一行；``qdjzdh``/``zdjzdh`` 只表示两端，
+    不表示地块外环的走向。
+
+    《地籍调查表》承包地块调查表按"该行界址点参与的这条线"关联：
+    即在本户外环里取第 i 点与第 i+1 点，用这两点的界址点号（无序）反查本表。
+    """
+
+    __tablename__ = "survey_jzx_result"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    #: 一端界址点号（规范化后的较小者）
+    qdjzdh: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    #: 另一端界址点号（规范化后的较大者）
+    zdjzdh: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    #: 界址线类别码：1 田埂 … 9 两点连线（见 services/survey/boundary.py）
+    jzxlb: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    #: 界址线位置码：1 内 / 2 中 / 3 外
+    jzxwz: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    #: 界址线说明
+    jzxsm: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: 首次生成该界址线的地块编码；仅用于追溯与区域归属推导，不参与判重
+    source_dkbm: Mapped[str | None] = mapped_column(String(19), nullable=True, index=True)
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class SurveyAttachment(TenantScopedMixin, TimestampMixin, Base):
     __tablename__ = "survey_attachments"
 

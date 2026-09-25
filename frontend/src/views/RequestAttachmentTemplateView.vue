@@ -177,13 +177,18 @@ import { fetchTenants } from "../api/tenant";
 import { fetchRequestWorkflowOptions } from "../api/request";
 import { fetchWorkflowDefinition } from "../api/workflow";
 
-const requestTypeOptions = ["首次登记", "变更登记", "注销登记", "证书补发"];
+const requestTypeOptions = ["首次登记", "变更登记", "注销登记", "证书补发", "调查附件"];
 const fallbackStageOptions = [
   { code: "apply", name: "申请" },
   { code: "village_review", name: "村级审核" },
   { code: "town_review", name: "镇级审核" },
   { code: "county_review", name: "县级审核" },
 ];
+// 「调查附件」不走业务流程，类别清单固定挂在 survey_entry 这一个节点下。
+// 作用域与后端 app/domain/survey_attachment.py 保持一致，改一边要改另一边。
+const extraStageOptions = {
+  调查附件: [{ code: "survey_entry", name: "承包方调查录入" }],
+};
 
 const loading = ref(false);
 const submitting = ref(false);
@@ -223,15 +228,20 @@ const rules = {
 
 const tenantNameMap = computed(() => Object.fromEntries(tenants.value.map((item) => [item.code, item.name])));
 const requestTypeWorkflowMap = computed(() => Object.fromEntries(workflowMappings.value.map((item) => [item.requestType, item])));
-const currentStageOptions = computed(() => workflowNodeMap.value[form.requestType] || fallbackStageOptions);
-const filterStageOptions = computed(() => {
-  const requestType = requestTypeFilter.value || form.requestType;
-  return workflowNodeMap.value[requestType] || fallbackStageOptions;
-});
+const currentStageOptions = computed(() => resolveStageOptions(form.requestType));
+const filterStageOptions = computed(() => resolveStageOptions(requestTypeFilter.value || form.requestType));
+
+function resolveStageOptions(requestType) {
+  return workflowNodeMap.value[requestType] || extraStageOptions[requestType] || fallbackStageOptions;
+}
 
 const currentWorkflowHint = computed(() => {
   const mapping = requestTypeWorkflowMap.value[form.requestType];
   if (!mapping) {
+    if (extraStageOptions[form.requestType]) {
+      const stage = extraStageOptions[form.requestType][0];
+      return `该业务类型不走业务流程，固定使用节点「${stage.name}」；这些附件组会作为调查附件上传时的类型选项。`;
+    }
     return "当前业务类型还没有绑定流程定义，节点列表先使用默认审核节点。";
   }
   const scope = mapping.source === "tenant" ? "租户覆盖" : "全局默认";
@@ -256,7 +266,7 @@ const parentOptions = computed(() =>
 watch(
   () => form.requestType,
   (value) => {
-    const options = workflowNodeMap.value[value] || fallbackStageOptions;
+    const options = resolveStageOptions(value);
     if (!options.some((item) => item.code === form.stageCode)) {
       form.stageCode = options[0]?.code || "apply";
     }
@@ -422,12 +432,14 @@ async function loadTreeChildren(row, _treeNode, resolve) {
 }
 
 function resetForm() {
+  const defaultRequestType = requestTypeFilter.value || "首次登记";
+  const stageOptions = resolveStageOptions(defaultRequestType);
   Object.assign(form, {
     tenantCode: tenantFilter.value && tenantFilter.value !== "__global__" ? tenantFilter.value : "",
     parentId: null,
-    requestType: requestTypeFilter.value || "首次登记",
-    stageCode: "apply",
-    stageName: "申请",
+    requestType: defaultRequestType,
+    stageCode: stageOptions[0]?.code || "apply",
+    stageName: stageOptions[0]?.name || "申请",
     name: "",
     required: true,
     description: "",

@@ -69,3 +69,28 @@ class ContractorRead(BaseModel):
     groupRegionCode: str | None = None
     groupRegionName: str | None = None
     familyMembers: list[FamilyMemberRead]
+
+
+class CadastralExportRequest(BaseModel):
+    """批量导出《地籍调查表》Word 的筛选条件（与列表查询同口径）。"""
+
+    regionCode: str | None = Field(default=None, max_length=32)
+    regionLabel: str | None = Field(default=None, max_length=120)
+    keyword: str | None = Field(default=None, max_length=100)
+    name: str | None = Field(default=None, max_length=100)
+    memberName: str | None = Field(default=None, max_length=100)
+    idNo: str | None = Field(default=None, max_length=40)
+    address: str | None = Field(default=None, max_length=200)
+    batchId: int | None = None
+
+
+class CadastralExportProgressRead(BaseModel):
+    id: str
+    status: str
+    done: int
+    total: int
+    percent: int
+    message: str
+    error: str | None = None
+    filename: str | None = None
+    regionLabel: str | None = None
