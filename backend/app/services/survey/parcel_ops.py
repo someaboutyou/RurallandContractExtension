@@ -215,6 +215,63 @@ class SurveyServiceParcelOpsMixin:
         db.commit()
         return self.get_result(db, batch_id, contractor_uid, current_user)
 
+    # ── 单条待保存操作的即时落库 ──────────────────────────────
+    #
+    # 背景：前端把「新增地块 / 切割生成 / 互换换入」这类操作先攒在 `pendingOperations`
+    # 里，列表上只显示"预览行"，点「保存调查结果」才统一落库。
+    # 问题是**界址点 / 界址线是从库里的地块图形（`survey_dk_result.geom`）推导的**，
+    # 地块不落库就没有宿体，预览行点「界址点 / 界址线维护」必然被拒。
+    #
+    # 这个入口让用户在**地块列表的操作列**上把某一行单独落库，不必为了它把整份
+    # 调查结果提交一遍（那会连带触发承包方必填校验、推进调查状态、关闭弹窗）。
+    #
+    # ⛔ 与 `update_result` 的边界必须守住：
+    #   - 完全不写承包方主体字段（名称 / 证件 / 成员 / 发包方…）；
+    #   - 不碰 `survey_status`，也就是**不推进业务状态**；
+    #   - 只处理传入的这一条操作，其余待保存操作留在前端。
+    # 所以它只接受 `add_parcel`：切割会连带改源地块状态、互换会动到对手方，
+    # 「保存一行」对它们不是准确语义，仍应走「保存调查结果」统一提交。
+    def persist_pending_operation(
+        self,
+        db: Session,
+        batch_id: int,
+        contractor_uid: str,
+        operation: dict,
+        current_user: User,
+        commit: bool = True,
+    ) -> dict:
+        op_type = (operation or {}).get("type")
+        payload = (operation or {}).get("payload") or {}
+        if op_type != "add_parcel":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="该操作不支持单独保存，请点击「保存调查结果」统一提交",
+            )
+        dkbm = str(payload.get("dkbm") or "").strip()
+        if not dkbm:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="地块编码不能为空，无法保存"
+            )
+        # ⛔ 归属判据以**库里的关联行**为准，不看 payload 里前端填的 cbfbm。
+        result = self._get_result(db, batch_id, contractor_uid)
+        owner = db.scalars(
+            select(SurveyCbdkxxResult.cbfbm).where(
+                SurveyCbdkxxResult.dkbm == dkbm,
+                SurveyCbdkxxResult.result_status != "removed",
+            )
+        ).first()
+        if owner is not None:
+            if owner == result.cbfbm:
+                # 幂等：同一条重复提交（前端漏移 / 用户连点两次）按成功返回。
+                # 否则整体保存时会撞 `add_parcel` 里的 duplicate 校验，把整次保存打回。
+                return {"dkbm": dkbm, "alreadyPersisted": True}
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"地块编码 {dkbm} 已被其他承包方占用，请更换编码后再保存",
+            )
+        self.add_parcel(db, batch_id, contractor_uid, payload, current_user, commit=commit)
+        return {"dkbm": dkbm, "alreadyPersisted": False}
+
     def _prepare_split_generated_parcels(
         self,
         db: Session,
@@ -560,11 +617,27 @@ class SurveyServiceParcelOpsMixin:
             for field_name, _ in relation_fields
         }
 
+        # 互换会**覆盖**地块原有的变更态（is_changed / change_type / change_reason）。
+        # 撤回互换时必须按原值还原，否则净未变的地块撤回后仍挂着 swap 系的 change_type，
+        # 界面上 parcelStatusLabel() 就会落到 `isChanged → "变更"`，把「已撤回」显示成「变更」。
+        # 与 remove/split 的 source_* 快照是同一套约定，区别只在于互换一次动多块地，
+        # 所以按 dkbm 存成 map；且两户各存一份**完整**快照 —— 撤回可能由任意一侧发起，
+        # 各存一份就不必再去对手方那条记录里拼原值。
+        pre_swap_states: dict[str, dict] = {}
+
+        def capture_relation_state(rel: SurveyCbdkxxResult) -> None:
+            pre_swap_states[rel.dkbm] = {
+                "is_changed": bool(rel.is_changed),
+                "change_type": rel.change_type,
+                "change_reason": rel.change_reason,
+            }
+
         def transfer_relation(
             rel: SurveyCbdkxxResult,
             recipient_cbfbm: str,
             recipient_contract: dict,
         ) -> list[dict]:
+            capture_relation_state(rel)
             changes = []
             for field_name, field_label in relation_fields:
                 before_value = getattr(rel, field_name)
@@ -605,7 +678,7 @@ class SurveyServiceParcelOpsMixin:
         record = self._create_change_record(
             db, batch_id, contractor_uid, result.cbfbm,
             change_type=change_type,
-            before_summary={"swapped_out": source_dkbms},
+            before_summary={"swapped_out": source_dkbms, "source_relation_states": pre_swap_states},
             after_summary={"swapped_in": target_dkbms, "counterparty": target_result.cbfbm},
             reason=reason,
             current_user=current_user, now=now,
@@ -616,7 +689,7 @@ class SurveyServiceParcelOpsMixin:
         target_record = self._create_change_record(
             db, batch_id, target_uid, target_result.cbfbm,
             change_type=change_type,
-            before_summary={"swapped_out": target_dkbms},
+            before_summary={"swapped_out": target_dkbms, "source_relation_states": pre_swap_states},
             after_summary={"swapped_in": source_dkbms, "counterparty": result.cbfbm},
             reason=reason,
             current_user=current_user, now=now,
@@ -733,7 +806,7 @@ class SurveyServiceParcelOpsMixin:
         self._ensure_editable_batch_and_result(db, target_result, current_user)
         data_access_service.ensure_code_in_scope(current_user, target_result.cbfbm, detail="out of scope")
 
-        rollback_reason = (payload.get("reason") or "").strip() or f"鎾ゅ洖浜掓崲 {change.change_no}"
+        rollback_reason = (payload.get("reason") or "").strip() or f"撤回互换 {change.change_no}"
         self.swap_parcels(
             db,
             batch_id,
@@ -748,6 +821,37 @@ class SurveyServiceParcelOpsMixin:
             commit=False,
             change_type="rollback_swap_parcels",
         )
+
+        # 互换已经退回去了 ⇒ 地块上的变更态也要还原成互换前的样子，否则「撤回互换」
+        # 会把两块净未变的地显示成「变更」（change_type 仍是 rollback_swap_parcels）。
+        # 原值取自**本户这条互换记录**的快照（swap_parcels 写入时两户各存一份完整快照）。
+        restore_states = (change.before_summary or {}).get("source_relation_states") or {}
+        touched_dkbms = [*source_dkbms, *target_dkbms]
+        # 注意：互换退回去之后，source_dkbms 已归属对手方、target_dkbms 已归属本户，
+        # 所以这里只能按 dkbm 定位，不能再用 cbfbm 过滤。
+        touched_relations = db.scalars(
+            select(SurveyCbdkxxResult).where(SurveyCbdkxxResult.dkbm.in_(touched_dkbms))
+        ).all()
+        touched_relation_by_code = {row.dkbm: row for row in touched_relations}
+        for dkbm in touched_dkbms:
+            relation = touched_relation_by_code.get(dkbm)
+            if relation is None:
+                continue
+            state = restore_states.get(dkbm) if isinstance(restore_states, dict) else None
+            if not isinstance(state, dict):
+                # 老数据兼容：本次修复之前写入的互换记录没有快照（线上只有 873/874 一类）。
+                # 只有当地块现在的变更态**就是互换本身留下的**，才敢断定互换前是「未变更」；
+                # 若它挂着别的变更类型（说明互换之外还有动作），保持现状不动，避免抹掉别人的变更。
+                if relation.change_type not in {"swap_parcels", "rollback_swap_parcels"}:
+                    continue
+                logger.warning(
+                    "撤回互换 %s：地块 %s 缺少互换前快照，按未变更还原（原 change_type=%s）",
+                    change.change_no, dkbm, relation.change_type,
+                )
+                state = {"is_changed": False, "change_type": "none", "change_reason": None}
+            relation.is_changed = bool(state.get("is_changed"))
+            relation.change_type = state.get("change_type") or "none"
+            relation.change_reason = state.get("change_reason")
 
         change.change_status = "rolled_back"
         counterpart_change = db.scalars(

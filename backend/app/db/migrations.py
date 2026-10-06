@@ -1,8 +1,15 @@
 from sqlalchemy import inspect
 from sqlalchemy.engine import Engine
 
+from app.core.crs import get_target_srid, srid_display_name
+
+#: 本进程的目标坐标系（安装期选定、首次启动固化进 system_config，见 _upgrade_system_config）。
+#: 此后库内空间数据只用这一个坐标系；env 改成别的值会在启动时被校验拦下。
+TARGET_SRID = get_target_srid()
+
 
 def upgrade_schema(engine: Engine) -> None:
+    _upgrade_system_config(engine)
     _upgrade_data_import_operations(engine)
     _upgrade_import_trace_columns(engine)
     _upgrade_import_performance_indexes(engine)
@@ -34,6 +41,7 @@ def upgrade_schema(engine: Engine) -> None:
     _upgrade_survey_parcel_uniqueness(engine)
     _upgrade_survey_boundary_uniqueness(engine)
     _upgrade_cbht_contract_columns(engine)
+    _upgrade_data_export_progress(engine)
     _seed_survey_org_setting(engine)
 
 
@@ -74,6 +82,66 @@ def _upgrade_data_import_operations(engine: Engine) -> None:
 def _add_column_if_missing(connection, columns: set[str], table_name: str, column_name: str, column_type: str) -> None:
     if column_name not in columns:
         connection.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+
+
+def _upgrade_system_config(engine: Engine) -> None:
+    """目标坐标系的「安装期选定 → 首次启动固化 → 每次启动校验」。
+
+    - 库里还没有 ``system_config.target_srid``（全新初始化）：把进程读到的
+      ``TARGET_SRID``（来自 backend/.env 的 TARGET_SRID，由 install.ps1 在初始化
+      数据库前让部署人选择写入）固化进库，之后建的所有空间表、写函数都用它。
+    - 已有固化值：与进程 env 比对，不一致直接抛错拒绝启动——库内数据已经按
+      固化带号存了，env 悄悄改成别的带号会让新数据标签错乱，必须显式故障。
+    """
+    inspector = inspect(engine)
+    with engine.begin() as connection:
+        if not inspector.has_table("system_config"):
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE system_config (
+                    key VARCHAR(64) PRIMARY KEY,
+                    value VARCHAR(255) NOT NULL,
+                    remark VARCHAR(255),
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+                )
+                """
+            )
+        row = connection.exec_driver_sql(
+            "SELECT value FROM system_config WHERE key = 'target_srid'"
+        ).fetchone()
+        if row is None:
+            connection.exec_driver_sql(
+                f"""
+                INSERT INTO system_config (key, value, remark)
+                VALUES (
+                    'target_srid',
+                    '{TARGET_SRID}',
+                    '目标坐标系 EPSG 代码，初始化时固化；改带须走全库投影迁移工具，禁止直接改'
+                )
+                """
+            )
+        else:
+            locked_srid = int(row[0])
+            if locked_srid != TARGET_SRID:
+                raise RuntimeError(
+                    "目标坐标系校验失败，拒绝启动：库内固化的坐标系为 "
+                    f"{srid_display_name(locked_srid)}，但当前进程配置（backend/.env 的 TARGET_SRID）为 "
+                    f"{srid_display_name(TARGET_SRID)}。"
+                    "库内空间数据只能按固化带号读写。若确实要换投影带，请在无数据时重建数据库，"
+                    "或使用全库投影迁移工具（ST_Transform 全部空间表并重算界址点坐标）后再启动。"
+                )
+
+
+def _upgrade_data_export_progress(engine: Engine) -> None:
+    """data_exports 补进度三列（progress / progress_message / worker_pid）。"""
+    inspector = inspect(engine)
+    if not inspector.has_table("data_exports"):
+        return
+    columns = {c["name"] for c in inspector.get_columns("data_exports")}
+    with engine.begin() as connection:
+        _add_column_if_missing(connection, columns, "data_exports", "progress", "INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(connection, columns, "data_exports", "progress_message", "VARCHAR(200)")
+        _add_column_if_missing(connection, columns, "data_exports", "worker_pid", "INTEGER")
 
 
 def _normalize_region_scope_data(engine: Engine) -> None:
@@ -522,14 +590,14 @@ def _upgrade_survey_dk_postgis_geometry(engine: Engine) -> None:
     with engine.begin() as connection:
         connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS postgis")
         connection.exec_driver_sql(
-            """
+            f"""
             CREATE OR REPLACE FUNCTION public.survey_dk_json_to_geom(input_geometry json)
             RETURNS public.geometry AS $$
             BEGIN
                 IF input_geometry IS NULL THEN
                     RETURN NULL;
                 END IF;
-                RETURN ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON(input_geometry::text), 4527));
+                RETURN ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON(input_geometry::text), {TARGET_SRID}));
             EXCEPTION WHEN OTHERS THEN
                 RETURN NULL;
             END;
@@ -541,7 +609,9 @@ def _upgrade_survey_dk_postgis_geometry(engine: Engine) -> None:
             if not inspector.has_table(table_name):
                 continue
             columns = {column["name"] for column in inspector.get_columns(table_name)}
-            _add_column_if_missing(connection, columns, table_name, "geom", "public.geometry(MultiPolygon, 4527)")
+            _add_column_if_missing(
+                connection, columns, table_name, "geom", f"public.geometry(MultiPolygon, {TARGET_SRID})"
+            )
             if "geometry" in columns:
                 if table_name == "survey_dk_result":
                     connection.exec_driver_sql("DROP VIEW IF EXISTS public.survey_dk_result_geoserver")
@@ -1421,10 +1491,10 @@ def _upgrade_spatial_tables(engine: Engine) -> None:
 
         if "czkfbj" in missing:
             connection.exec_driver_sql(
-                """
+                f"""
                 CREATE TABLE public.czkfbj (
                     "OBJECTID" int8 NOT NULL,
-                    "Shape" public.geometry(multipolygon, 4527) NULL,
+                    "Shape" public.geometry(multipolygon, {TARGET_SRID}) NULL,
                     "BSM" varchar(18) NULL,
                     "YSDM" varchar(10) NULL,
                     "XZQDM" varchar(12) NULL,
@@ -1445,10 +1515,10 @@ def _upgrade_spatial_tables(engine: Engine) -> None:
 
         if "dltb" in missing:
             connection.exec_driver_sql(
-                """
+                f"""
                 CREATE TABLE public.dltb (
                     "OBJECTID" int8 NOT NULL,
-                    "Shape" public.geometry(multipolygon, 4527) NULL,
+                    "Shape" public.geometry(multipolygon, {TARGET_SRID}) NULL,
                     "BSM" varchar(18) NULL,
                     "YSDM" varchar(10) NULL,
                     "TBYBH" varchar(18) NULL,
@@ -1487,10 +1557,10 @@ def _upgrade_spatial_tables(engine: Engine) -> None:
 
         if "gdbhmb" in missing:
             connection.exec_driver_sql(
-                """
+                f"""
                 CREATE TABLE public.gdbhmb (
                     "OBJECTID" int8 NOT NULL,
-                    "Shape" public.geometry(multipolygon, 4527) NULL,
+                    "Shape" public.geometry(multipolygon, {TARGET_SRID}) NULL,
                     "BSM" varchar(18) NULL,
                     "YSDM" varchar(10) NULL,
                     "TBYBH" varchar(18) NULL,
@@ -1528,6 +1598,8 @@ def _upgrade_spatial_tables(engine: Engine) -> None:
                 """
             )
 
+        # stbhhx（生态保护红线）例外：数据源是经纬度（地理坐标系 EPSG:4490），
+        # 仅作底图展示、不参与调查成果的量算与判重，保持原坐标系不随 TARGET_SRID 变。
         if "stbhhx" in missing:
             connection.exec_driver_sql(
                 """
@@ -1567,10 +1639,10 @@ def _upgrade_spatial_tables(engine: Engine) -> None:
 
         if "xzq" in missing:
             connection.exec_driver_sql(
-                """
+                f"""
                 CREATE TABLE public.xzq (
                     "OBJECTID" int8 NOT NULL,
-                    "SHAPE" public.geometry(multipolygon, 4527) NULL,
+                    "SHAPE" public.geometry(multipolygon, {TARGET_SRID}) NULL,
                     "BSM" varchar(18) NULL,
                     "YSDM" varchar(10) NULL,
                     "XZQDM" varchar(9) NULL,
@@ -1589,10 +1661,10 @@ def _upgrade_spatial_tables(engine: Engine) -> None:
 
         if "xzqjx" in missing:
             connection.exec_driver_sql(
-                """
+                f"""
                 CREATE TABLE public.xzqjx (
                     "OBJECTID" int8 NOT NULL,
-                    "SHAPE" public.geometry(multilinestring, 4527) NULL,
+                    "SHAPE" public.geometry(multilinestring, {TARGET_SRID}) NULL,
                     "BSM" varchar(18) NULL,
                     "YSDM" varchar(10) NULL,
                     "JXLX" varchar(6) NULL,
@@ -1607,10 +1679,10 @@ def _upgrade_spatial_tables(engine: Engine) -> None:
 
         if "yjjbntbhtb" in missing:
             connection.exec_driver_sql(
-                """
+                f"""
                 CREATE TABLE public.yjjbntbhtb (
                     "OBJECTID" int8 NOT NULL,
-                    "Shape" public.geometry(multipolygon, 4527) NULL,
+                    "Shape" public.geometry(multipolygon, {TARGET_SRID}) NULL,
                     "BSM" varchar(18) NULL,
                     "YSDM" varchar(10) NULL,
                     "XZQDM" varchar(12) NULL,

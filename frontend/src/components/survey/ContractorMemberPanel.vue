@@ -23,7 +23,7 @@
     </div>
     <el-form :model="result" label-position="left" label-width="118px" class="contractor-form" :disabled="readonly">
       <div class="form-grid-3">
-        <el-form-item label="承包方编码" :class="changedClass('code')">
+        <el-form-item label="承包方编码" required :class="changedClass('code')">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isContractorFieldChanged('code'), beforeValueText('code'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
             <el-input :model-value="result.code" placeholder="18位编码" maxlength="18" readonly @input="handleCodeInput">
               <template v-if="canGenerateCode" #append>
@@ -32,12 +32,12 @@
             </el-input>
           </div>
         </el-form-item>
-        <el-form-item label="承包方名称" :class="changedClass('name')">
+        <el-form-item label="承包方名称" required :class="changedClass('name')">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isContractorFieldChanged('name'), beforeValueText('name'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
             <el-input v-model="result.name" placeholder="承包方名称" maxlength="50" />
           </div>
         </el-form-item>
-        <el-form-item label="承包方类型" :class="changedClass('typeCode')">
+        <el-form-item label="承包方类型" required :class="changedClass('typeCode')">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isContractorFieldChanged('typeCode'), beforeValueText('typeCode'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
             <el-select v-model="result.typeCode">
               <el-option label="农户" value="1" />
@@ -46,7 +46,7 @@
             </el-select>
           </div>
         </el-form-item>
-        <el-form-item label="证件类型" :class="changedClass('idType')">
+        <el-form-item label="证件类型" required :class="changedClass('idType')">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isContractorFieldChanged('idType'), beforeValueText('idType'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
             <el-select v-model="result.idType">
               <el-option label="居民身份证" value="1" />
@@ -55,7 +55,7 @@
             </el-select>
           </div>
         </el-form-item>
-        <el-form-item label="证件号码" :class="changedClass('idNo')">
+        <el-form-item label="证件号码" required :class="changedClass('idNo')">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isContractorFieldChanged('idNo'), beforeValueText('idNo'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
             <div class="idno-field" :class="idNoFieldClass(contractorIdNoIssue)">
               <el-input v-model="result.idNo" placeholder="证件号码" :maxlength="ID_NO_MAX_LENGTH" />
@@ -74,13 +74,13 @@
           </div>
         </el-form-item>
       </div>
-      <el-form-item class="form-span-3" label="承包方地址" :class="changedClass('address')">
+      <el-form-item class="form-span-3" label="承包方地址" required :class="changedClass('address')">
         <div class="diff-trigger" @mouseenter="showDiffTooltip(isContractorFieldChanged('address'), beforeValueText('address'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
           <el-input v-model="result.address" placeholder="详细地址" maxlength="100" />
         </div>
       </el-form-item>
       <div class="form-grid-2">
-        <el-form-item label="邮政编码" :class="changedClass('postcode')">
+        <el-form-item label="邮政编码" required :class="changedClass('postcode')">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isContractorFieldChanged('postcode'), beforeValueText('postcode'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
             <el-input v-model="result.postcode" placeholder="6位邮编" maxlength="6" />
           </div>
@@ -160,6 +160,40 @@
           </div>
         </el-form-item>
       </div>
+      <!-- 变化原因 / 政策依据
+           只在「这一户存在变化」时出现：is_changed 或 change_type 非 none。
+           ⛔ 这两项是「确认调查结果」的硬闸门（后端 _validate_confirmable），
+           以往界面上没有任何录入入口，导致合户/分户生成的户、以及改过任意字段的户
+           永远确认不了。这里补上入口。
+           「变化原因」现在大多由系统预填：合户/分户生成的新户与成员，后端按操作
+           类型自动写入（如「因合户设立新户」），此处留空不会导致确认失败 —— 只有
+           需要覆盖系统文案时才填。「政策依据」是政策法规凭据，**选填**（不再强制）。
+           故意不做 diff 高亮：它们是新增的补充说明，不是从基线改过来的字段。 -->
+      <template v-if="showChangeFields">
+        <div class="section-subtitle">变化信息</div>
+        <div class="form-grid-2">
+          <el-form-item label="变化原因" :required="showChangeFields">
+            <el-input
+              v-model="result.changeReason"
+              type="textarea"
+              :rows="2"
+              placeholder="留空将由系统按操作类型自动填写（如「因合户设立新户」）"
+              maxlength="500"
+              show-word-limit
+            />
+          </el-form-item>
+          <el-form-item label="政策依据">
+            <el-input
+              v-model="result.policyBasis"
+              type="textarea"
+              :rows="2"
+              placeholder="选填：政策法规依据，如 XX 文件 / 村组决议"
+              maxlength="500"
+              show-word-limit
+            />
+          </el-form-item>
+        </div>
+      </template>
     </el-form>
 
     <el-divider />
@@ -183,6 +217,7 @@
 
       <!-- 姓名 -->
       <el-table-column label="姓名" min-width="100">
+        <template #header><span class="req-star">*</span>姓名</template>
         <template #default="{ row }">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isMemberFieldChanged(row, 'name'), memberBeforeValueText(row, 'name'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
             <el-input v-model="row.name" size="small" :disabled="readonly || row._deleted" :class="memberChangedClass(row, 'name')" />
@@ -192,6 +227,7 @@
 
       <!-- 性别 -->
       <el-table-column label="性别" width="80">
+        <template #header><span class="req-star">*</span>性别</template>
         <template #default="{ row }">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isMemberFieldChanged(row, 'gender'), memberBeforeValueText(row, 'gender'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
             <el-select v-model="row.gender" size="small" :disabled="readonly || row._deleted" :class="memberChangedClass(row, 'gender')">
@@ -204,6 +240,7 @@
 
       <!-- 证件类型 -->
       <el-table-column label="证件类型" width="100">
+        <template #header><span class="req-star">*</span>证件类型</template>
         <template #default="{ row }">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isMemberFieldChanged(row, 'idType'), memberBeforeValueText(row, 'idType'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
             <el-select v-model="row.idType" size="small" :disabled="readonly || row._deleted" :class="memberChangedClass(row, 'idType')">
@@ -217,6 +254,7 @@
 
       <!-- 证件号码 -->
       <el-table-column label="证件号码" min-width="180">
+        <template #header><span class="req-star">*</span>证件号码</template>
         <template #default="{ row }">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isMemberFieldChanged(row, 'idNo'), memberBeforeValueText(row, 'idNo'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
             <div class="idno-field" :class="idNoFieldClass(memberIdNoIssue(row))">
@@ -229,6 +267,7 @@
 
       <!-- 与户主关系 -->
       <el-table-column label="与户主关系" width="130">
+        <template #header><span class="req-star">*</span>与户主关系</template>
         <template #default="{ row }">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isMemberFieldChanged(row, 'relationToHead'), memberBeforeValueText(row, 'relationToHead'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
             <el-select
@@ -279,6 +318,7 @@
       </el-table-column>
 
       <el-table-column label="变化原因" min-width="130">
+        <template #header><span v-if="hasMemberChangeRequired" class="req-star">*</span>变化原因</template>
         <template #default="{ row }">
           <el-select
             v-if="isNewRow(row)"
@@ -305,7 +345,7 @@
             v-else
             v-model="row.changeReason"
             size="small"
-            placeholder="变化说明"
+            placeholder="变化说明（系统操作产生的变化会自动填写）"
             maxlength="500"
           />
         </template>
@@ -374,6 +414,12 @@ const diffTooltip = ref({
   y: 0,
 });
 const isAddedContractor = computed(() => props.result.resultStatus === "added");
+// 是否展示「变化原因 / 政策依据」。口径与后端 _validate_confirmable 的触发条件一致：
+// 只要有变化（is_changed）或 change_type 不是 none，确认时就要求这两项非空。
+// 新建承包方（changeType=add_contractor）同样命中，故一并展示。
+const showChangeFields = computed(
+  () => Boolean(props.result.isChanged) || (props.result.changeType || "none") !== "none",
+);
 const typeLabelMap = { "1": "农户", "2": "个人", "3": "单位" };
 const idTypeLabelMap = { "1": "居民身份证", "2": "户口簿", "3": "军官证" };
 const genderLabelMap = { "1": "男", "2": "女" };
@@ -451,6 +497,12 @@ watch(
 // 直接返回原始数组，避免展开拷贝导致 v-model 和回调失效
 const visibleMembers = computed(() => props.result.familyMembers || []);
 const currentMemberCount = computed(() => visibleMembers.value.filter((m) => !m._deleted).length);
+// 成员「变化原因」是条件必填：只要有新增 / 待删除 / 已修改的成员，就必须给这些行填原因
+// （口径同 backend/app/services/survey/base.py::_validate_confirmable 与
+//   ContractorResultDialog.vue::collectConfirmBlockers）。
+const hasMemberChangeRequired = computed(() =>
+  visibleMembers.value.some((row) => isNewRow(row) || row._deleted || isModifiedRow(row)),
+);
 const baseMembersByUid = computed(() => {
   const pairs = (props.result.baseContractor?.familyMembers || []).map((member) => [member.memberUid, member]);
   return new Map(pairs);
@@ -687,6 +739,14 @@ defineExpose({ getValidMembers, validateIdNos });
 <style scoped>
 .contractor-member-panel { min-height: 200px; }
 .change-alert { margin-bottom: 12px; }
+
+/* 必填标记：与 el-form-item 的 required 星号同色（Element Plus 默认 #f56c6c）。
+   el-table-column 没有 required 属性，列头只能靠 #header 插槽自渲染。 */
+.req-star {
+  color: #f56c6c;
+  margin-right: 2px;
+  font-weight: 700;
+}
 
 .section-title {
   font-size: 14px;

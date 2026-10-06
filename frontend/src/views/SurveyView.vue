@@ -139,8 +139,8 @@
                     <el-button link type="warning" @click="openResult(row)">查看详情</el-button>
                   </el-tooltip>
                   <el-button v-else link type="primary" @click="openResult(row)">调查录入</el-button>
-                  <el-button v-if="canManage && row.taskStatus === 'surveyed'" link type="success" @click="handleConfirmTask(row)">确认</el-button>
-                  <el-button v-if="canManage && row.canWrite !== false && activeBatch?.status !== 'finished' && row.taskStatus !== 'confirmed' && row.taskStatus !== 'skipped'" link type="warning" @click="handleSkipTask(row)">跳过</el-button>
+                  <el-button v-if="canManage && CONFIRMABLE_SURVEY_STATUSES.includes(row.taskStatus)" link type="success" @click="handleConfirmTask(row)">确认</el-button>
+                  <el-button v-if="canManage && row.canWrite !== false && activeBatch?.status !== 'finished' && !TERMINAL_SURVEY_STATUSES.includes(row.taskStatus)" link type="warning" @click="handleSkipTask(row)">跳过</el-button>
                 </div>
               </template>
             </el-table-column>
@@ -174,7 +174,7 @@
     </section>
 
     <BatchCreateDialog ref="batchCreateDialog" v-model="batchDialogVisible" @created="onBatchCreated" />
-    <ContractorResultDialog ref="contractorResultDialog" v-model="resultVisible" :active-batch="activeBatch" :can-manage="canManage" :can-write="activeTaskCanWrite" :tasks="tasks" :active-region-code="activeRegionCode" :active-region-label="activeRegionLabel" @saved="onResultSaved" @confirmed="onResultSaved" />
+    <ContractorResultDialog ref="contractorResultDialog" v-model="resultVisible" :active-batch="activeBatch" :can-manage="canManage" :can-write="activeTaskCanWrite" :tasks="tasks" :active-region-code="activeRegionCode" :active-region-label="activeRegionLabel" @saved="onResultSaved" @confirmed="onResultSaved" @open-contractor="onOpenCreatedContractor" />
     <IssuerSurveyDialog ref="issuerSurveyDialog" v-model="issuerSurveyVisible" :active-batch="activeBatch" :can-manage="canManage" @saved="onIssuerSurveySaved" />
     <DeregisteredContractorsDialog ref="deregisteredDialog" :active-batch="activeBatch" :can-manage="canManage" @restored="onResultSaved" />
     <TaskAssignDialog ref="taskAssignDialog" :active-batch="activeBatch" @assigned="onTasksAssigned" />
@@ -194,6 +194,7 @@ import TaskAssignDialog from "../components/survey/view/TaskAssignDialog.vue";
 
 import { fetchSurveyBatches, fetchSurveyAssignees, fetchSurveyTasks, fetchSurveyIssuers, finishSurveyBatch, exportSurveyResults, confirmSurveyResult, skipSurveyTask } from "../api/survey";
 import { fetchRegionTree } from "../api/region";
+import { CONFIRMABLE_SURVEY_STATUSES, TERMINAL_SURVEY_STATUSES } from "../config/surveyStatus";
 import { useAuthStore } from "../stores/auth";
 
 const authStore = useAuthStore();
@@ -439,6 +440,25 @@ function openResult(row) {
 function openCreateContractor() { if (!activeBatch.value) return; activeTaskCanWrite.value = true; contractorResultDialog.value.openForCreate(activeBatch.value); }
 function openDeregisteredDialog() { if (!activeBatch.value) return; deregisteredDialog.value.open(); }
 function onResultSaved() { loadTasks(); loadBatches(); }
+
+// 合户 / 分户保存后，新户由后端在响应里带回（`createdContractors`）。这里刷新任务列表
+// 把它捞出来直接打开；列表的分页 / 关键词 / 区域筛选可能不含它，则按编码再查一次；
+// 都拿不到就明确告诉用户去哪找 —— 静默失败会让人以为"合户完了但页面没跳"是坏的。
+async function onOpenCreatedContractor(target) {
+  if (!activeBatch.value || !target) return;
+  await loadTasks();
+  let row = tasks.value.find((t) => target.contractorUid && t.contractorUid === target.contractorUid)
+    || tasks.value.find((t) => target.cbfbm && t.cbfbm === target.cbfbm);
+  if (!row) {
+    try {
+      const { data } = await fetchSurveyTasks(activeBatch.value.id, { page: 1, page_size: 20, keyword: target.cbfbm || undefined, ...buildRegionParams() });
+      const items = data.data.items || [];
+      row = items.find((t) => t.contractorUid === target.contractorUid) || items[0];
+    } catch { /* 查询失败就落到下面那句提示 */ }
+  }
+  if (row) { openResult(row); return; }
+  ElMessage.warning(`新承包方「${target.cbfmc || target.cbfbm || ""}」已生成，但不在当前任务列表筛选结果中，请按编码 ${target.cbfbm || ""} 搜索。`);
+}
 
 async function handleConfirmTask(row) {
   try { await confirmSurveyResult(row.batchId, row.contractorUid); ElMessage.success("调查结果已确认"); await loadTasks(); await loadBatches(); } catch (error) { ElMessage.error(error.response?.data?.detail || "确认失败"); }

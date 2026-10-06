@@ -13,6 +13,7 @@ from app.models.survey import (
     SurveyDkResult,
 )
 from app.models.user import User
+from app.core.crs import get_target_srid
 from app.services.data_access_service import data_access_service
 
 logger = logging.getLogger(__name__)
@@ -248,10 +249,15 @@ class SurveyServiceParcelGeometryMixin:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="parcel geometry is empty")
         return candidate
 
-    def _geojson_4527_sql(self, geojson_param: str = "geojson", srid_param: str = "source_srid") -> str:
+    def _geojson_to_target_sql(self, geojson_param: str = "geojson", srid_param: str = "source_srid") -> str:
+        """录入链路：前端画图默认 4326（geometrySourceSrid 可传），统一投影转换到目标带入库。
+
+        与导入链路（progress 的坐标系闸门：错带直接拒收）不同，这里是交互录入，
+        源坐标系是参数化的，必须转换而不是拒绝。
+        """
         return (
             "ST_Multi(ST_CollectionExtract(ST_MakeValid("
-            f"ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON(:{geojson_param}), :{srid_param}), 4527)"
+            f"ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON(:{geojson_param}), :{srid_param}), {get_target_srid()})"
             "), 3))"
         )
 
@@ -259,7 +265,7 @@ class SurveyServiceParcelGeometryMixin:
         stmt = text(
             f"""
             WITH input_geom AS (
-                SELECT {self._geojson_4527_sql()} AS geom
+                SELECT {self._geojson_to_target_sql()} AS geom
             )
             SELECT
                 CASE
@@ -298,10 +304,10 @@ class SurveyServiceParcelGeometryMixin:
         if not candidate_parcels:
             return []
         stmt = text(
-            """
+            f"""
             WITH input_geom AS (
                 SELECT """
-            + self._geojson_4527_sql()
+            + self._geojson_to_target_sql()
             + """ AS geom
             ),
             local_parcels AS (
@@ -315,7 +321,7 @@ class SurveyServiceParcelGeometryMixin:
                             ST_MakeValid(
                                 ST_Transform(
                                     ST_SetSRID(ST_GeomFromGeoJSON((item->'geometry')::text), 4326),
-                                    4527
+                                    {get_target_srid()}
                                 )
                             ),
                             3
@@ -396,7 +402,7 @@ class SurveyServiceParcelGeometryMixin:
         stmt = text(
             f"""
             WITH input_geom AS (
-                SELECT {self._geojson_4527_sql()} AS geom
+                SELECT {self._geojson_to_target_sql()} AS geom
             ),
             current_dk AS (
                 SELECT DISTINCT ON (dkbm)
@@ -467,7 +473,7 @@ class SurveyServiceParcelGeometryMixin:
         stmt = text(
             f"""
             UPDATE {table_name}
-            SET geom = {self._geojson_4527_sql()}
+            SET geom = {self._geojson_to_target_sql()}
             WHERE id = :row_id
             """
         )
@@ -567,14 +573,14 @@ class SurveyServiceParcelGeometryMixin:
     def _measure_directional_split_area_sqm(self, db: Session, row_id: int, bounds: dict) -> float:
         area_sqm = db.scalar(
             text(
-                """
+                f"""
                 WITH source AS (
                     SELECT ST_Multi(ST_CollectionExtract(ST_MakeValid(geom), 3)) AS geom
                     FROM survey_dk_result
                     WHERE id = :row_id
                 ),
                 clip AS (
-                    SELECT ST_MakeEnvelope(:left, :bottom, :right, :top, 4527) AS geom
+                    SELECT ST_MakeEnvelope(:left, :bottom, :right, :top, {get_target_srid()}) AS geom
                 )
                 SELECT COALESCE(
                     ST_Area(
@@ -644,14 +650,14 @@ class SurveyServiceParcelGeometryMixin:
         bounds = self._direction_clip_bounds(normalized_direction, threshold, extent)
         rows = db.execute(
             text(
-                """
+                f"""
                 WITH source AS (
                     SELECT ST_Multi(ST_CollectionExtract(ST_MakeValid(geom), 3)) AS geom
                     FROM survey_dk_result
                     WHERE id = :row_id
                 ),
                 clip AS (
-                    SELECT ST_MakeEnvelope(:left, :bottom, :right, :top, 4527) AS geom
+                    SELECT ST_MakeEnvelope(:left, :bottom, :right, :top, {get_target_srid()}) AS geom
                 ),
                 fragments AS (
                     SELECT
@@ -714,7 +720,7 @@ class SurveyServiceParcelGeometryMixin:
                     WHERE id = :row_id
                 ),
                 splitter AS (
-                    SELECT ST_MakeValid({self._geojson_4527_sql()}) AS geom
+                    SELECT ST_MakeValid({self._geojson_to_target_sql()}) AS geom
                 ),
                 fragments AS (
                     SELECT
@@ -755,7 +761,7 @@ class SurveyServiceParcelGeometryMixin:
                 ),
                 splitter AS (
                     SELECT ST_MakeValid(
-                        ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON(:geojson), :source_srid), 4527)
+                        ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON(:geojson), :source_srid), {get_target_srid()})
                     ) AS geom
                 ),
                 fragments AS (
@@ -789,7 +795,7 @@ class SurveyServiceParcelGeometryMixin:
             text(
                 f"""
                 WITH src AS (
-                    SELECT {self._geojson_4527_sql('src_geojson', 'src_srid')} AS geom
+                    SELECT {self._geojson_to_target_sql('src_geojson', 'src_srid')} AS geom
                 )
                 SELECT
                     ST_XMin(geom) AS min_x,
@@ -818,10 +824,10 @@ class SurveyServiceParcelGeometryMixin:
             text(
                 f"""
                 WITH source AS (
-                    SELECT {self._geojson_4527_sql('src_geojson', 'src_srid')} AS geom
+                    SELECT {self._geojson_to_target_sql('src_geojson', 'src_srid')} AS geom
                 ),
                 clip AS (
-                    SELECT ST_MakeEnvelope(:left, :bottom, :right, :top, 4527) AS geom
+                    SELECT ST_MakeEnvelope(:left, :bottom, :right, :top, {get_target_srid()}) AS geom
                 )
                 SELECT COALESCE(
                     ST_Area(
@@ -864,10 +870,10 @@ class SurveyServiceParcelGeometryMixin:
             stmt = text(
                 f"""
                 WITH source AS (
-                    SELECT {self._geojson_4527_sql('src_geojson', 'src_srid')} AS geom
+                    SELECT {self._geojson_to_target_sql('src_geojson', 'src_srid')} AS geom
                 ),
                 splitter AS (
-                    SELECT ST_MakeValid({self._geojson_4527_sql()}) AS geom
+                    SELECT ST_MakeValid({self._geojson_to_target_sql()}) AS geom
                 ),
                 fragments AS (
                     SELECT
@@ -902,11 +908,11 @@ class SurveyServiceParcelGeometryMixin:
             stmt = text(
                 f"""
                 WITH source AS (
-                    SELECT {self._geojson_4527_sql('src_geojson', 'src_srid')} AS geom
+                    SELECT {self._geojson_to_target_sql('src_geojson', 'src_srid')} AS geom
                 ),
                 splitter AS (
                     SELECT ST_MakeValid(
-                        ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON(:geojson), :source_srid), 4527)
+                        ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON(:geojson), :source_srid), {get_target_srid()})
                     ) AS geom
                 ),
                 fragments AS (
@@ -975,10 +981,10 @@ class SurveyServiceParcelGeometryMixin:
             text(
                 f"""
                 WITH source AS (
-                    SELECT {self._geojson_4527_sql('src_geojson', 'src_srid')} AS geom
+                    SELECT {self._geojson_to_target_sql('src_geojson', 'src_srid')} AS geom
                 ),
                 clip AS (
-                    SELECT ST_MakeEnvelope(:left, :bottom, :right, :top, 4527) AS geom
+                    SELECT ST_MakeEnvelope(:left, :bottom, :right, :top, {get_target_srid()}) AS geom
                 ),
                 fragments AS (
                     SELECT

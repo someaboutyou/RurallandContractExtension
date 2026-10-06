@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
+from app.core.crs import crs_to_epsg, describe_mismatch, get_target_srid
 from app.db.session import SessionLocal, set_current_user
 from app.models.data_import import DataImportBatch, DataImportFile
 from app.models.user import User
@@ -304,6 +305,43 @@ def process_gdb_layers(
         file_type = infer_gdb_layer_type(layer_name)
         if file_type and file_type not in layer_map:
             layer_map[file_type] = layer_name
+
+    # ── 源坐标系闸门（在写任何一行数据之前）──────────────────────────────────
+    # 部署初始化时已固化目标坐标系（app/core/crs.py / system_config.target_srid），
+    # 几何图层（cbdkxx / dk）的源坐标系不是它就整包拒绝导入 —— 错带数据一旦
+    # 打标签入库是静默错坐标，必须在这里显式拦下。
+    _CRS_GATE_GEOMETRY_TYPES = ("cbdkxx", "dk")
+    geometry_layer_names = [
+        layer_map[file_type] for file_type in _CRS_GATE_GEOMETRY_TYPES if file_type in layer_map
+    ]
+    if geometry_layer_names:
+        target_srid = get_target_srid()
+        source_srid: int | None = None
+        for layer_name in geometry_layer_names:
+            try:
+                with fiona.open(gdb_path, layer=layer_name) as source:
+                    source_srid = crs_to_epsg(source.crs)
+            except Exception:
+                logger.exception("Failed to inspect GDB layer CRS: gdb_path=%s layer=%s", gdb_path, layer_name)
+                source_srid = None
+            if source_srid is not None:
+                break
+        if source_srid != target_srid:
+            detail = describe_mismatch(source_srid, target_srid)
+            logger.warning(
+                "GDB import rejected by CRS gate: batch_id=%s gdb_path=%s source_srid=%s target_srid=%s",
+                batch.id, gdb_path, source_srid, target_srid,
+            )
+            data_import_progress.update(
+                batch.id,
+                status="failed",
+                message=detail,
+            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+        logger.info(
+            "GDB CRS gate passed: batch_id=%s source_srid=%s target_srid=%s",
+            batch.id, source_srid, target_srid,
+        )
 
     total_rows = 0
     for layer_name in layer_map.values():

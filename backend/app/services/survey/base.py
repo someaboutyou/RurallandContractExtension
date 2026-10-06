@@ -25,6 +25,60 @@ from app.services.relation_codes import (
 
 logger = logging.getLogger(__name__)
 
+# ---- 「变化原因」的默认值（2026-09-27 定） ----
+# 背景：`change_reason` 曾被当成**硬闸门**（"承包方/成员有变化就必须填写变化原因"），
+# 但全库非空值 0 条 —— 也就是说**每一个有变化的户都卡死在「确认调查结果」之前，
+# 而界面上（成员表之外）连个录入控件都没有**。用户报的「合户之后确认不了」就是这个。
+# 语义上「变化原因」对系统操作（合户/分户/注销）本来就是**系统已知的事实**，
+# 对调查员手改字段也能从差异表看出来，没有理由要求人工再补写一遍。
+# 现在改为：确认前若为空，按变更类型 / 成员自身标记**自动写入默认值**；
+# 人工填了则以人工为准（`resolve_change_reason` 同口径）。
+# ⛔ 与前端 `ContractorResultDialog.collectConfirmBlockers` 同源：改这里要改那里。
+GENERIC_CHANGE_REASON = "调查数据发生变更"
+
+CONTRACTOR_CHANGE_REASON_DEFAULTS = {
+    "merge_household": "因合户发生变更",
+    "split_household": "因分户发生变更",
+    "deregister": "因注销承包方",
+    "add_contractor": "新增承包方",
+    "swap_parcels": GENERIC_CHANGE_REASON,
+    "add_parcel": GENERIC_CHANGE_REASON,
+    "remove_parcel": GENERIC_CHANGE_REASON,
+    "split_parcel": GENERIC_CHANGE_REASON,
+    "change_head": GENERIC_CHANGE_REASON,
+    "member_maintain": GENERIC_CHANGE_REASON,
+}
+
+
+def default_contractor_change_reason(change_type: str | None) -> str:
+    """承包方级「变化原因」的默认值。"""
+    return CONTRACTOR_CHANGE_REASON_DEFAULTS.get(
+        str(change_type or "none").strip(), GENERIC_CHANGE_REASON
+    )
+
+
+def default_member_change_reason(contractor_change_type: str | None, member) -> str:
+    """成员级「变化原因」的默认值：先看户级操作，再看成员自身标记。"""
+    change_type = str(contractor_change_type or "none").strip()
+    if change_type == "merge_household":
+        return "因合户转入新户"
+    if change_type == "split_household":
+        return "因分户转入新户"
+    if getattr(member, "is_deceased", False):
+        return "去世"
+    if getattr(member, "is_married_out_woman", False):
+        return "婚出"
+    if getattr(member, "is_urban_settled", False):
+        return "全家进城落户"
+    if getattr(member, "is_five_guarantees", False):
+        return "五保户"
+    if str(getattr(member, "member_result_status", "") or "") == "added":
+        return "新增家庭成员"
+    if str(getattr(member, "member_result_status", "") or "") == "removed":
+        return "成员迁出"
+    return GENERIC_CHANGE_REASON
+
+
 class SurveyServiceBase:
     attachment_root = Path(__file__).resolve().parents[3] / "storage" / "survey_attachments"
     authorization_root = Path(__file__).resolve().parents[3] / "storage" / "survey_authorizations"
@@ -65,6 +119,54 @@ class SurveyServiceBase:
         "five_guarantees": "五保户",
         "little_or_no_land": "无地少地",
     }
+    # ---- 调查成果状态集合（唯一来源，2026-09-27 定） ----
+    # 同一个集合被三处消费，必须同源，否则就会重现两类经典事故：
+    #   · 「界面能点、保存 403」—— 前端比后端宽；
+    #   · 「后端放行、界面不给点」—— 前端比后端窄。用户 2026-09-27 报的
+    #     「保存完调查结果，列表里没有确认按钮」就是后一类：前端只认 `surveyed`，
+    #     后端 `confirm_result` 却认 `{surveyed, changed, unchanged}`，
+    #     有变化（changed）的户后端放行、界面根本不给点。
+    # 消费方：`task.py::confirm_result`（服务端准入）、`SurveyView.vue`（列表按钮）、
+    #        `ContractorResultDialog.vue`（弹窗按钮）。
+    # ⛔ 别和「已调查」的**统计**口径混用：统计口径还包含 `confirmed`
+    #   （见 `repositories/dashboard_repository.SURVEYED_TASK_STATUSES` 与
+    #    `batch.py` 的 surveyed_count），那是"录过了"，这里是"录了但还没定案"。
+    confirmable_survey_statuses = {"surveyed", "changed", "unchanged"}
+    # 定案态：只能由「确认调查结果」「跳过」两个动作写入，保存不得回退。
+    terminal_survey_statuses = {"confirmed", "skipped"}
+    # ---- 「已定案 ⇒ 不许再改数据」的编辑闸门（2026-09-27 定） ----
+    # ⛔ 注意它**不等于** `terminal_survey_statuses`：`skipped`（跳过）属于定案态，
+    #   但跳过之后仍然允许补录（现有口径：`task.skip_task` 只拒 `confirmed`），
+    #   所以编辑闸门只有 `confirmed` 一个元素。两个集合别互相替换。
+    # 消费方（同一判据，四处）：`result.py::update_result`（承包方保存）、
+    #   `task.py::skip_task`（跳过前置检查）、`issuer.py::update_issuer`（发包方保存）、
+    #   前端 `config/surveyStatus.js::LOCKED_SURVEY_STATUSES`（表单只读判定）。
+    locked_survey_statuses = {"confirmed"}
+
+    @classmethod
+    def resolve_saved_survey_status(cls, current: str | None, submitted: str | None) -> str:
+        """保存调查结果时，这一户的成果状态该落成什么（由**服务端**裁定）。
+
+        ⛔ 为什么不能写成 `payload.get("surveyStatus") or "surveyed"`：
+        前端录入弹窗把表单**整体展开提交**，而 `surveyStatus` 是打开弹窗时从库里
+        回填的旧值 —— 界面上根本没有能改它的控件。于是"照单全收"等于把**起点值**
+        原样写回：全库 `survey_status = 'surveyed'` 一度是 **0 行**，
+        `SurveyCbfBase.task_status` 永远停在 `not_surveyed`，
+        普通户（非合户/分户新生成）**永远拿不到「确认」按钮**。
+        保存动作本身就意味着"这一户已经录过了"，所以这个推进由服务端负责，
+        前端回传的状态值只当"用户显式选择"看。
+        """
+        current_status = str(current or "").strip()
+        submitted_status = str(submitted or "").strip()
+        # ① 已在定案态：保持不动（确认 / 跳过各自由自己的动作写入）
+        if current_status in cls.terminal_survey_statuses:
+            return current_status
+        # ② 前端显式给了可确认集合里的状态：照收
+        if submitted_status in cls.confirmable_survey_statuses:
+            return submitted_status
+        # ③ 其余（空 / not_surveyed / not_started / 未知脏值）：推进为"已调查"
+        return "surveyed"
+
     @classmethod
     def is_terminal_result(cls, result: SurveyCbfResult) -> bool:
         """这一户是不是**已被终结**（已注销 / 被合户并走 / 被分户拆走）。
@@ -169,38 +271,74 @@ class SurveyServiceBase:
             # 179,788 个 cbflx=1 的户里**只有 1 户**能通过 ⇒ 「确认调查结果」对真实户
             # 几乎全部返回 400 "request failed"。验收：scripts/_verify_survey_rollback_entry.py H1/H2。
             if pick_household_head(members) is None:
-                errors.append("validation error")
+                errors.append("未指定户主：请在家庭成员中指定一名户主")
 
         seen_id_nos: set[str] = set()
         for member in members:
             id_no = (member.cyzjhm or "").strip()
             if id_no:
                 if id_no in seen_id_nos:
-                    errors.append(f"duplicate member id number: {id_no}")
+                    errors.append(f"家庭成员证件号码重复：{id_no}")
                     break
                 seen_id_nos.add(id_no)
 
-        if result.is_changed or result.change_type != "none":
-            if not self._has_text(result.change_reason):
-                errors.append("承包方存在变化时必须填写变化原因")
-            if not self._has_text(result.policy_basis):
-                errors.append("承包方存在变化时必须填写政策依据")
+        # ⛔ `change_reason`（变化原因）**不再是硬闸门**（2026-09-27 用户决定）：
+        # 空值由下面的 `_ensure_change_reasons` 在确认前按变更类型**自动写入默认值**。
+        # 曾经这里拦 `not self._has_text(result.change_reason)`，结果是全库 0 条非空的
+        # 字段把每一个有变化的户都卡死（用户报「合户之后刘乃高确认不了」根因之一）。
+        # `policy_basis`（政策依据）**不设必填**（2026-09-26 用户决定）：
+        # 它是 NY/T 2539 规范外的扩展字段，甲方合同模板里没有这一栏，
+        # 且全库非空值 0 条 —— 强制必填只会把户卡死在确认前。字段保留、可自愿填。
 
-        for member in members:
-            has_member_survey_change = member.is_changed or member.member_result_status != "normal" or any(
-                [
-                    member.is_urban_settled,
-                    member.is_married_out_woman,
-                    member.is_deceased,
-                    member.is_five_guarantees,
-                    self._has_text(member.rights_disposition),
-                ]
-            )
-            if has_member_survey_change and not self._has_text(member.change_reason):
-                errors.append("validation error")
+        # 成员「变化原因」同口径：也不再拦，由 `_ensure_change_reasons` 兜底。
 
         if errors:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="request failed")
+            # ⛔ 逐条点名缺哪一项，不要退回笼统的 "request failed"：
+            # 前端（含只读展示的手机端）直接展示 detail，笼统文案会让用户
+            # 点「确认调查结果」后完全不知道要补什么（2026-09-26 改）。
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="；".join(errors),
+            )
+
+    def _member_change_requires_reason(self, member: SurveyCbfJtcyResult) -> bool:
+        """这一名成员是不是「有变化」——只有有变化的成员才需要变化原因。"""
+        return bool(
+            member.is_changed
+            or member.member_result_status != "normal"
+            or member.is_urban_settled
+            or member.is_married_out_woman
+            or member.is_deceased
+            or member.is_five_guarantees
+            or self._has_text(member.rights_disposition)
+        )
+
+    def _ensure_change_reasons(self, db: Session, result: SurveyCbfResult) -> list[str]:
+        """给「有变化却没写原因」的行补上系统默认值，返回补了什么（供日志）。
+
+        ⛔ 为什么在**确认时补**而不是**保存时补**：既要覆盖存量行（用户报的这一户是
+        早先做的合户，保存路径早已走完），又要保证「点确认」不会被自己拦下。
+        这里直接改 ORM 对象，随 `confirm_result` 末尾的 `db.commit()` 一起落库。
+        """
+        filled: list[str] = []
+        if (result.is_changed or (result.change_type or "none") != "none") and not self._has_text(
+            result.change_reason
+        ):
+            result.change_reason = default_contractor_change_reason(result.change_type)
+            filled.append(f"承包方={result.change_reason}")
+        members = db.scalars(
+            select(SurveyCbfJtcyResult)
+            .where(SurveyCbfJtcyResult.contractor_uid == result.contractor_uid)
+            .order_by(SurveyCbfJtcyResult.id.asc())
+        ).all()
+        for member in members:
+            if not self._member_change_requires_reason(member):
+                continue
+            if self._has_text(member.change_reason):
+                continue
+            member.change_reason = default_member_change_reason(result.change_type, member)
+            filled.append(f"{member.cyxm or '未命名成员'}={member.change_reason}")
+        return filled
 
     async def _store_upload(self, directory: Path, upload_file: UploadFile) -> tuple[Path, int]:
         content = await upload_file.read()

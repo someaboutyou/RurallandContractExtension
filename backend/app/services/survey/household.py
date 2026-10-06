@@ -27,6 +27,53 @@ from app.services.relation_codes import (
 
 logger = logging.getLogger(__name__)
 
+# ── 合户 / 分户的「变化原因」为什么由系统自己填 ──────────────────────────────
+# 合户、分户是**系统自身产生的结构化变更**：新户是程序生成的，成员、地块是程序
+# 搬过去的。「变化原因」在业务上就是这次操作本身，系统完全知道，没有理由要求
+# 调查员再手写一遍。
+#
+# ⛔ 反面教训（2026-09-26，用户报「合户后刘乃高 321324100001020020 无法确认」）：
+# 新户生成时 change_reason 直接取 `payload.get("reason")`，调查员没填 ⇒ 三处
+# 全为 NULL ⇒ 撞上 `_validate_confirmable` 的两条硬闸门 ⇒ 这一户**永久无法确认**，
+# 而承包方级的「变化原因 / 政策依据」在 PC 端一个录入入口都没有（连补救都做不到）。
+#
+# 规则：弹窗里填了就以调查员填的为准；没填由系统按操作类型生成一句**事实陈述**。
+# ⛔ 生成的是「发生了什么」（合户 / 分户），**不是**「凭什么」——`policy_basis`
+# 是政策法规依据，属于要留档备查的证据，程序不臆造，仍由人工填写。
+MERGE_MEMBER_REASON = "因合户转入新户"
+MERGE_PARCEL_REASON = "因合户划入新户"
+SPLIT_MEMBER_REASON = "因分户转入新户"
+SPLIT_PARCEL_REASON = "因分户划入新户"
+_REASON_NAME_LIMIT = 3
+
+
+def _names_brief(names: list[str]) -> str:
+    """把承包方名称列表压成「甲、乙、丙」或「甲、乙、丙 等 5 户」，避免超长。"""
+    items = [str(name).strip() for name in names if str(name or "").strip()]
+    if not items:
+        return ""
+    if len(items) <= _REASON_NAME_LIMIT:
+        return "、".join(items)
+    return "、".join(items[:_REASON_NAME_LIMIT]) + f" 等 {len(items)} 户"
+
+
+def resolve_change_reason(payload_reason: object, fallback: str) -> str:
+    """变化原因取值：调查员填了用他的，没填用系统按操作类型生成的事实陈述。"""
+    text = str(payload_reason or "").strip()
+    return text or fallback
+
+
+def merge_new_household_reason(payload_reason: object, source_names: list[str]) -> str:
+    brief = _names_brief(source_names)
+    fallback = f"因合户设立新户（原承包方：{brief}）" if brief else "因合户设立新户"
+    return resolve_change_reason(payload_reason, fallback)
+
+
+def split_new_household_reason(payload_reason: object, source_name: str | None) -> str:
+    name = str(source_name or "").strip()
+    fallback = f"因分户自 {name} 户析出设立新户" if name else "因分户设立新户"
+    return resolve_change_reason(payload_reason, fallback)
+
 
 class SurveyServiceHouseholdMixin:
     def _find_active_swap_change(
@@ -693,15 +740,23 @@ class SurveyServiceHouseholdMixin:
             "change_type": rel.change_type, "change_reason": rel.change_reason} for rel in active_relations]
         created = []
         change_ids = {}
+        # 原因：调查员填了以他的为准，没填按「分户」这个事实生成（见文件头说明）。
+        split_member_reason = resolve_change_reason(payload.get("reason"), SPLIT_MEMBER_REASON)
+        split_parcel_reason = resolve_change_reason(payload.get("reason"), SPLIT_PARCEL_REASON)
+        split_source_reason = resolve_change_reason(
+            payload.get("reason"), f"因分户析出 {len(targets)} 个新承包户"
+        )
         for target in targets:
             new_cbfbm = target["newCbfbm"].strip()
             new_cbfmc = target["newCbfmc"].strip()
+            target_reason = split_new_household_reason(payload.get("reason"), result.cbfmc)
             target_members = [member_map[uid] for uid in target["memberUids"]]
             new_uid = str(uuid5(NAMESPACE_URL, f"survey:{batch_id}:cbf:{new_cbfbm}"))
             result_values = {c.name: getattr(result, c.name) for c in SurveyCbfResult.__table__.columns if c.name not in {"id", "created_at", "updated_at"}}
             result_values.update(contractor_uid=new_uid, cbfbm=new_cbfbm, cbfmc=new_cbfmc,
                 cbfzjhm="", cbfcysl=len(target_members), survey_status="surveyed", result_status="added",
-                is_changed=True, change_type="split_household", change_reason=payload.get("reason"),
+                is_changed=True, change_type="split_household", change_reason=target_reason,
+                policy_basis=payload.get("policyBasis"),
                 investigator_id=current_user.id, investigator_name=current_user.real_name,
                 investigated_at=now, confirmed_at=None, initialized_at=now,
                 remark=f"split_group:{group_id};source:{contractor_uid}")
@@ -722,7 +777,7 @@ class SurveyServiceHouseholdMixin:
                 member.contractor_uid = new_uid
                 member.cbfbm = new_cbfbm
                 member.is_changed = True
-                member.change_reason = payload.get("reason")
+                member.change_reason = split_member_reason
                 member.is_household_head = member.member_uid == head_uid
                 if member.is_household_head:
                     # ⛔ 户主的关系码是字典里的 `02`（户主），不是 `01`（本人）。
@@ -739,14 +794,14 @@ class SurveyServiceHouseholdMixin:
                 rel.cbfbm = new_cbfbm
                 rel.is_changed = True
                 rel.change_type = "split_household"
-                rel.change_reason = payload.get("reason")
+                rel.change_reason = split_parcel_reason
 
             child_record = self._create_change_record(db, batch_id, new_uid, new_cbfbm,
                 change_type="split_household", before_summary={},
                 after_summary={"action": "created", "split_group_id": group_id, "from_household": result.cbfbm,
                     "members": [m.member_uid for m in target_members], "household_head_member_uid": head_uid,
                     "parcels": target.get("parcelDkbms") or []},
-                reason=payload.get("reason"), current_user=current_user, now=now)
+                reason=target_reason, current_user=current_user, now=now)
             db.flush()
             change_ids[new_uid] = child_record.id
             created.append({"contractorUid": new_uid, "cbfbm": new_cbfbm, "cbfmc": new_cbfmc})
@@ -755,7 +810,7 @@ class SurveyServiceHouseholdMixin:
         result.cbfcysl = 0
         result.is_changed = True
         result.change_type = "split_household"
-        result.change_reason = payload.get("reason")
+        result.change_reason = split_source_reason
         result.investigated_at = now
 
         record = self._create_change_record(
@@ -769,7 +824,7 @@ class SurveyServiceHouseholdMixin:
                 "action": "cancelled_after_split", "split_group_id": group_id,
                 "new_households": created,
             },
-            reason=payload.get("reason"),
+            reason=split_source_reason,
             current_user=current_user, now=now,
         )
         db.flush()
@@ -815,11 +870,12 @@ class SurveyServiceHouseholdMixin:
                 field_label="承包方状态",
                 before_value=source_before.get("result_status"),
                 after_value="cancelled",
-                change_reason=payload.get("reason"),
+                change_reason=split_source_reason,
             ))
         if not commit:
             db.flush()
-            return {"queued": True}
+            # 把新户标识一并带回去：前端「合户/分户已完成，是否进入新户页面」要用它。
+            return {"queued": True, "newHouseholds": created}
         db.commit()
         return {"splitGroupId": group_id, "sourceContractorUid": contractor_uid, "newHouseholds": created}
 
@@ -1113,13 +1169,23 @@ class SurveyServiceHouseholdMixin:
         now = datetime.now(timezone.utc)
         group_id = uuid4().hex
         new_uid = str(uuid5(NAMESPACE_URL, f"survey:{batch_id}:cbf:{new_cbfbm}"))
+        # 原因三件套：调查员填了以他的为准，没填按「合户」这个事实生成（见文件头说明）。
+        household_reason = merge_new_household_reason(
+            payload.get("reason"), [item.cbfmc for item in results]
+        )
+        member_reason = resolve_change_reason(payload.get("reason"), MERGE_MEMBER_REASON)
+        parcel_reason = resolve_change_reason(payload.get("reason"), MERGE_PARCEL_REASON)
+        source_reason = resolve_change_reason(
+            payload.get("reason"), f"因合户并入新户（{new_cbfbm}）"
+        )
         template_result, template_task = results[0], tasks[0]
         result_values = {c.name: getattr(template_result, c.name) for c in SurveyCbfResult.__table__.columns if c.name not in {"id", "created_at", "updated_at"}}
         result_values.update(contractor_uid=new_uid, cbfbm=new_cbfbm,
             cbfmc=payload["newCbfmc"].strip(), cbfzjlx=head.cyzjlx, cbfzjhm=head.cyzjhm,
             cbfdz=payload["newAddress"].strip(), cbfcysl=len(members), survey_status="surveyed",
             result_status="added", is_changed=True, change_type="merge_household",
-            change_reason=payload.get("reason"), investigator_id=current_user.id,
+            change_reason=household_reason, policy_basis=payload.get("policyBasis"),
+            investigator_id=current_user.id,
             investigator_name=current_user.real_name, investigated_at=now, confirmed_at=None,
             initialized_at=now, remark=f"merge_group:{group_id};sources:{','.join(source_uids)}")
         new_result = SurveyCbfResult(**result_values)
@@ -1140,7 +1206,7 @@ class SurveyServiceHouseholdMixin:
             if member.is_household_head:
                 # ⛔ 户主关系码是字典里的 `02`（户主），不是 `01`（本人）。
                 member.yhzgx = HEAD_RELATION_VALUE
-            member.is_changed, member.change_reason = True, payload.get("reason")
+            member.is_changed, member.change_reason = True, member_reason
         # 合户会把 A、B 两户**各自的户主**（`yhzgx='02'`）一起带进新户，若不处理，
         # 新户里就同时存在多个"户主"（用户报的现象）。这两个人相对**新户主**的关系
         # 无从推断，写"配偶/子女"都是臆造 ⇒ 取字典里语义诚实的 `80 其他`。
@@ -1152,7 +1218,7 @@ class SurveyServiceHouseholdMixin:
             )
         for parcel in parcels:
             parcel.cbfbm, parcel.is_changed = new_cbfbm, True
-            parcel.change_type, parcel.change_reason = "merge_household", payload.get("reason")
+            parcel.change_type, parcel.change_reason = "merge_household", parcel_reason
 
         change_ids = {}
         for result, task in zip(results, tasks):
@@ -1161,11 +1227,11 @@ class SurveyServiceHouseholdMixin:
                 before_summary=source_snapshots[result.contractor_uid],
                 after_summary={"action": "cancelled_after_merge", "merge_group_id": group_id,
                     "new_household": new_cbfbm, "new_contractor_uid": new_uid},
-                reason=payload.get("reason"), current_user=current_user, now=now)
+                reason=source_reason, current_user=current_user, now=now)
             change_ids[result.contractor_uid] = record.id
             result.result_status, result.cbfcysl = "cancelled", 0
             result.is_changed, result.change_type = True, "merge_household"
-            result.change_reason, result.investigated_at = payload.get("reason"), now
+            result.change_reason, result.investigated_at = source_reason, now
             task.task_status, task.has_change = "deregistered", True
             task.change_count = (task.change_count or 0) + 1
             task.investigated_at = now
@@ -1175,7 +1241,7 @@ class SurveyServiceHouseholdMixin:
             after_summary={"action": "created_after_merge", "merge_group_id": group_id,
                 "source_households": old_codes, "members": member_ids,
                 "household_head_member_uid": head_uid, "parcels": [p.dkbm for p in parcels]},
-            reason=payload.get("reason"), current_user=current_user, now=now)
+            reason=household_reason, current_user=current_user, now=now)
         change_ids[new_uid] = new_record.id
         self._rebuild_contractor_diffs(db, batch_id, [*source_uids, new_uid], change_ids=change_ids)
         # 参与合户的原户 result.result_status 全部转 cancelled。同分户：base 表没有
@@ -1200,11 +1266,14 @@ class SurveyServiceHouseholdMixin:
                 field_label="承包方状态",
                 before_value=before_status,
                 after_value="cancelled",
-                change_reason=payload.get("reason"),
+                change_reason=source_reason,
             ))
         if not commit:
             db.flush()
-            return {"queued": True}
+            # 与分户同口径：把新户标识带回去，供前端「是否进入新户页面」跳转。
+            return {"queued": True, "newHouseholds": [
+                {"contractorUid": new_uid, "cbfbm": new_cbfbm, "cbfmc": payload["newCbfmc"]}
+            ]}
         db.commit()
         return {"mergeGroupId": group_id, "sourceContractorUids": source_uids,
             "newHousehold": {"contractorUid": new_uid, "cbfbm": new_cbfbm, "cbfmc": payload["newCbfmc"]}}

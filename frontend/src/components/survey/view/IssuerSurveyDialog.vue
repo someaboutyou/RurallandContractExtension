@@ -53,7 +53,7 @@
     <template #footer>
       <el-button @click="close">取消</el-button>
       <el-button
-        v-if="canManage && activeBatch?.status !== 'finished' && form.surveyStatus !== 'confirmed'"
+        v-if="canManage && activeBatch?.status !== 'finished' && !LOCKED_SURVEY_STATUSES.includes(form.surveyStatus)"
         :loading="saving"
         type="primary"
         @click="handleSave"
@@ -69,6 +69,9 @@ import { computed, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 
 import { createSurveyIssuer, fetchSurveyIssuer, fetchSurveyIssuers, updateSurveyIssuer } from "../../../api/survey";
+import { LOCKED_SURVEY_STATUSES } from "../../../config/surveyStatus";
+import { useAuthStore } from "../../../stores/auth";
+import { applySurveyActorDefaults } from "../../../utils/surveyActorDefaults";
 import { validateChinaId, validateMobile, validatePostcode } from "../../../utils/validators";
 
 const props = defineProps({
@@ -78,6 +81,8 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["update:modelValue", "saved"]);
+
+const authStore = useAuthStore();
 
 const saving = ref(false);
 const isCreating = ref(false);
@@ -108,6 +113,22 @@ function createEmpty() {
 }
 
 const form = reactive(createEmpty());
+
+// 表单只读判定：**与保存按钮的显示条件同源**（见模板 footer）——
+// 不能提交的时候，就不该往表单里塞默认值，否则只读视图会凭空多出假的"已变化"高亮。
+const formLocked = computed(
+  () => !props.canManage || props.activeBatch?.status === "finished" || LOCKED_SURVEY_STATUSES.includes(form.surveyStatus),
+);
+
+// 调查员 / 调查日期默认取「本次」（当前登录用户 + 当天），
+// 口径在 utils/surveyActorDefaults.js —— 与承包方侧 ContractorResultDialog 共用同一份。
+function applyCurrentSurveyDefaults() {
+  applySurveyActorDefaults(form, {
+    base: form.baseIssuer,
+    readonly: formLocked.value,
+    displayName: authStore.displayName,
+  });
+}
 
 const dialogTitle = computed(() => {
   const name = form.name ? ` - ${form.name}` : "";
@@ -227,6 +248,8 @@ async function openForCreate(batch, regionCode) {
   Object.assign(form, createEmpty(), {
     code: code.length >= 14 ? code.slice(0, 14) : code,
   });
+  // 新增发包方：调查员 / 调查日期直接落「本次」的默认值（当前登录用户 + 当天）。
+  applyCurrentSurveyDefaults();
   emit("update:modelValue", true);
 }
 
@@ -235,6 +258,9 @@ async function openForEdit(batch, row) {
   activeIssuer.value = row;
   const { data } = await fetchSurveyIssuer(batch.id, row.issuerUid);
   Object.assign(form, createEmpty(), data.data);
+  // 调查员 / 调查日期取「本次」的默认值，不再沿用库里的历史痕迹
+  // （survey_fbf_result 是全局唯一行，批次初始化时整行抄成快照，带着上一批的调查员/日期）。
+  applyCurrentSurveyDefaults();
   emit("update:modelValue", true);
 }
 

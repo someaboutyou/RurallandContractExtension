@@ -5,11 +5,23 @@
       :left-arrow="canGoBack"
       fixed
       placeholder
+      safe-area-inset-top
       @click-left="onBack"
     />
 
     <div class="m-body">
-      <router-view />
+      <!--
+        keep-alive 只缓存「列表型」页面：返回/切 tab 时不重新挂载、不重复拉数据。
+        ⛔ 详情/地块/附件页（MobileTaskDetailView / MobileParcelView /
+        MobileAttachmentView）按路由参数取数，**绝不能进缓存**，否则换一户进来
+        会展示上一户的旧数据 —— 它们不在 include 名单里即被排除。
+        include 匹配的是 SFC 文件名推断出的组件名（Vue 3.2.34+），改名时同步这里。
+      -->
+      <router-view v-slot="{ Component }">
+        <keep-alive :include="['MobileTaskListView', 'MobileProfileView']">
+          <component :is="Component" />
+        </keep-alive>
+      </router-view>
     </div>
 
     <van-tabbar v-if="showTabbar" route fixed placeholder>
@@ -55,6 +67,9 @@ function onBack() {
 .m-shell {
   min-height: 100vh;
   background: #f7f8fa;
+  /* 导航栏默认 z-index 只有 1，压不住页面里 z-index:10 的吸顶头部（详情页 hero），
+     抬到 20 保证层级：导航栏 > 吸顶头 > 内容（弹层/Toast 仍在 2000+ 之上） */
+  --van-nav-bar-z-index: 20;
 }
 
 .m-body {

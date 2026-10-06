@@ -237,8 +237,23 @@
           </el-table-column>
           <el-table-column label="操作" width="110" fixed="right">
             <template #default="{ row }">
+              <!-- 待保存的新增地块：给一个「保存」按钮，把**这一行**单独落库。
+                   ⛔ 与底部「保存调查结果」的区别（也是它存在的理由）：只写这一块地，
+                   不校验承包方必填项、不推进调查状态、不提交表单里其余待保存操作。
+                   落库后界址点 / 界址线按钮才会解锁（界址点由库里的地块图形推导）。 -->
               <el-button
-                v-if="parcelActionLabel(row)"
+                v-if="isUnsavedAddedParcel(row)"
+                link
+                type="primary"
+                size="small"
+                :disabled="actionDisabled"
+                :loading="persistingDkbm === row.dkbm"
+                @click.stop="emit('persist-parcel', row)"
+              >
+                保存
+              </el-button>
+              <el-button
+                v-else-if="parcelActionLabel(row)"
                 link
                 type="danger"
                 size="small"
@@ -256,15 +271,24 @@
         <div v-if="selectedParcel" class="parcel-detail" :class="{ 'is-removed': isHistoricalParcel(selectedParcel) }">
           <div class="parcel-detail-title">
             <span>{{ selectedParcel.dkmc || '地块详情' }}</span>
-            <el-button
-              type="primary"
-              plain
-              size="small"
-              :disabled="actionDisabled"
-              @click="openBoundaryDialog"
-            >
-              界址点 / 界址线维护
-            </el-button>
+            <!-- ⛔ 界址点 / 界址线由**库里的地块图形**推导（后端 load_parcel_rings 直接读
+                 survey_dk_result.geom），所以"还没落库"的行（新增地块 / 切割生成 /
+                 互换换入这些待保存预览）点了只会拿到 404。这里与后端
+                 `_ensure_parcel_in_batch` 的准入同源先挡住，并把原因放到 tooltip 上，
+                 不许出现"界面能点、接口拒绝"的假故障。 -->
+            <el-tooltip :content="boundaryBlockedReason" :disabled="!boundaryBlockedReason" placement="top">
+              <span class="boundary-entry-wrap">
+                <el-button
+                  type="primary"
+                  plain
+                  size="small"
+                  :disabled="actionDisabled || Boolean(boundaryBlockedReason)"
+                  @click="openBoundaryDialog"
+                >
+                  界址点 / 界址线维护
+                </el-button>
+              </span>
+            </el-tooltip>
           </div>
           <el-form label-position="top" size="small" :disabled="isHistoricalParcel(selectedParcel)">
             <div class="parcel-detail-grid">
@@ -543,6 +567,8 @@ const props = defineProps({
   batchId: { type: Number, required: true },
   contractorUid: { type: String, required: true },
   parcels: { type: Array, default: () => [] },
+  // 服务端已落库的地块编码（由 ContractorResultDialog 在 loadSurveyParcels 时记下）。
+  persistedDkbms: { type: Array, default: () => [] },
   parcelsLoading: { type: Boolean, default: false },
   canManage: { type: Boolean, default: false },
   isResultLocked: { type: Boolean, default: false },
@@ -551,9 +577,12 @@ const props = defineProps({
   savedRemoveRecords: { type: Array, default: () => [] },
   canRollbackSavedParcelChange: { type: Boolean, default: false },
   rollbackChangeLoadingId: { type: [Number, String], default: null },
+  // 正在被单独落库的地块编码（操作列「保存」按钮的 loading 用）。
+  // 实际落库由父组件调接口完成 —— 本组件只管显示与派发。
+  persistingDkbm: { type: String, default: "" },
 });
 
-const emit = defineEmits(["swap-parcels", "add-parcel", "split-parcel", "remove-parcel", "rollback-saved-swap", "rollback-saved-split", "undo-pending-remove", "rollback-saved-remove", "boundary-saved"]);
+const emit = defineEmits(["swap-parcels", "add-parcel", "split-parcel", "remove-parcel", "rollback-saved-swap", "rollback-saved-split", "undo-pending-remove", "rollback-saved-remove", "persist-parcel", "boundary-saved"]);
 
 const addParcelDialog = ref(null);
 const boundaryDialog = ref(null);
@@ -650,6 +679,19 @@ function findSavedRemoveRecord(parcel) {
   return (props.savedRemoveRecords || []).find((item) => item.removedDkbm === parcel?.dkbm) || null;
 }
 
+// ---- 操作列：「待保存的新增地块」单独落库 ----
+//
+// 判据与界址点闸门（boundaryBlockedReason）**同源**：都是"这一行在库里还没有"。
+// ⛔ 不能只看 `changeType === 'add_parcel'` —— 落库后的新增地块同样是这个值，必须叠加
+//   `_pending`（前端预览行标记）与 `persistedDkbms`（服务端返回过的编码）才区分得开。
+// 落库成功后父组件会重拉服务端 + 重放剩余预览行，`_pending` 消失，按钮自动回到「-」。
+function isUnsavedAddedParcel(parcel) {
+  if (!parcel?.dkbm) return false;
+  if (parcel.changeType !== "add_parcel") return false;
+  if (!parcel._pending) return false;
+  return !props.persistedDkbms.includes(parcel.dkbm);
+}
+
 function parcelRollbackChangeId(parcel) {
   if (isRemovedParcel(parcel) && parcel._pending) return undefined;
   return findSavedSplitRecord(parcel)?.id || findSavedSwapRecord(parcel)?.id || findSavedRemoveRecord(parcel)?.id || null;
@@ -728,10 +770,44 @@ function selectParcel(parcel) {
 }
 
 // --- 界址点 / 界址线维护 ---
+//
+// ⛔ 入口闸门 vs 后端闸门（`boundary.py::_ensure_parcel_in_batch`）：
+//    界址点 / 界址线不是独立录入的，而是**从库里的地块图形推导**出来的
+//    （`load_parcel_rings` 直接读 survey_dk_result.geom）。所以一块"只活在前端
+//    的待保存预览行"（新增地块 / 切割生成 / 互换换入）在库里既没有地块行、
+//    也没有承包方关联行，接口必然 404（事故：新增地块后立刻点维护 → 报
+//    "该地块不属于当前承包方"）。这类行必须在这里就挡住，并且说清楚下一步动作。
+//
+// 判据取"服务端返回过的 dkbm 集合"而不是 `resultStatus === 'added'`：
+// 落库后的新增地块 resultStatus 同样是 'added'，靠状态分不出"存没存过"。
+const UNSAVED_PARCEL_BOUNDARY_HINT =
+  "该地块尚未保存，请先点击「保存调查结果」，保存后即可维护界址点 / 界址线";
+const REMOVED_PARCEL_BOUNDARY_HINT = "该地块已移除，不能维护界址点 / 界址线";
+
+const boundaryBlockedReason = computed(() => {
+  const parcel = selectedParcel.value;
+  if (!parcel?.dkbm) return "";
+  if (parcel._pending && !props.persistedDkbms.includes(parcel.dkbm)) {
+    // 待保存预览 + 服务端没给过这一行 = 库里还没有这块地。
+    // （`_pending` 但服务端给过的行——例如"待保存移除""已保存切割的历史源地块"——
+    //   库里仍在，后端放行，这里也放行。）
+    return UNSAVED_PARCEL_BOUNDARY_HINT;
+  }
+  if (parcel.resultStatus === "removed") {
+    // 后端对已移除地块的地块行返回"该地块已移除，不能维护界址点 / 界址线"。
+    return REMOVED_PARCEL_BOUNDARY_HINT;
+  }
+  return "";
+});
+
 function openBoundaryDialog() {
   const parcel = selectedParcel.value;
   if (!parcel || !parcel.dkbm) {
     ElMessage.warning("请先在右侧列表中选中需要维护的地块");
+    return;
+  }
+  if (boundaryBlockedReason.value) {
+    ElMessage.warning(boundaryBlockedReason.value);
     return;
   }
   boundaryDialog.value?.open({
@@ -999,6 +1075,8 @@ onBeforeUnmount(() => {
 .parcel-detail { flex-shrink: 0; max-height: 36vh; overflow-y: auto; border-radius: 4px; padding: 10px 12px; border: 1px solid #ebeef5; }
 .parcel-detail.is-removed { background: #f4f4f5; }
 .parcel-detail-title { color: #303133; font-size: 14px; font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* 被禁用的按钮不触发鼠标事件，tooltip 的触发区要落在外面这层 span 上。 */
+.boundary-entry-wrap { display: inline-flex; }
 .parcel-detail-grid { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .parcel-detail :deep(.el-form-item) { margin-bottom: 10px; }
 .parcel-detail :deep(.el-form-item__label) { padding: 0 0 4px; font-size: 12px; }

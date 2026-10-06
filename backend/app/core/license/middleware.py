@@ -23,6 +23,8 @@ class LicenseCheckMiddleware(BaseHTTPMiddleware):
     _API_WHITELIST = (
         "/api/v1/auth",
         "/api/v1/license",
+        # 移动端热更检查/下载：更新发生在登录之前，且授权失效时 App 也应能收到新包
+        "/api/v1/app-updates",
     )
 
     async def dispatch(self, request: Request, call_next):

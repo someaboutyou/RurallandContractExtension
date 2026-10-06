@@ -21,6 +21,8 @@ const MobileTaskListView = () => import("./views/MobileTaskListView.vue");
 const MobileTaskDetailView = () => import("./views/MobileTaskDetailView.vue");
 const MobileParcelView = () => import("./views/MobileParcelView.vue");
 const MobileAttachmentView = () => import("./views/MobileAttachmentView.vue");
+const MobileSketchView = () => import("./views/MobileSketchView.vue");
+const MobileContractView = () => import("./views/MobileContractView.vue");
 const MobileProfileView = () => import("./views/MobileProfileView.vue");
 
 export const mobileRoutes = [
@@ -77,6 +79,28 @@ export const mobileRoutes = [
           requiresAuth: true,
           permissions: ["contractors.view"],
           mobileTitle: "拍照附件",
+          mobileTabbar: false,
+        },
+      },
+      {
+        path: "tasks/:batchId/:contractorUid/sketch",
+        name: "mobile-task-sketch",
+        component: MobileSketchView,
+        meta: {
+          requiresAuth: true,
+          permissions: ["contractors.view"],
+          mobileTitle: "承包地示意图",
+          mobileTabbar: false,
+        },
+      },
+      {
+        path: "tasks/:batchId/:contractorUid/contract",
+        name: "mobile-task-contract",
+        component: MobileContractView,
+        meta: {
+          requiresAuth: true,
+          permissions: ["contractors.view"],
+          mobileTitle: "合同信息",
           mobileTabbar: false,
         },
       },

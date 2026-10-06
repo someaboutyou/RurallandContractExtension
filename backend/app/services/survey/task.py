@@ -327,7 +327,7 @@ class SurveyServiceTaskMixin:
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
         # 跳过同样改变成果状态，按任务归属判定，口径与 update_result 一致。
         self.ensure_task_write_permission(db, batch, result, current_user)
-        if result.survey_status == "confirmed":
+        if result.survey_status in self.locked_survey_statuses:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="调查成果已确认，不能跳过")
         now = datetime.now(timezone.utc)
         result.survey_status = "skipped"
@@ -378,8 +378,20 @@ class SurveyServiceTaskMixin:
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
         # 注意：确认是「复核」动作，语义上不属于「修改调查数据」，
         # 因此这里刻意不做任务归属校验——区域审核人仍可确认归属他人的户。
-        if result.survey_status not in {"surveyed", "changed", "unchanged"}:
+        # ⛔ 准入集合的唯一来源：`base.py::confirmable_survey_statuses`。
+        # 前端列表 / 弹窗的「确认」按钮显示条件必须与之完全一致，改这里要改那里。
+        if result.survey_status not in self.confirmable_survey_statuses:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请先保存调查结果后再确认")
+        # 变化原因不再是硬闸门：为空的行先按变更类型写系统默认值（人工填过的不动），
+        # 再走其余校验（户主、证件号重复等）。见 base.py 的 `_ensure_change_reasons`。
+        filled_reasons = self._ensure_change_reasons(db, result)
+        if filled_reasons:
+            logger.info(
+                "确认 %s：自动补齐变化原因 %d 项（%s）",
+                result.cbfbm,
+                len(filled_reasons),
+                "；".join(filled_reasons),
+            )
         self._validate_confirmable(db, result)
         now = datetime.now(timezone.utc)
         result.survey_status = "confirmed"
@@ -413,6 +425,48 @@ class SurveyServiceTaskMixin:
             task.task_status = "confirmed"
             task.confirmed_at = now
             task.reviewed_at = now
+        db.commit()
+        return self.get_result(db, batch_id, contractor_uid, current_user)
+
+    def unconfirm_result(self, db: Session, batch_id: int, contractor_uid: str, current_user: User) -> dict:
+        """撤回已确认的调查成果，使其回到可编辑状态。
+
+        由端点层的 ``require_permission("survey_result.unconfirm")`` 保护，
+        这里只做业务校验与状态回退。**仅当当前为 confirmed 才允许**。
+
+        回退到 ``surveyed``（可编辑态之一），并清掉确认时写入的
+        ``reviewer_id / reviewer_name / reviewed_at / confirmed_at / change_reason``；
+        ``survey_cbf_base.task_status`` 同步由 ``confirmed`` 退回 ``surveyed`` 并清 ``reviewed_at``。
+
+        ⛔ 只动状态，不撤销确认时可能已发生的业务动作（互换 / 合户 / 分户 / 变更登记等）。
+           若误确认还连带触发了别的业务，撤回后需用界面对应的「撤回」功能另行处理。
+        ⛔ 与 ``confirm_result`` 同款前置：批次须为 active（编辑闸门），且必须在当前用户
+           区域 scope 内（复核类动作不做任务归属校验，但跨区越权仍拦）。
+        """
+        batch = self._ensure_batch(db, batch_id)
+        self._ensure_batch_editable_status(batch, action="撤回确认")
+        result = self._get_result(db, batch_id, contractor_uid)
+        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
+        if result.survey_status != "confirmed":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="本户调查成果尚未确认，无需撤回")
+        now = datetime.now(timezone.utc)
+        result.survey_status = "surveyed"
+        result.reviewer_id = None
+        result.reviewer_name = None
+        result.reviewed_at = None
+        result.confirmed_at = None
+        result.change_reason = None
+        result.updated_at = now
+        task = db.scalars(
+            select(SurveyCbfBase).where(
+                SurveyCbfBase.batch_id == batch_id,
+                SurveyCbfBase.contractor_uid == contractor_uid,
+            )
+        ).first()
+        if task:
+            task.task_status = "surveyed"
+            task.reviewed_at = None
+            task.updated_at = now
         db.commit()
         return self.get_result(db, batch_id, contractor_uid, current_user)
 

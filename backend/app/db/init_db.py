@@ -66,6 +66,7 @@ DEFAULT_PERMISSIONS = [
     {"name": "管理发包方", "code": "issuers.manage", "group_name": "发包方管理", "category": "action", "description": "允许维护发包方信息。"},
     {"name": "查看承包方", "code": "contractors.view", "group_name": "承包方管理", "category": "menu", "description": "允许查看承包方列表。"},
     {"name": "管理承包方", "code": "contractors.manage", "group_name": "承包方管理", "category": "action", "description": "允许维护承包方及家庭成员信息。"},
+    {"name": "撤回确认调查成果", "code": "survey_result.unconfirm", "group_name": "承包方管理", "category": "action", "description": "允许将已确认（定案）的承包方调查成果撤回，使其回到可编辑状态。默认仅平台管理员拥有。"},
     {"name": "查看业务申请", "code": "requests.view", "group_name": "业务申请", "category": "menu", "description": "允许查看业务申请页面。"},
     {"name": "管理业务申请", "code": "requests.manage", "group_name": "业务申请", "category": "action", "description": "允许新增、编辑、删除业务申请。"},
     {"name": "提交业务申请", "code": "requests.submit", "group_name": "业务申请", "category": "action", "description": "允许提交业务申请。"},

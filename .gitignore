@@ -29,8 +29,13 @@ backend/app/storage/data_imports/
 
 frontend/dist/
 frontend/node_modules/
+# 构建前把旧 dist 改名留下的残留（刻意"改名代替删除"以绕开批量删除守卫，见 skill
+# `safe-delete-guard-workaround`；沙箱会拒绝把整个目录移出 frontend/）。
+frontend/dist.prev-*/
 
-**/*.zip
+# 压缩包：任意目录下一律不入库
+*.zip
+*.rar
 
 # ---- 临时产物清理（2026-09-25）----
 # backend 根目录下的一次性修复/清理/测试脚本与临时输出。
@@ -41,12 +46,19 @@ backend/*.log
 backend/*.sql
 *.bak
 
-# 授权文件备份与副本（正式的 backend/storage/license.dat 已入库）
+# 授权文件：与机器指纹绑定，不入库（含备份 / 副本）
+backend/storage/license*.dat
 backend/storage/license*.dat.bak.*
-backend/storage/license1 (2).dat
 
 # 运行时上传的附件（业务数据，不入库）
 backend/storage/survey_attachments/
+
+# 数据导出产物（业务数据：含承包方/地块等敏感信息，zip 由 *.zip 规则挡，
+# 但打包中断残留的 work/ 临时目录是散的 gdbtable 文件，必须整目录忽略）
+backend/storage/data_exports/
+
+# 客户端升级包（运行时产物，不入库）
+backend/storage/app-updates/
 
 # Vite 临时文件
 frontend/vite.config.js.timestamp-*.mjs

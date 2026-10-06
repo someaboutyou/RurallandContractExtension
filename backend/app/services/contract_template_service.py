@@ -904,7 +904,7 @@ class ContractTemplateService:
     ) -> dict[str, list[dict]]:
         """Dump parcel boundary points (界址点) with their maintained attributes.
 
-        ``survey_dk_result.geom`` is stored in EPSG:4527 (CGCS2000 3-degree
+        ``survey_dk_result.geom`` is stored in the deployment target SRID (CGCS2000 3-degree, see app/core/crs.py;
         Gauss-Kruger, metres), so values are printed as-is: X = 北坐标 (northing),
         Y = 东坐标 (easting, carries the 39 zone prefix).
 

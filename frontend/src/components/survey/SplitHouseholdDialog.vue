@@ -27,7 +27,16 @@
         </el-form-item>
       </div>
     </el-card>
-    <el-form-item label="分户原因" required><el-input v-model="reason" type="textarea" :rows="2" maxlength="500" show-word-limit /></el-form-item>
+    <!-- 分户原因：选填。留空时后端按「分户」这个事实自动生成（新户记
+         "因分户自 X 户析出设立新户"，成员记"因分户转入新户"）——与合户同一口径：
+         系统产生的结构化变更，原因就是操作本身，不该要求调查员手写一遍。
+         政策依据同合户：**选填**，填过一次会自动带出。 -->
+    <el-form-item label="分户原因">
+      <el-input v-model="reason" type="textarea" :rows="2" maxlength="500" show-word-limit placeholder="选填：留空将自动记为「因分户析出设立新户」" />
+    </el-form-item>
+    <el-form-item label="政策依据">
+      <el-input v-model="policyBasis" type="textarea" :rows="2" maxlength="500" show-word-limit placeholder="选填：本次分户所依据的政策文件或村组决议（填过一次会自动带出）" />
+    </el-form-item>
     <el-alert v-if="assignmentError" :title="assignmentError" type="error" :closable="false" show-icon />
     <template #footer><el-button @click="visible=false">取消</el-button><el-button type="primary" :disabled="Boolean(assignmentError)" @click="submit">加入待保存</el-button></template>
   </el-dialog>
@@ -38,6 +47,7 @@ import { computed, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { fetchContractorCodes } from "../../api/survey";
 import { collectContractorCodes, fetchAllBatchTasks } from "../../utils/surveyCandidates";
+import { loadPolicyBasis, savePolicyBasis } from "../../utils/policyBasisMemory";
 
 const emit = defineEmits(["done"]);
 const visible = ref(false);
@@ -45,6 +55,7 @@ const allMembers = ref([]);
 const allParcels = ref([]);
 const households = ref([]);
 const reason = ref("");
+const policyBasis = ref("");
 let keySeed = 0;
 const existingCodes = ref(new Set());
 const codePrefix = ref("");
@@ -53,7 +64,6 @@ const emptyHousehold = () => ({ key: ++keySeed, newCbfbm: generateCode(), newCbf
 
 const assignmentError = computed(() => {
   if (households.value.length < 2) return "至少需要两个新承包户";
-  if (!reason.value.trim()) return "请填写分户原因";
   if (households.value.some(h => !h.newCbfbm.trim() || !h.newCbfmc.trim() || !h.memberUids.length || !h.parcelDkbms.length)) return "请完整填写每个新户，并至少分配一名成员和一块地";
   if (households.value.some(h => !h.householdHeadMemberUid || !h.memberUids.includes(h.householdHeadMemberUid))) return "请为每个新承包户指定户主";
   const codes = households.value.map(h => h.newCbfbm.trim());
@@ -80,6 +90,7 @@ async function open(batchId, _contractorUid, members, parcels, sourceCode, tasks
     saveSnapshot(item);
   });
   reason.value = "";
+  policyBasis.value = loadPolicyBasis();
   visible.value = true;
   await refreshExistingCodes(batchId);
 }
@@ -162,7 +173,8 @@ function handleAssignmentChange(field, currentIndex) {
 }
 function submit() {
   if (assignmentError.value) { ElMessage.warning(assignmentError.value); return; }
-  emit("done", { type: "split_household", payload: { newHouseholds: households.value.map(({ newCbfbm, newCbfmc, memberUids, parcelDkbms, householdHeadMemberUid }) => ({ newCbfbm: newCbfbm.trim(), newCbfmc: newCbfmc.trim(), memberUids, parcelDkbms, householdHeadMemberUid })), reason: reason.value.trim() } });
+  savePolicyBasis(policyBasis.value);
+  emit("done", { type: "split_household", payload: { newHouseholds: households.value.map(({ newCbfbm, newCbfmc, memberUids, parcelDkbms, householdHeadMemberUid }) => ({ newCbfbm: newCbfbm.trim(), newCbfmc: newCbfmc.trim(), memberUids, parcelDkbms, householdHeadMemberUid })), reason: reason.value.trim() || undefined, policyBasis: policyBasis.value.trim() } });
   visible.value = false;
   ElMessage.success("分户已加入待保存");
 }

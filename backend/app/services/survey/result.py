@@ -64,7 +64,7 @@ class SurveyServiceResultMixin:
         batch = self._ensure_batch(db, batch_id)
         self._ensure_batch_editable_status(batch, action="继续编辑")
         result = self._get_result(db, batch_id, contractor_uid)
-        if result.survey_status == "confirmed":
+        if result.survey_status in self.locked_survey_statuses:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="调查成果已确认，不能继续编辑")
         if self.is_terminal_result(result):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该承包户已注销，撤回注销、分户或合并操作后才能修改")
@@ -126,7 +126,12 @@ class SurveyServiceResultMixin:
         result.gsshr = payload.get("publicNoticeReviewer")
         result.group_region_code = payload.get("groupRegionCode")
         result.group_region_name = payload.get("groupRegionName")
-        result.survey_status = payload.get("surveyStatus") or "surveyed"
+        # 状态推进由服务端裁定：前端只提交"打开弹窗时读到的旧状态"（界面没有改它的
+        # 控件），照单全收会把起点值原样写回 ⇒ 状态机永远停在 not_surveyed。
+        # 判据见 `base.py::resolve_saved_survey_status`。
+        result.survey_status = self.resolve_saved_survey_status(
+            result.survey_status, payload.get("surveyStatus")
+        )
         # Terminal operations own the lifecycle state.  Do not let the UI preview
         # overwrite the pre-operation state before its rollback snapshot is made.
         if not has_terminal_operation:
@@ -154,15 +159,20 @@ class SurveyServiceResultMixin:
             issuer.fbfdcy = issuer_payload.get("surveyorName") or current_user.real_name
             issuer.fbfdcrq = self._parse_datetime(issuer_payload.get("surveyDate")) or issuer.fbfdcrq
             issuer.fbfdcjs = issuer_payload.get("surveyNote")
-            issuer.survey_status = issuer_payload.get("surveyStatus") or "surveyed"
+            # 与承包方同源：保存由**服务端**推进状态，不收前端回填的起点值
+            # （判据见 `base.py::resolve_saved_survey_status`）。
+            issuer.survey_status = self.resolve_saved_survey_status(
+                issuer.survey_status, issuer_payload.get("surveyStatus")
+            )
             issuer.result_status = issuer_payload.get("resultStatus") or "normal"
             issuer.change_type = issuer_payload.get("changeType") or "none"
             issuer.change_reason = issuer_payload.get("changeReason")
-            issuer.policy_basis = issuer_payload.get("policyBasis")
+            # ⛔ `SurveyFbfResult` **没有** policy_basis / investigator_id /
+            #   investigator_name / investigated_at 这几列 —— 这里原先给它们赋了值，
+            #   属于**静默无效**代码（未映射属性不入库），还会误导人去库里找
+            #   "发包方录入人/录入时间"。发包方的调查人与调查日期走源表字段
+            #   `fbfdcy` / `fbfdcrq`。（2026-09-27 清理，行为不变）
             issuer.remark = issuer_payload.get("remark")
-            issuer.investigator_id = current_user.id
-            issuer.investigator_name = current_user.real_name
-            issuer.investigated_at = now
             issuer_changed = self._issuer_changed(issuer, base_issuer)
             issuer.is_changed = issuer_changed
             if old_fbfbm != issuer.fbfbm:
@@ -287,7 +297,9 @@ class SurveyServiceResultMixin:
         # Terminal household operations query the member rows that were rebuilt
         # above. Flush first so merge/split always sees the current form state.
         db.flush()
-        self._apply_pending_operations(db, batch_id, contractor_uid, pending_operations, current_user)
+        created_contractors = self._apply_pending_operations(
+            db, batch_id, contractor_uid, pending_operations, current_user
+        )
         if not has_terminal_operation:
             preserved_operation_change_count = db.scalar(
                 select(func.count(SurveyChangeRecord.id)).where(
@@ -346,7 +358,13 @@ class SurveyServiceResultMixin:
             self.refresh_auto_tags(db, batch_id, contractor_uid, current_user, commit=False)
         db.commit()
         if has_terminal_operation:
-            return {"contractorUid": contractor_uid, "status": "closed"}
+            # createdContractors：本次由合户 / 分户**新生成**的承包户，前端据此提示
+            # 「操作已完成，是否进入新户的调查录入页面」。其余终态操作（注销）为空列表。
+            return {
+                "contractorUid": contractor_uid,
+                "status": "closed",
+                "createdContractors": created_contractors,
+            }
         return self.get_result(db, batch_id, contractor_uid, current_user)
 
 

@@ -147,13 +147,41 @@ class SurveyServiceIssuerMixin:
             initialized_at=now,
             snapshot_at=now,
         )
-        db.add(base)
-        db.flush()
+        # ⛔ 落库顺序：`survey_fbf_base.result_id` 是**非空**列，此刻 result 还没有行号，
+        #   所以必须先落 result 拿到 id → 回填 base.result_id → 再落 base
+        #   （与 `result.py` 人工新增承包户的顺序完全一致）。
+        #   2026-09-27 修：本方法原先**连 `result` 对象都没构造**，下面就写
+        #   `result.result_status = ...` ⇒ 任何「新增发包方」请求都以 NameError 收场（HTTP 500），
+        #   即该功能此前完全不可用。
+        result = SurveyFbfResult(
+            tenant_code=batch.tenant_code,
+            region_code=code,
+            issuer_uid=issuer_uid,
+            fbfbm=code,
+            fbfmc=payload["name"],
+            fbffzrxm=payload["responsibleName"],
+            fzrzjlx=payload.get("responsibleIdType") or "1",
+            fzrzjhm=payload["responsibleIdNo"],
+            lxdh=payload.get("phone"),
+            fbfdz=payload["address"],
+            yzbm=payload.get("postcode") or "000000",
+            fbfdcy=payload.get("surveyorName") or current_user.real_name,
+            fbfdcrq=survey_date,
+            fbfdcjs=payload.get("surveyNote"),
+            initialized_at=now,
+        )
+        # 新建本身就是一条变化。状态由**服务端**裁定 —— 「新增并保存」的语义就是
+        # 这一户已经调查过了，不能把起点值（not_surveyed）原样落库。
         result.result_status = "added"
         result.is_changed = True
         result.change_type = "add_issuer"
         result.remark = payload.get("remark")
+        result.survey_status = self.resolve_saved_survey_status(None, payload.get("surveyStatus"))
         db.add(result)
+        db.flush()
+        # result 已拿到 id，此时才把快照行补上 result_id 并落库。
+        base.result_id = result.id
+        db.add(base)
         db.commit()
         return self._serialize_issuer_row(result, batch_id, 0)
 
@@ -176,7 +204,7 @@ class SurveyServiceIssuerMixin:
         if batch.status == "finished":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="调查批次已结束，不能继续编辑")
         issuer = self._get_issuer(db, batch_id, issuer_uid)
-        if issuer.survey_status == "confirmed":
+        if issuer.survey_status in self.locked_survey_statuses:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="issuer survey result already confirmed")
         data_access_service.ensure_code_in_scope(current_user, issuer.fbfbm, detail="issuer is out of scope")
         data_access_service.ensure_code_in_scope(current_user, payload["code"], detail="issuer is out of scope")
@@ -203,7 +231,13 @@ class SurveyServiceIssuerMixin:
         issuer.fbfdcy = payload.get("surveyorName") or current_user.real_name
         issuer.fbfdcrq = self._parse_datetime(payload.get("surveyDate")) or issuer.fbfdcrq
         issuer.fbfdcjs = payload.get("surveyNote")
-        issuer.survey_status = payload.get("surveyStatus") or "surveyed"
+        # ⛔ 状态由**服务端**裁定，不能写成 `payload.get("surveyStatus") or "surveyed"`：
+        #   前端表单把 `surveyStatus` 当普通字段整体回传，而界面上根本没有能改它的控件
+        #   ⇒ 照单全收等于把打开弹窗时读到的**起点值**（not_surveyed）原样写回，
+        #   发包方成果永远停在"未调查"。判据见 `base.py::resolve_saved_survey_status`。
+        issuer.survey_status = self.resolve_saved_survey_status(
+            issuer.survey_status, payload.get("surveyStatus")
+        )
         issuer.result_status = payload.get("resultStatus") or "normal"
         issuer.change_type = payload.get("changeType") or "none"
         issuer.change_reason = payload.get("changeReason")

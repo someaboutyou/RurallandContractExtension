@@ -23,7 +23,7 @@
         <ContractorMemberPanel ref="contractorMemberPanel" :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :result="resultForm" :changed-fields="computedChangedFields" :readonly="dataReadOnly" :can-generate-code="!dataReadOnly && resultForm.resultStatus === 'added'" @generate-code="generateResultContractorCode" />
       </el-collapse-item>
       <el-collapse-item title="地块信息" name="parcels" :disabled="isCreatingContractorResult">
-        <ParcelInfoPanel v-if="isPanelMounted('parcels')" :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :parcels="parcels" :parcels-loading="parcelsLoading" :can-manage="canManage && canWrite" :is-result-locked="dataReadOnly" :saved-swap-records="savedSwapRecords" :saved-split-records="savedSplitRecords" :saved-remove-records="savedRemoveRecords" :can-rollback-saved-parcel-change="canRollbackSavedParcelChange" :rollback-change-loading-id="rollbackingSavedChangeId" @swap-parcels="handleOpSwapParcels" @add-parcel="handlePendingOperation" @split-parcel="handlePendingOperation" @remove-parcel="handleOpRemoveParcel" @rollback-saved-swap="handleRollbackSavedSwap" @rollback-saved-split="handleRollbackSavedSplit" @rollback-saved-remove="handleRollbackSavedRemove" @undo-pending-remove="handleUndoPendingRemoveFromPanel" />
+        <ParcelInfoPanel v-if="isPanelMounted('parcels')" :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :parcels="parcels" :persisted-dkbms="persistedParcelDkbms" :parcels-loading="parcelsLoading" :can-manage="canManage && canWrite" :is-result-locked="dataReadOnly" :saved-swap-records="savedSwapRecords" :saved-split-records="savedSplitRecords" :saved-remove-records="savedRemoveRecords" :can-rollback-saved-parcel-change="canRollbackSavedParcelChange" :rollback-change-loading-id="rollbackingSavedChangeId" :persisting-dkbm="persistingParcelDkbm" @swap-parcels="handleOpSwapParcels" @add-parcel="handlePendingOperation" @split-parcel="handlePendingOperation" @remove-parcel="handleOpRemoveParcel" @rollback-saved-swap="handleRollbackSavedSwap" @rollback-saved-split="handleRollbackSavedSplit" @rollback-saved-remove="handleRollbackSavedRemove" @undo-pending-remove="handleUndoPendingRemoveFromPanel" @persist-parcel="handlePersistPendingParcel" />
       </el-collapse-item>
       <el-collapse-item title="承包地块示意图" name="plotSketchMap" :disabled="isCreatingContractorResult">
         <PlotSketchMapPanel v-if="isPanelMounted('plotSketchMap')" :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :refresh-key="plotSketchRefreshKey" />
@@ -69,7 +69,7 @@
         </el-descriptions>
         <el-form v-if="canManage && canWrite && !resultForm.generatedRequestId" :model="requestForm" class="compact-form" label-position="top" style="margin-top:8px">
           <div class="form-grid">
-            <el-form-item label="业务类型"><el-select v-model="requestForm.requestType" size="small"><el-option label="变更登记" value="变更登记" /><el-option label="注销登记" value="注销登记" /><el-option label="首次登记" value="首次登记" /></el-select></el-form-item>
+            <el-form-item label="业务类型" required><el-select v-model="requestForm.requestType" size="small"><el-option label="变更登记" value="变更登记" /><el-option label="注销登记" value="注销登记" /><el-option label="首次登记" value="首次登记" /></el-select></el-form-item>
             <el-form-item label="申请标题"><el-input v-model="requestForm.requestTitle" size="small" /></el-form-item>
             <el-form-item class="form-span-2" label="申请原因"><el-input v-model="requestForm.reason" type="textarea" :rows="2" size="small" /></el-form-item>
           </div>
@@ -80,7 +80,15 @@
     <template #footer>
       <el-button @click="close">取消</el-button>
       <el-button v-if="canManage && canWrite && !isResultLocked && (!savedTerminated || terminalPendingOperation)" :loading="savingResult || creatingContractor" type="success" @click="handleSaveResult">{{ isCreatingContractorResult ? "新增并保存" : "保存调查结果" }}</el-button>
-      <el-button v-if="canManage && canWrite && !isCreatingContractorResult && !dataReadOnly && resultForm.surveyStatus !== 'not_surveyed'" :loading="confirmingResult" type="primary" @click="handleConfirmCurrent">确认调查结果</el-button>
+      <!-- ⛔ 有待保存操作时不给点「确认调查结果」（2026-09-27 用户报 bug 后补）：
+           确认接口 confirmSurveyResult(batchId, contractorUid) 根本不接收 pendingOperations，
+           点下去 = 待保存的互换/撤回互换被静默丢弃 + 本户立刻被锁成 confirmed（不可逆）。
+           用户实测：撤销互换（待保存）→ 点「确认调查结果」⇒ 互换没撤掉、户还被确认。
+           口径与同一批「撤回已保存…」按钮的 !hasPendingOperations 保持一致。 -->
+      <el-button v-if="canManage && canWrite && !isCreatingContractorResult && !dataReadOnly && !hasPendingOperations && CONFIRMABLE_SURVEY_STATUSES.includes(resultForm.surveyStatus)" :loading="confirmingResult" type="primary" @click="handleConfirmCurrent">确认调查结果</el-button>
+      <!-- 撤回确认：仅当前用户拥有 survey_result.unconfirm 权限、且本户已确认为 visible。
+           不依赖 !dataReadOnly（confirmed 时 dataReadOnly 恒为 true），否则按钮永远出不来。 -->
+      <el-button v-if="canUnconfirm && resultForm.surveyStatus === 'confirmed'" :loading="unconfirmingResult" type="warning" @click="handleUnconfirmCurrent">撤回确认</el-button>
     </template>
   </el-dialog>
   <DeregisterDialog ref="deregisterDialog" @done="handlePendingOperation" />
@@ -115,7 +123,7 @@ import RemoveParcelDialog from "../RemoveParcelDialog.vue";
 import AttachmentPreviewDialog from "../../requests/AttachmentPreviewDialog.vue";
 
 import {
-  confirmSurveyResult, createSurveyAuthorization, createSurveyContractor,
+  confirmSurveyResult, unconfirmSurveyResult, createSurveyAuthorization, createSurveyContractor,
   createSurveyRestructure, createSurveyTag, deleteSurveyAttachment,
   deleteSurveyRestructure, disableSurveyTag, downloadSurveyAttachment,
   downloadSurveyAuthorizationFile, downloadSurveyAuthorizationTemplate,
@@ -125,10 +133,14 @@ import {
   fetchContractorCodes, fetchCadastralSurvey,
   previewSurveyAttachment,
   revokeSurveyAuthorization, updateSurveyResult, uploadSurveyAttachment,
+  persistSurveyPendingOperation,
   uploadSurveyAuthorizationFile, rollbackSplitSurveyHousehold, rollbackMergeSurveyHousehold,
 } from "../../../api/survey";
 import { collectContractorCodes, fetchAllBatchTasks } from "../../../utils/surveyCandidates";
 import { FALLBACK_SURVEY_ATTACHMENT_CATEGORIES, surveyAttachmentCategoryLabel } from "../../../config/surveyAttachmentCategories";
+import { CONFIRMABLE_SURVEY_STATUSES } from "../../../config/surveyStatus";
+import { useAuthStore } from "../../../stores/auth";
+import { applySurveyActorDefaults } from "../../../utils/surveyActorDefaults";
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -142,13 +154,16 @@ const props = defineProps({
   activeRegionCode: { type: String, default: "" },
   activeRegionLabel: { type: String, default: "" },
 });
-const emit = defineEmits(["update:modelValue", "saved", "confirmed"]);
+const emit = defineEmits(["update:modelValue", "saved", "confirmed", "openContractor"]);
+
+const authStore = useAuthStore();
 
 
 // ---- State ----
 const savingResult = ref(false);
 const creatingContractor = ref(false);
 const confirmingResult = ref(false);
+const unconfirmingResult = ref(false);
 const printingCadastral = ref(false);
 const activeTask = ref(null);
 const isCreatingContractorResult = ref(false);
@@ -191,6 +206,14 @@ const savedSwapChanges = ref([]);
 const savedSplitChanges = ref([]);
 const savedRemoveChanges = ref([]);
 const savedParcelChangeLoading = ref(false);
+// 服务端**已经落库**的地块编码集合，每次 loadSurveyParcels 重算。
+// 用途：`parcels` 里混着两类行 —— 服务端返回的现势行，和前端"待保存预览"行
+// （新增地块 / 切割生成 / 互换换入）。后者在库里根本还没有对应记录，
+// 界址点 / 界址线维护（后端从 survey_dk_result.geom 解析图形）必然 404，
+// 所以 ParcelInfoPanel 要靠这个集合判断"这块地到底存没存过"。
+const persistedParcelDkbms = ref([]);
+// 操作列「保存」按钮正在落库的地块编码（同一时刻只可能有一个）。
+const persistingParcelDkbm = ref("");
 const pendingOperations = ref([]);
 const rollbackingSavedChangeId = ref(null);
 const rollbackingSplitHousehold = ref(false);
@@ -224,6 +247,9 @@ const resultForm = reactive(createEmptyResult());
 
 // ---- Computed ----
 const isResultLocked = computed(() => props.activeBatch?.status === "finished" || (!isCreatingContractorResult.value && resultForm.surveyStatus === "confirmed"));
+// 撤回确认权限：当前用户是否持有 survey_result.unconfirm（默认仅平台管理员）。
+// 与后端端点 require_permission("survey_result.unconfirm") 同源。
+const canUnconfirm = computed(() => authStore.hasPermission("survey_result.unconfirm"));
 const terminalPendingOperation = computed(() => pendingOperations.value.find(op => ["deregister", "split_household", "merge_household"].includes(op?.type)) || null);
 // 这一户是否已被终结（注销 / 被合户并走 / 被分户拆走）——**只消费后端给的 isTerminal**，
 // 不自己拿 changeType 算：分户/合户**新生成**的户 changeType 与原户同值（merge_household /
@@ -272,7 +298,10 @@ const savedSwapRecords = computed(() =>
     const as = item.afterSummary || {};
     const swappedOut = Array.isArray(bs.swapped_out) ? bs.swapped_out.filter(Boolean) : [];
     const swappedIn = Array.isArray(as.swapped_in) ? as.swapped_in.filter(Boolean) : [];
-    return { ...item, swappedOut, swappedIn, swappedOutText: swappedOut.length ? swappedOut.join("、") : "-", swappedInText: swappedIn.length ? swappedIn.join("、") : "-", counterpartyLabel: as.counterparty || "-" };
+    // 互换前的地块变更态（后端快照，按 dkbm 存）。撤回互换要把地块还原成互换前的样子，
+    // 所以预览也要按这里的原值回填，不能一律写 isChanged/rollback_swap_parcels。
+    const sourceStates = bs.source_relation_states && typeof bs.source_relation_states === "object" ? bs.source_relation_states : {};
+    return { ...item, swappedOut, swappedIn, sourceStates, swappedOutText: swappedOut.length ? swappedOut.join("、") : "-", swappedInText: swappedIn.length ? swappedIn.join("、") : "-", counterpartyLabel: as.counterparty || "-" };
   }),
 );
 
@@ -322,6 +351,17 @@ function tagNameByCode(code) { return { whole_family_urbanized: "全家进城落
 function downloadBlob(data, filename) { const url = URL.createObjectURL(data); const link = document.createElement("a"); link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url); }
 function hasPendingSwapOperation() { return pendingOperations.value.some((op) => ["swap_parcels", "rollback_swap_parcels"].includes(op?.type)); }
 function hasSavedSwapOperation() { return savedSwapChanges.value.length > 0; }
+
+// ---- 「本次调查」的默认调查员 / 调查日期 ----
+// 调查员 / 调查日期默认取「本次」：口径在 utils/surveyActorDefaults.js（发包方侧共用同一份）。
+// 这里只管把本组件的入参喂给它：快照取 baseContractor，只读判定取 dataReadOnly。
+function applyCurrentSurveyDefaults() {
+  applySurveyActorDefaults(resultForm, {
+    base: resultForm.baseContractor,
+    readonly: dataReadOnly.value,
+    displayName: authStore.displayName,
+  });
+}
 
 // ---- Code generation ----
 async function buildNextContractorCode(currentCode = "") {
@@ -414,7 +454,10 @@ function applyPendingParcelPreview(operation) {
   if (operation.type === "rollback_swap_parcels") {
     for (const dkbm of payload.returnDkbms || []) markParcelRemoved(dkbm, "rollback_swap_parcels", payload.reason);
     for (const parcel of payload.restoreParcels || []) {
-      const restored = { ...cloneParcel(parcel), cbfbm: resultForm.code, cbfmc: resultForm.name, resultStatus: "normal", isChanged: true, changeType: "rollback_swap_parcels", changeReason: payload.reason, _pending: true };
+      // 撤回互换 = 把地块还原成互换前的样子，变更态也要按互换前的原值回填；
+      // 一律写 isChanged=true / rollback_swap_parcels 会让净未变的地块显示成「变更」。
+      const state = (payload.restoreStates || {})[parcel?.dkbm] || {};
+      const restored = { ...cloneParcel(parcel), cbfbm: resultForm.code, cbfmc: resultForm.name, resultStatus: "normal", isChanged: Boolean(state.is_changed), changeType: state.change_type || "none", changeReason: state.change_reason || "", _pending: true };
       const index = parcels.value.findIndex((item) => item.dkbm === restored.dkbm && item.resultStatus === "removed");
       if (index >= 0) { parcels.value[index] = restored; } else if (!parcels.value.some((item) => item.dkbm === restored.dkbm && !["removed", "split_source"].includes(item.resultStatus))) { parcels.value = [...parcels.value, restored]; }
     }
@@ -531,6 +574,43 @@ async function reloadParcelPreviewFromPendingOperations() {
   await loadSurveyParcels();
   for (const op of pendingOperations.value) applyPendingParcelPreview(op);
 }
+
+// 地块列表操作列上的「保存」：把**这一行**待保存的新增地块单独落库。
+// ⛔ 存在理由：界址点 / 界址线由库里的地块图形推导，地块不落库就没有宿体；而「保存调查结果」
+//   是整份提交（承包方必填校验 + 状态推进 + 关弹窗），为一块地付这个代价不合理。
+// 语义边界由后端 `parcel_ops.persist_pending_operation` 守住：只写这一块地，
+// 不碰承包方主体字段、不推进 survey_status、不处理其余待保存操作。
+async function handlePersistPendingParcel(row) {
+  if (!props.activeBatch || !activeTask.value) return;
+  const dkbm = row?.dkbm;
+  const index = pendingOperations.value.findIndex(
+    (op) => op.type === "add_parcel" && op.payload?.dkbm === dkbm,
+  );
+  if (index === -1) {
+    ElMessage.warning("该地块的待保存操作已失效，请重新打开录入页面后再试。");
+    return;
+  }
+  persistingParcelDkbm.value = dkbm;
+  try {
+    await persistSurveyPendingOperation(
+      props.activeBatch.id,
+      activeTask.value.contractorUid,
+      pendingOperations.value[index],
+    );
+    // ⛔ 落库后必须把这条从待保存清单里摘掉：否则整体保存时后端会再处理一次，
+    // `add_parcel` 撞「编码已存在」把整次保存打回（连同表单里其它未保存的改动）。
+    pendingOperations.value.splice(index, 1);
+    await reloadParcelPreviewFromPendingOperations();
+    const persisted = parcels.value.find((item) => item.dkbm === dkbm);
+    if (persisted) selectedParcel.value = persisted;
+    triggerFlash(dkbm);
+    ElMessage.success(`地块 ${dkbm} 已保存，现在可以维护界址点 / 界址线`);
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || "保存地块失败");
+  } finally {
+    persistingParcelDkbm.value = "";
+  }
+}
 async function handleUndoPendingOperationPreview(index) {
   const op = pendingOperations.value[index];
   if (!canUndoPendingOperation(op)) return;
@@ -561,9 +641,16 @@ async function handleUndoPendingRemoveFromPanel(dkbm) {
 
 // ---- Parcel tab (map) ----
 async function loadSurveyParcels() {
-  if (!props.activeBatch || !activeTask.value) { parcels.value = []; parcelsLoaded.value = false; return; }
+  if (!props.activeBatch || !activeTask.value) { parcels.value = []; persistedParcelDkbms.value = []; parcelsLoaded.value = false; return; }
   parcelsLoading.value = true;
-  try { const { data } = await fetchSurveyParcels(props.activeBatch.id, activeTask.value.contractorUid); parcels.value = data.data || []; parcelsLoaded.value = true; } catch { parcels.value = []; parcelsLoaded.value = false; } finally { parcelsLoading.value = false; }
+  try {
+    const { data } = await fetchSurveyParcels(props.activeBatch.id, activeTask.value.contractorUid);
+    parcels.value = data.data || [];
+    // 只在"刚从服务端取回"的这一层记录，之后的待保存预览（applyPendingParcelPreview）
+    // 追加出来的行不会进这个集合。
+    persistedParcelDkbms.value = parcels.value.map((item) => item.dkbm).filter(Boolean);
+    parcelsLoaded.value = true;
+  } catch { parcels.value = []; persistedParcelDkbms.value = []; parcelsLoaded.value = false; } finally { parcelsLoading.value = false; }
 }
 
 function triggerFlash(dkbm) { flashDkbm.value = dkbm; if (flashTimer) clearTimeout(flashTimer); flashTimer = setTimeout(() => { flashDkbm.value = null; }, 2800); }
@@ -600,7 +687,7 @@ async function handleRollbackSavedSwap(change) {
     const restoreParcels = (cpData.data || []).filter((i) => (change.swappedOut || []).includes(i.dkbm)).map((i) => cloneParcel(i));
     const returnParcels = parcels.value.filter((i) => (change.swappedIn || []).includes(i.dkbm) && !["removed", "split_source"].includes(i.resultStatus));
     if (restoreParcels.length !== (change.swappedOut || []).length || returnParcels.length !== (change.swappedIn || []).length) { ElMessage.warning("当前页面地块状态已变化，请先重新打开调查录入后再试。"); return; }
-    handlePendingOperation({ type: "rollback_swap_parcels", payload: { changeId: change.id, changeNo: change.changeNo, returnDkbms: [...(change.swappedIn || [])], restoreDkbms: [...(change.swappedOut || [])], restoreParcels, reason: `撤回互换 ${change.changeNo}` } });
+    handlePendingOperation({ type: "rollback_swap_parcels", payload: { changeId: change.id, changeNo: change.changeNo, returnDkbms: [...(change.swappedIn || [])], restoreDkbms: [...(change.swappedOut || [])], restoreParcels, restoreStates: change.sourceStates || {}, reason: `撤回互换 ${change.changeNo}` } });
     savedSwapChanges.value = savedSwapChanges.value.filter((i) => i.id !== change.id);
     ElMessage.success("已加入待保存，保存调查结果后才会正式落库");
   } catch (error) { if (error !== "cancel" && error !== "close") ElMessage.error(error.response?.data?.detail || "撤回已保存互换失败"); } finally { rollbackingSavedChangeId.value = null; }
@@ -783,18 +870,89 @@ async function handleSaveResult() {
       });
       contractorUid = data.data.contractorUid;
     }
-    await updateSurveyResult(props.activeBatch.id, contractorUid, { ...contractorPayload, contractorUid, familyMembers: cleanMembers, deletedMembers, pendingOperations: pendingOperations.value });
+    // 合户是「加入待保存 → 点「保存调查结果」才真正落库」，所以"是否进入新户页面"
+    // 只能在这个时点问。先把合户操作捞出来（下面会把 pendingOperations 清空）。
+    const mergeOperation = pendingOperations.value.find((op) => op.type === "merge_household") || null;
+    const { data: savedResponse } = await updateSurveyResult(props.activeBatch.id, contractorUid, { ...contractorPayload, contractorUid, familyMembers: cleanMembers, deletedMembers, pendingOperations: pendingOperations.value });
+    const createdContractors = savedResponse?.data?.createdContractors || [];
     ElMessage.success(isCreatingContractorResult.value ? "承包方调查数据已新增" : "调查结果已保存");
     pendingOperations.value = [];
     close();
     emit("saved");
+    if (mergeOperation) await offerOpenCreatedContractor(mergeOperation, createdContractors);
   } catch (error) { ElMessage.error(error.response?.data?.detail || (isCreatingContractorResult.value ? "新增承包方失败" : "保存调查结果失败")); } finally { savingResult.value = false; creatingContractor.value = false; }
+}
+
+// 合户完成后问一句「要不要直接进新户的录入页面」——新户刚生成，用户多半要接着录它。
+// 新户标识以后端返回的 `createdContractors` 为准；万一拿不到（旧后端 / 编码冲突等），
+// 用 payload 里的 newCbfbm/newCbfmc 兜底，至少让父组件能按编码去找。
+async function offerOpenCreatedContractor(mergeOperation, createdContractors) {
+  const target = createdContractors[0] || {
+    cbfbm: mergeOperation?.payload?.newCbfbm || "",
+    cbfmc: mergeOperation?.payload?.newCbfmc || "",
+  };
+  if (!target?.contractorUid && !target?.cbfbm) return;
+  try {
+    await ElMessageBox.confirm(
+      `合户已完成${target.cbfmc ? `，新承包方「${target.cbfmc}」已生成` : ""}。是否进入该户的调查录入页面继续录入？`,
+      "进入新户页面",
+      { confirmButtonText: "进入新户", cancelButtonText: "留在当前列表", type: "success" },
+    );
+  } catch {
+    return;
+  }
+  emit("openContractor", target);
+}
+
+// 确认前的提前提示：把当场就能自查的缺失项先说出来，免得用户点了按钮只拿到一句后端报错。
+// ⛔ 口径与后端 backend/app/services/survey/base.py::_validate_confirmable 对齐，改一处要改两处。
+//
+// ⚠️「变化原因」**不在这里拦**（2026-09-27 用户决定）：空值由后端
+// `_ensure_change_reasons` 在确认前按变更类型**自动写入默认值**（合户成员 →
+// 「因合户转入新户」等），前端再拦一次只会变成"界面挡着、请求根本发不出去"的假故障
+// ——那正是用户这次报的现象。保留这个函数是给**其他**当场可判的缺失项留钩子（当前无）。
+function collectConfirmBlockers() {
+  return [];
 }
 
 async function handleConfirmCurrent() {
   if (!props.activeBatch || !activeTask.value) return;
+  // ⛔ 确认接口不接收 pendingOperations：待保存的互换/撤回互换不会被提交，只会被 close() 清掉。
+  // 按钮侧已用 v-if 拦一次，这里再拦一次做兜底（模板条件将来被改动时不至于静默丢操作）。
+  if (hasPendingOperations.value) {
+    ElMessage.warning(`当前有 ${pendingOperations.value.length} 项操作尚未保存，请先点击「保存调查结果」。确认调查结果不会提交这些操作。`);
+    return;
+  }
+  const blockers = collectConfirmBlockers();
+  if (blockers.length) { ElMessage.warning(blockers.join("；")); return; }
   confirmingResult.value = true;
   try { await confirmSurveyResult(props.activeBatch.id, activeTask.value.contractorUid); ElMessage.success("调查结果已确认"); close(); emit("confirmed"); } catch (error) { ElMessage.error(error.response?.data?.detail || "确认失败"); } finally { confirmingResult.value = false; }
+}
+
+async function handleUnconfirmCurrent() {
+  if (!props.activeBatch || !activeTask.value) return;
+  if (!canUnconfirm.value) { ElMessage.warning("当前账号无权撤回确认"); return; }
+  if (resultForm.surveyStatus !== "confirmed") { ElMessage.warning("本户调查成果尚未确认，无需撤回"); return; }
+  try {
+    await ElMessageBox.confirm(
+      "撤回确认后，该承包方调查成果将回到可编辑状态，可重新录入并再次确认。确定要撤回确认吗？",
+      "撤回确认",
+      { type: "warning", confirmButtonText: "撤回确认", cancelButtonText: "取消" },
+    );
+  } catch {
+    return;
+  }
+  unconfirmingResult.value = true;
+  try {
+    await unconfirmSurveyResult(props.activeBatch.id, activeTask.value.contractorUid);
+    ElMessage.success("已撤回确认，该户回到可编辑状态");
+    await reloadSurveyResult();
+    emit("saved");
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || "撤回确认失败");
+  } finally {
+    unconfirmingResult.value = false;
+  }
 }
 
 async function reloadSurveyResult() {
@@ -802,6 +960,7 @@ async function reloadSurveyResult() {
   try {
     const { data } = await fetchSurveyResult(props.activeBatch.id, activeTask.value.contractorUid);
     Object.assign(resultForm, createEmptyResult(), data.data, { familyMembers: (data.data.familyMembers || []).map((item) => ({ ...item })) });
+    applyCurrentSurveyDefaults();
     await loadDiffs();
     if (parcelsLoaded.value || isPanelMounted("parcels")) {
       await loadSavedParcelChanges();
@@ -813,20 +972,24 @@ async function reloadSurveyResult() {
 
 // ---- Open / Close ----
 async function openForResult(batch, row) {
-  isCreatingContractorResult.value = false; activeTask.value = row; selectedParcel.value = null; parcels.value = []; parcelsLoaded.value = false;
+  isCreatingContractorResult.value = false; activeTask.value = row; selectedParcel.value = null; parcels.value = []; persistedParcelDkbms.value = []; parcelsLoaded.value = false;
   previewAttachmentVisible.value = false; previewAttachment.value = null; attachmentPreviewIndex.value = -1;
   pendingOperations.value = []; savedSwapChanges.value = []; savedSplitChanges.value = []; savedRemoveChanges.value = []; savedParcelChangeLoading.value = false; rollbackingSavedChangeId.value = null;
   const { data } = await fetchSurveyResult(row.batchId, row.contractorUid);
   Object.assign(resultForm, createEmptyResult(), data.data, { familyMembers: (data.data.familyMembers || []).map((item) => ({ ...item })) });
+  // 调查员 / 调查日期取「本次」的默认值（当前登录用户 + 当天），不再沿用库里的历史痕迹。
+  applyCurrentSurveyDefaults();
   resetPhase2Forms(); openPanels.value = ["contractor"]; openedPanels.value = ["contractor"]; openAuxPanels.value = []; emit("update:modelValue", true);
   await loadDiffs(); await loadPhase2();
 }
 
 function openForCreate(batch) {
-  isCreatingContractorResult.value = true; activeTask.value = null; selectedParcel.value = null; parcels.value = [];
+  isCreatingContractorResult.value = true; activeTask.value = null; selectedParcel.value = null; parcels.value = []; persistedParcelDkbms.value = [];
   diffRows.value = []; savedSwapChanges.value = []; savedSplitChanges.value = []; savedRemoveChanges.value = []; savedParcelChangeLoading.value = false;
   pendingOperations.value = []; rollbackingSavedChangeId.value = null;
   Object.assign(resultForm, createEmptyResult(), { code: batch?.regionCode || props.activeRegionCode || "", groupRegionCode: batch?.regionCode || props.activeRegionCode || "", groupRegionName: batch?.regionName || props.activeRegionLabel || "", resultStatus: "added", changeType: "add_contractor", isChanged: false });
+  // 新增承包方：调查员 / 调查日期直接落「本次」的默认值（当前登录用户 + 当天）。
+  applyCurrentSurveyDefaults();
   resetPhase2Forms(); openPanels.value = ["contractor"]; openedPanels.value = ["contractor"]; openAuxPanels.value = []; emit("update:modelValue", true);
 }
 

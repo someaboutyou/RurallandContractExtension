@@ -215,7 +215,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 
 import { fetchParcelBoundary, saveParcelBoundary } from "../../api/survey";
@@ -235,7 +235,10 @@ const boundary = ref({});
 const points = ref([]);
 const lines = ref([]);
 
-const target = { batchId: null, contractorUid: "", dkbm: "" };
+// ⛔ 必须 reactive：dialogTitle 是 computed，读的若是普通对象的属性就**没有依赖可追踪**，
+// 首次求值后永远不再失效 —— 实测标题恒为「界址点 / 界址线维护」（不带地块编码），
+// 多块地来回切换时看不出自己在维护哪一块。
+const target = reactive({ batchId: null, contractorUid: "", dkbm: "" });
 
 const bulkMark = ref("");
 const bulkCategory = ref("");

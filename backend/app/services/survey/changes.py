@@ -756,7 +756,13 @@ class SurveyServiceChangesMixin:
         contractor_uid: str,
         pending_operations: list[dict],
         current_user: User,
-    ) -> None:
+    ) -> list[dict]:
+        """依次执行待保存操作，返回本次**新生成**的承包户（合户 / 分户）。
+
+        返回值供前端做「操作已完成，是否进入新户页面」的跳转；其余操作不产生新户，
+        所以只有 split_household / merge_household 会往 `created` 里放东西。
+        """
+        created: list[dict] = []
         for operation in pending_operations or []:
             op_type = operation.get("type")
             payload = operation.get("payload") or {}
@@ -822,11 +828,14 @@ class SurveyServiceChangesMixin:
                     commit=False,
                 )
             elif op_type == "split_household":
-                self.split_household(db, batch_id, contractor_uid, payload, current_user, commit=False)
+                outcome = self.split_household(db, batch_id, contractor_uid, payload, current_user, commit=False)
+                created.extend((outcome or {}).get("newHouseholds") or [])
             elif op_type == "merge_household":
-                self.merge_household(db, batch_id, contractor_uid, payload, current_user, commit=False)
+                outcome = self.merge_household(db, batch_id, contractor_uid, payload, current_user, commit=False)
+                created.extend((outcome or {}).get("newHouseholds") or [])
             else:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"unsupported pending operation: {op_type}")
+        return created
 
 
     def _create_change_record(

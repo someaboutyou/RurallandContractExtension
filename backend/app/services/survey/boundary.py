@@ -34,6 +34,7 @@ from app.models.survey import (
     SurveyJzxResult,
 )
 from app.models.user import User
+from app.core.crs import get_target_srid, srid_display_name
 from app.services.data_access_service import data_access_service
 from app.services.dictionary_service import dictionary_service
 
@@ -204,7 +205,7 @@ def load_parcel_rings(db: Session, dkbms: list[str]) -> dict[str, list[list[tupl
     """按外环解析地块顶点，返回 ``{dkbm: [环1顶点, 环2顶点, ...]}``。
 
     每个环内已去掉与首点重复的闭合点；坐标已对齐到毫米。
-    ``geom`` 原生 SRID 就是 4527（米制），无需投影。
+    ``geom`` 原生 SRID 就是目标坐标系（米制，见 app/core/crs.py），无需投影。
     """
     codes = [code for code in dict.fromkeys(dkbms) if code]
     if not codes:
@@ -237,7 +238,7 @@ def load_parcel_rings(db: Session, dkbms: list[str]) -> dict[str, list[list[tupl
     grouped: dict[str, dict[str, list[tuple[Decimal, Decimal]]]] = {}
     for dkbm, _path, ring_key, easting, northing in rows:
         rings = grouped.setdefault(dkbm, {})
-        # X = 北坐标（northing），Y = 东坐标（easting，含 39 带前缀）
+        # X = 北坐标（northing），Y = 东坐标（easting，含目标带带号前缀）
         rings.setdefault(str(ring_key), []).append((_to_mm(northing), _to_mm(easting)))
 
     result: dict[str, list[list[tuple[Decimal, Decimal]]]] = {}
@@ -523,9 +524,44 @@ class SurveyServiceBoundaryMixin:
     def _ensure_parcel_in_batch(
         self, db: Session, batch_id: int, contractor_uid: str, dkbm: str
     ) -> dict:
-        """校验地块属于该批次的该承包方，并返回承包方编码。"""
+        """校验地块属于该批次的该承包方，并返回承包方编码。
+
+        ⛔ 判据顺序 = 报错文案的准确性，别为了"少查一次"把顺序调回去。
+        「新增地块」在前端是一行**待保存预览**：不点「保存调查结果」就不会有
+        ``survey_dk_result`` 行，自然也没有 ``survey_cbdkxx_result`` 关联。
+        若先查关联，这种地块会拿到"该地块不属于当前承包方"——指向完全错误
+        （库里压根没有这块地，用户会以为是自己选错了户）。
+        因此：① 先问"库里有这块地吗"（含已移除）→ ② 再判"是不是这户的"。
+        """
         result = self._get_result(db, batch_id, contractor_uid)
         cbfbm = result.cbfbm
+        parcel = db.scalars(
+            select(SurveyDkResult)
+            .where(
+                SurveyDkResult.dkbm == dkbm,
+                SurveyDkResult.result_status != "removed",
+            )
+            .order_by(SurveyDkResult.id.desc())
+        ).first()
+        if parcel is None:
+            # 区分"移除后留下的行"与"根本还没落库"，两者提示的下一步动作完全不同。
+            removed_row = db.scalars(
+                select(SurveyDkResult.id)
+                .where(
+                    SurveyDkResult.dkbm == dkbm,
+                    SurveyDkResult.result_status == "removed",
+                )
+                .limit(1)
+            ).first()
+            if removed_row is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="该地块已移除，不能维护界址点 / 界址线",
+                )
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="该地块尚未保存到本批次，请先点击「保存调查结果」后再维护界址点 / 界址线",
+            )
         relation = db.scalars(
             select(SurveyCbdkxxResult).where(
                 SurveyCbdkxxResult.cbfbm == cbfbm,
@@ -535,16 +571,6 @@ class SurveyServiceBoundaryMixin:
         if relation is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="该地块不属于当前承包方"
-            )
-        parcel = db.scalars(
-            select(SurveyDkResult).where(
-                SurveyDkResult.dkbm == dkbm,
-                SurveyDkResult.result_status != "removed",
-            )
-        ).first()
-        if parcel is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="地块不存在或已移除"
             )
         return {"result": result, "cbfbm": cbfbm, "parcel": parcel}
 
@@ -566,7 +592,7 @@ class SurveyServiceBoundaryMixin:
             "contractorUid": contractor_uid,
             "cbfbm": context["cbfbm"],
             "mappingUnit": "米",
-            "cordSystem": "CGCS2000 / 3° 高斯克吕格 39 带（EPSG:4527）",
+            "cordSystem": srid_display_name(get_target_srid()),
             "editable": not (
                 result.survey_status == "confirmed"
                 or result.result_status in {"cancelled", "extinct"}

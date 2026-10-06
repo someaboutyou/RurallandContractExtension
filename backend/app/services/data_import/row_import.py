@@ -10,6 +10,7 @@ from uuid import NAMESPACE_URL, uuid5
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from app.core.crs import get_target_srid
 from app.models.data_import import DataImportBatch, DataImportFile, DataImportRow
 from app.models.fbf import Fbf
 from app.models.survey import (
@@ -512,13 +513,19 @@ def _gdb_dk(db, batch, row_record, data, current_user, now, geometry, chunk_no):
 
 
 def write_dk_geometries(db, table_name, geometries_by_id):
+    """把 GeoJSON 几何写入 geom 列。
+
+    ⛔ 这里是"打标签"不是"投影转换"：调用方（progress.process_gdb_layers 的
+    源坐标系闸门）已保证源 GDB 的坐标系 == 系统目标坐标系（TARGET_SRID），
+    所以直接按目标 SRID 入库；闸门拦不住的错带数据在这里会静默存错坐标。
+    """
     if not geometries_by_id:
         return
     stmt = text(f"""
         UPDATE {table_name}
         SET geom = CASE
             WHEN CAST(:geojson AS text) IS NULL THEN NULL
-            ELSE ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON(:geojson), 4527))
+            ELSE ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON(:geojson), {get_target_srid()}))
         END
         WHERE id = :row_id
     """)

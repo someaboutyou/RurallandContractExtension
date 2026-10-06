@@ -53,5 +53,6 @@ export {
   showConfirmDialog,
   showDialog,
   showImagePreview,
+  showLoadingToast,
   showToast,
 } from "vant";

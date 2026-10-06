@@ -674,12 +674,6 @@ class SurveyBaseContractorRead(BaseModel):
     familyMembers: list[SurveyBaseMemberRead] = []
 
 
-class SurveyIssuerRead(SurveyIssuerUpdate):
-    id: int
-    baseId: int | None = None
-    isChanged: bool = False
-
-
 class SurveyBaseIssuerRead(BaseModel):
     code: str
     name: str
@@ -692,6 +686,17 @@ class SurveyBaseIssuerRead(BaseModel):
     surveyorName: str | None = None
     surveyDate: str | None = None
     surveyNote: str | None = None
+
+
+class SurveyIssuerRead(SurveyIssuerUpdate):
+    id: int
+    baseId: int | None = None
+    isChanged: bool = False
+    # 本批次基线快照（service 已返回 baseIssuer）。**必须在此声明**，否则 pydantic 会**静默丢弃**
+    # 这个键，前端 `form.baseIssuer` 恒为 undefined ⇒「本批次还没被改过」判据失效，
+    # 打开弹窗就会把（别人已录好的）调查员/调查日期默认改成当前用户。承包方侧 SurveyContractorRead
+    # 早就声明了 baseContractor，两侧必须对齐。
+    baseIssuer: SurveyBaseIssuerRead | None = None
 
 
 class SurveyContractorRead(BaseModel):

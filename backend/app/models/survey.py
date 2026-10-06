@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import Boolean, DateTime, Integer, JSON, Numeric, String, Text
@@ -574,9 +574,9 @@ class SurveyJzdResult(TenantScopedMixin, TimestampMixin, Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     #: 全库唯一界址点号，如 ``JZD000000000123``
     jzdh: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    #: 北坐标（EPSG:4527 原值，米，毫米对齐）——与 y 一起构成判重键
+    #: 北坐标（目标坐标系原值，米，毫米对齐，见 app/core/crs.py）——与 y 一起构成判重键
     x: Mapped[Decimal] = mapped_column(Numeric(15, 3), nullable=False)
-    #: 东坐标（EPSG:4527 原值，米，含 39 带前缀）
+    #: 东坐标（目标坐标系原值，米，含带号前缀，见 app/core/crs.py）
     y: Mapped[Decimal] = mapped_column(Numeric(15, 3), nullable=False)
     #: 界标类型码，取自字典 ``nyt2539_c12_boundary_marker_type``（C.12 界标类型
     #: 代码表）：1 钢钉 / 2 水泥桩 / 3 石灰桩 / 4 喷涂标志 / 5 木桩 / 6 塑料桩 /

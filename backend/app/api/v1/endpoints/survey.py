@@ -55,6 +55,7 @@ from app.schemas.survey import (
     SurveyParcelGeometryValidateRequest,
     SurveyParcelBoundaryRead,
     SurveyParcelBoundaryUpdate,
+    SurveyPendingOperation,
 )
 from app.services.contract_template_service import contract_template_service
 from app.services.dictionary_service import (
@@ -457,6 +458,32 @@ def generate_next_survey_parcel_code(
     }
 
 
+@router.post("/batches/{batch_id}/results/{contractor_uid}/parcels/persist", response_model=ApiResponse[dict])
+def persist_survey_pending_operation(
+    batch_id: int,
+    contractor_uid: str,
+    payload: SurveyPendingOperation,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """把一条「待保存」的地块操作立即落库（目前仅支持新增地块）。
+
+    场景：新增地块后要马上维护界址点 / 界址线，而界址点是从库里的地块图形
+    （`survey_dk_result.geom`）推导的，地块不落库就没有宿体。走这个入口
+    只需把这一行落库，不必把整份调查结果提交一遍（那会连带触发承包方必填校验、
+    推进调查状态并关闭弹窗）。
+    """
+    return {
+        "data": survey_service.persist_pending_operation(
+            db,
+            batch_id,
+            contractor_uid,
+            payload.model_dump(),
+            current_user,
+        )
+    }
+
+
 @router.get("/batches/{batch_id}/results/{contractor_uid}/phase2", response_model=ApiResponse[dict])
 def get_survey_phase2_context(
     batch_id: int,
@@ -725,6 +752,20 @@ def confirm_survey_result(
     current_user: User = Depends(require_permission("contractors.manage")),
 ):
     return {"data": survey_service.confirm_result(db, batch_id, contractor_uid, current_user)}
+
+
+@router.post("/batches/{batch_id}/results/{contractor_uid}/unconfirm", response_model=ApiResponse[SurveyContractorRead])
+def unconfirm_survey_result(
+    batch_id: int,
+    contractor_uid: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("survey_result.unconfirm")),
+):
+    """撤回已确认的调查成果（权限：survey_result.unconfirm，默认仅平台管理员）。
+
+    仅当该户当前为 confirmed 时生效；撤回后回到 surveyed 可编辑态。
+    """
+    return {"data": survey_service.unconfirm_result(db, batch_id, contractor_uid, current_user)}
 
 
 @router.post("/batches/{batch_id}/tasks/{contractor_uid}/skip", response_model=ApiResponse[SurveyTaskRead])

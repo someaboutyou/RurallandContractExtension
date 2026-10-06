@@ -16,6 +16,7 @@ const UserView = () => import("../views/UserView.vue");
 const IssuerView = () => import("../views/IssuerView.vue");
 const ContractorView = () => import("../views/ContractorView.vue");
 const DataImportView = () => import("../views/DataImportView.vue");
+const DataExportView = () => import("../views/DataExportView.vue");
 const SurveyView = () => import("../views/SurveyView.vue");
 const GisView = () => import("../views/GisView.vue");
 const RequestView = () => import("../views/RequestView.vue");
@@ -36,6 +37,7 @@ const appChildren = [
   { path: "issuers", name: "issuers", component: IssuerView, meta: { requiresAuth: true, permissions: ["issuers.view"] } },
   { path: "contractors", name: "contractors", component: ContractorView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
   { path: "data-imports", name: "data-imports", component: DataImportView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
+  { path: "data-exports", name: "data-exports", component: DataExportView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
   { path: "surveys", name: "surveys", component: SurveyView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
   { path: "requests", name: "requests", component: RequestView, meta: { requiresAuth: true, permissions: REQUEST_MODULE_PERMISSIONS } },
   {

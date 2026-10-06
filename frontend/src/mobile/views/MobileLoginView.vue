@@ -27,6 +27,9 @@
       </van-cell-group>
 
       <div class="m-login__actions">
+        <van-checkbox v-model="remember" shape="square" class="m-login__remember">
+          记住账号密码
+        </van-checkbox>
         <van-button round block type="primary" native-type="submit" :loading="loading">
           登录
         </van-button>
@@ -59,16 +62,17 @@
  *   必须显式配置后端地址才能连通；这一行让"配没配、配的是什么"一目了然，
  *   点它即可就地修改（详见 ServerSettingPopup.vue）。
  */
-import { computed, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useAuthStore } from "../../stores/auth";
 import { isApiBaseConfigured, resolveApiBase } from "../../api/serverConfig";
+import { CREDENTIALS_KEY, clearManualLogout, isManualLogoutPending } from "../session.js";
 import ServerSettingPopup from "../components/ServerSettingPopup.vue";
 // ⚠️ 登录页不在 MobileLayout 下（`/m/login` 是独立路由），必须自己引入 vant 样式，
 // 否则登录表单是"能点但没样式"的裸奔状态。
 import "../styles.js";
 import { isNativePlatform } from "../native/location.js";
-import { VanButton, VanCellGroup, VanField, VanForm, showToast } from "../ui.js";
+import { VanButton, VanCellGroup, VanCheckbox, VanField, VanForm, showToast } from "../ui.js";
 
 const route = useRoute();
 const router = useRouter();
@@ -77,6 +81,7 @@ const authStore = useAuthStore();
 const form = reactive({ username: "", password: "" });
 const loading = ref(false);
 const serverSettingVisible = ref(false);
+const remember = ref(false);
 
 const runtimeLabel = computed(() => (isNativePlatform() ? "Android App" : "浏览器 / H5"));
 const apiBaseLabel = computed(() => resolveApiBase());
@@ -95,8 +100,25 @@ async function onSubmit() {
       username: form.username.trim(),
       password: form.password,
     });
+    if (remember.value) {
+      localStorage.setItem(
+        CREDENTIALS_KEY,
+        JSON.stringify({ username: form.username.trim(), password: form.password }),
+      );
+    } else {
+      localStorage.removeItem(CREDENTIALS_KEY);
+    }
+    // 手动登录成功 = 用户明确表达了登录意愿，清除「主动退出」标记，
+    // 恢复本会话内的自动登录语义。
+    clearManualLogout();
     const redirect = typeof route.query.redirect === "string" ? route.query.redirect : "";
     await router.replace(redirect || { name: "mobile-tasks" });
+    // 登录成功 = 后端地址已验证可用，此时补一次热更检查（非阻塞，不拦截进首页）。
+    // 背景：冷启动的自动检查发生在登录页，清存储后地址还没配，检查必然失败；
+    // 若节流时间戳在失败时也被写下（旧版 bug），手机会被锁在「不再检查」里。
+    void import("../updater.js")
+      .then((m) => m.checkForUpdates())
+      .catch(() => {});
   } catch (error) {
     // 连不上后端时 axios 报的是网络错误（没有 response），
     // 这种情况必须提示"检查服务器地址"，而不是笼统的"账号密码错误"。
@@ -111,12 +133,36 @@ async function onSubmit() {
     loading.value = false;
   }
 }
+
+onMounted(() => {
+  try {
+    const saved = localStorage.getItem(CREDENTIALS_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed.username) {
+        form.username = parsed.username;
+      }
+      if (parsed.password) {
+        form.password = parsed.password;
+      }
+      remember.value = true;
+      // ⛔ 主动退出后**只预填、不自动登录**：否则退出 → 跳登录页 → 自动重登 →
+      // 跳回「我的待调查」，退出形同虚设（2026-10-04 事故，详见 session.js）。
+      // sessionStorage 标记在杀掉 App 重开后自动消失，冷启动自动登录不受影响。
+      if (apiConfigured.value && !isManualLogoutPending()) {
+        onSubmit();
+      }
+    }
+  } catch {
+    // 存储损坏时忽略，走正常手动登录
+  }
+});
 </script>
 
 <style scoped>
 .m-login {
   min-height: 100vh;
-  padding-top: 14vh;
+  padding-top: calc(14vh + env(safe-area-inset-top));
   background: #f7f8fa;
 }
 
@@ -141,6 +187,12 @@ async function onSubmit() {
 
 .m-login__actions {
   padding: 20px 16px 0;
+}
+
+.m-login__remember {
+  margin-bottom: 14px;
+  font-size: 13px;
+  color: #646566;
 }
 
 .m-login__env {

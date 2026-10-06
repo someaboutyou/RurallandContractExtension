@@ -19,7 +19,18 @@
         <el-form-item label="新承包方名称" required><el-input v-model="form.newCbfmc" maxlength="50" /></el-form-item>
         <el-form-item label="新承包方地址" required><el-input v-model="form.newAddress" maxlength="100" /></el-form-item>
       </div>
-      <el-form-item label="合户原因"><el-input v-model="form.reason" type="textarea" :rows="2" maxlength="500" show-word-limit /></el-form-item>
+      <!-- 合户原因：**选填**。留空时后端按「合户」这个事实自动生成（新户记
+           "因合户设立新户（原承包方：…）"，成员记"因合户转入新户"，地块同理）——
+           合户是系统自己产生的结构化变更，「变化原因」就是这次操作本身，系统完全
+           知道，没有理由要求调查员再手写一遍。
+           政策依据（policy_basis）为**选填**（2026-09-26 定）：它是规范外的扩展字段，
+           甲方合同模板无此栏，强制必填只会把户卡死在确认前。填过一次会自动带出。 -->
+      <el-form-item label="合户原因">
+        <el-input v-model="form.reason" type="textarea" :rows="2" maxlength="500" show-word-limit placeholder="选填：留空将自动记为「因合户设立新户」" />
+      </el-form-item>
+      <el-form-item label="政策依据">
+        <el-input v-model="form.policyBasis" type="textarea" :rows="2" maxlength="500" show-word-limit placeholder="选填：本次合户所依据的政策文件或村组决议（填过一次会自动带出）" />
+      </el-form-item>
       <el-alert v-if="loading" title="正在加载参与户成员……" type="info" :closable="false" />
       <div v-else class="summary">共 {{ form.sourceContractorUids.length }} 个原户、{{ mergedMembers.length }} 名成员。保存后全部原户注销，新户独立生成。</div>
     </el-form>
@@ -35,6 +46,7 @@ import { computed, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { fetchContractorCodes, fetchMergeCandidates, fetchSurveyResult } from "../../api/survey";
 import { collectContractorCodes, fallbackSameGroupTasks, fetchAllBatchTasks } from "../../utils/surveyCandidates";
+import { loadPolicyBasis, savePolicyBasis } from "../../utils/policyBasisMemory";
 
 const emit = defineEmits(["done"]);
 const visible = ref(false);
@@ -48,7 +60,7 @@ const mergedMembers = ref([]);
 const resultCache = new Map();
 const existingCodes = ref(new Set());
 const codePrefix = ref("");
-const form = reactive({ sourceContractorUids: [], newCbfbm: "", newCbfmc: "", householdHeadMemberUid: "", newAddress: "", reason: "" });
+const form = reactive({ sourceContractorUids: [], newCbfbm: "", newCbfmc: "", householdHeadMemberUid: "", newAddress: "", reason: "", policyBasis: "" });
 const taskStatusText = { not_started: "未调查", not_surveyed: "未调查", in_progress: "调查中", surveyed: "已调查", changed: "有变化", unchanged: "无变化", confirmed: "已确认", skipped: "已跳过", deregistered: "已注销" };
 const availableTasks = computed(() => {
   const rows = candidates.value.filter(t => !["deregistered", "finished", "confirmed"].includes(t.taskStatus));
@@ -147,21 +159,22 @@ async function open(bid, cuid, name, code, members, parcels, taskList, address =
     || (members || []).find(item => item.relationToHead === "02" || item.yhzgx === "02")
     || (members || []).find(item => item.relationToHead === "01" || item.yhzgx === "01")
     || (members || [])[0];
-  Object.assign(form, { sourceContractorUids: [cuid], newCbfbm: generateCode(), newCbfmc: currentHead?.name || currentHead?.cyxm || name || "", householdHeadMemberUid: memberUid(currentHead), newAddress: address || "", reason: "" });
+  Object.assign(form, { sourceContractorUids: [cuid], newCbfbm: generateCode(), newCbfmc: currentHead?.name || currentHead?.cyxm || name || "", householdHeadMemberUid: memberUid(currentHead), newAddress: address || "", reason: "", policyBasis: loadPolicyBasis() });
   mergedMembers.value = members || []; visible.value = true;
   await loadCandidates(name, code);
 }
 async function submit() {
-  if (!canSubmit.value) { ElMessage.warning("请完整填写合户和新承包方信息"); return; }
+  if (!canSubmit.value) { ElMessage.warning("请完整填写新承包方信息与政策依据"); return; }
   try {
     await ElMessageBox.confirm(`确定注销所选 ${form.sourceContractorUids.length} 个原承包方，并创建新承包方“${form.newCbfmc}”吗？`, "确认合户", { type: "warning" });
   } catch { return; }
+  savePolicyBasis(form.policyBasis);
   emit("done", { type: "merge_household", payload: {
     sourceContractorUids: [...form.sourceContractorUids], newCbfbm: form.newCbfbm,
     newCbfmc: form.newCbfmc.trim(), householdHeadMemberUid: form.householdHeadMemberUid,
-    newAddress: form.newAddress.trim(), reason: form.reason.trim() || undefined,
+    newAddress: form.newAddress.trim(), reason: form.reason.trim() || undefined, policyBasis: form.policyBasis.trim(),
   }});
-  visible.value = false; ElMessage.success("合户已加入待保存");
+  visible.value = false; ElMessage.success("合户已加入待保存，请点「保存调查结果」使其生效");
 }
 defineExpose({ open });
 </script>

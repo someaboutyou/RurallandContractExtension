@@ -1,3 +1,10 @@
+﻿--
+-- ⚠ 坐标系口径：本脚本里的 SRID(4527) 是「39 带」示例值。目标坐标系自 2026-10 起
+-- 由安装初始化决定（scripts/install.ps1 选择后写入 backend/.env 的 TARGET_SRID，
+-- 首次启动固化进 system_config），正式建库走 backend/app/db/migrations.py 自动
+-- 按目标 SRID 建表；本脚本仅作手工重建参考，用前先把 4527 替换成本项目的目标 SRID。
+-- 例外：stbhhx 为地理坐标系 EPSG:4490（经纬度底图层），不随目标 SRID 变。
+--
 --
 -- Spatial tables for GeoServer layer publishing
 -- These tables are imported from GDB files and contain Chinese land management spatial data.

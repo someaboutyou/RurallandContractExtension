@@ -74,15 +74,17 @@
  *
  * 数据源：`GET /surveys/batches/{id}/tasks?mine=1`
  * —— `mine=1` 依赖后端 2026-09-21 接线的任务归属（`survey_cbf_base.assigned_to`）。
- * 注意后端那条铁律：**`assigned_to` 为空 = 不限制归属**（未分配的任务所有人可见），
- * 所以这里用 `mine=1` 拿到的是"我负责的 + 尚未分配的"，符合调查员实际预期。
+ * 普通调查员只传 `mine=1`，只列出分到自己名下的户；管理员（dataScope === "all"）
+ * 不传 `mine`，直接看全部，否则管理员自己的 assigned_to 不是他自己，列表永远为空。
  *
  * 状态标签口径与 PC 端 `taskStatusLabel()` 保持一致（后端 taskStatus 取值见
  * `backend/app/services/survey/assignment.py`）。
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onActivated, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
+import { useAuthStore } from "../../stores/auth";
 import { fetchSurveyBatches, fetchSurveyTasks } from "../../api/survey";
+import { consumeTaskListDirty } from "../taskListState.js";
 import {
   VanCell,
   VanCellGroup,
@@ -114,6 +116,9 @@ const STATUS_LABELS = {
 const DONE_STATUSES = ["confirmed", "skipped", "deregistered"];
 
 const router = useRouter();
+const authStore = useAuthStore();
+
+const isAdmin = computed(() => authStore.user?.dataScope === "all");
 
 const batches = ref([]);
 const activeBatchId = ref(null);
@@ -185,12 +190,17 @@ async function loadMore() {
   loading.value = true;
   loadError.value = false;
   try {
-    const { data } = await fetchSurveyTasks(activeBatchId.value, {
+    const params = {
       page: page.value,
       page_size: PAGE_SIZE,
       keyword: keyword.value.trim() || undefined,
-      mine: 1,
-    });
+    };
+    // 普通调查员只看他名下的户；管理员（dataScope === "all"）看全部，
+    // 否则管理员手机上会出现「我的待调查」永远为空的假象。
+    if (!isAdmin.value) {
+      params.mine = 1;
+    }
+    const { data } = await fetchSurveyTasks(activeBatchId.value, params);
     const items = data?.data?.items || [];
     total.value = data?.data?.total ?? items.length;
 
@@ -234,6 +244,17 @@ onMounted(async () => {
     await reload();
   } else {
     finished.value = true;
+  }
+});
+
+/**
+ * 本页被 keep-alive 缓存（见 MobileLayout.vue）：从详情/作业页返回或切 tab 回来
+ * 走这里而不是 onMounted —— 默认**不发任何请求**，直接复用缓存数据与滚动位置。
+ * 只有子页面改了会影响列表行的数据（taskListState 脏标记）时才刷新一次。
+ */
+onActivated(() => {
+  if (consumeTaskListDirty()) {
+    void reload();
   }
 });
 </script>

@@ -102,6 +102,10 @@ export function confirmSurveyResult(batchId, contractorUid) {
   return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/confirm`);
 }
 
+export function unconfirmSurveyResult(batchId, contractorUid) {
+  return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/unconfirm`);
+}
+
 export function refreshSurveyTags(batchId, contractorUid) {
   return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/tags/refresh`);
 }
@@ -191,6 +195,13 @@ export function previewSplitSurveyParcel(batchId, contractorUid, payload) {
 
 export function generateNextSurveyParcelCode(batchId, contractorUid) {
   return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/parcels/next-code`);
+}
+
+// 把**一条**「待保存」的地块操作单独落库（目前仅支持新增地块）。
+// 场景：新增地块后要立刻维护界址点 / 界址线，而界址点由库里的地块图形推导，
+// 地块不落库就没有宿体；走这个入口不必把整份调查结果提交一遍。
+export function persistSurveyPendingOperation(batchId, contractorUid, operation) {
+  return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/parcels/persist`, operation);
 }
 
 // ── 界址点 / 界址线 ───────────────────────────────────

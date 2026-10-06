@@ -149,6 +149,7 @@ const navItems = [
       { to: "/issuers", label: "发包方管理", permissions: ["issuers.view"] },
       { to: "/contractors", label: "承包方管理", permissions: ["contractors.view"] },
       { to: "/data-imports", label: "数据导入", permissions: ["contractors.view"] },
+      { to: "/data-exports", label: "数据导出", permissions: ["contractors.view"] },
     ],
   },
   {

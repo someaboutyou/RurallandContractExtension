@@ -1,4 +1,5 @@
 from app.models.cbht import Cbht
+from app.models.data_export import DataExport
 from app.models.data_import import DataImportBatch, DataImportFile, DataImportOperation, DataImportRow
 from app.models.dictionary import DictionaryItem
 from app.models.fbf import Fbf
@@ -42,6 +43,7 @@ __all__ = [
     "WorkflowDefinitionVersion",
     "Fbf",
     "Cbht",
+    "DataExport",
     "DataImportBatch",
     "DataImportFile",
     "DataImportOperation",

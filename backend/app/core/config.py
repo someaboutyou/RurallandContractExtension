@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     database_name: str = "erlunyanbao"
     database_user: str = "RurallandContractExtension"
     database_password: str = "RurallandContractExtension"
+    #: 目标坐标系（EPSG 代码）。安装初始化时由 install.ps1 让部署人选择后写入 .env，
+    #: 首次启动固化进 system_config 表，此后不再允许修改（改带只能走全库迁移工具）。
+    #: 环境变量名 TARGET_SRID，默认 4527（CGCS2000 3°带 39 带）保持现网兼容。
+    target_srid: int = 4527
     jwt_secret_key: str = "replace-this-in-production"
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 60 * 8
