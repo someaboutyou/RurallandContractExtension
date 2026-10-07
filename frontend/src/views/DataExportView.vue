@@ -243,13 +243,20 @@ function handleRegionFilter() {
 
 async function handleExport(data) {
   exportingId.value = data.id;
+  // ⛔ 后端 create_export 是同步生成：先落一条 processing 记录再打包，
+  // POST 直到打包结束才返回（几十秒~几分钟）。因此不能等响应回来才刷表——
+  // 先跳回第 1 页静默刷新，让「生成中」行立刻出现（进度条由 schedulePoll 每 2s 接力），
+  // 再继续等最终结果弹成功/失败提示。
+  page.value = 1;
+  const creating = createDataExport({
+    regionCode: data.code,
+    regionName: data.fullName || data.name,
+    regionLevel: data.level,
+    exportType: exportFormat.value,
+  });
+  window.setTimeout(() => loadRecords(true), 500);
   try {
-    const { data: resp } = await createDataExport({
-      regionCode: data.code,
-      regionName: data.fullName || data.name,
-      regionLevel: data.level,
-      exportType: exportFormat.value,
-    });
+    const { data: resp } = await creating;
     const record = resp.data;
     if (record.status === "failed") {
       ElMessage.error(`导出失败：${record.errorMessage || "未知错误"}`);
