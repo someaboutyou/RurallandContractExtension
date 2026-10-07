@@ -193,7 +193,13 @@ router.beforeEach(async (to) => {
   //    已用 `runtime/.state/router_probe.mjs` 实测复现并验证修复。
   //
   // 只在**入口路径**上分流：PC 浏览器打开 `/` 行为不变；进入 `/m/*` 之后的普通导航不受影响。
-  if (isNativeShell() && !isMobileRoute && (to.path === "/" || to.redirectedFrom?.path === "/")) {
+  // ⛔ 2026-10-06 加固：从"只拦入口 /"扩大为"原生壳内一律拦非 /m 路由"。
+  //   背景：http.js 的 401 兜底会在 pathname=`/` 时把页面硬跳到 PC /login
+  //   （守卫 bootstrap() 带过期 token 打 /auth/me ⇒ 401 ⇒ location.href="/login"），
+  //   落在 /login 上时旧判据（path=或 redirectedFrom=/）拦不住 ⇒ 手机出现 PC 登录页；
+  //   且外业账号没有 PC 权限，在 PC 登录页登进去会被 getFirstAllowedRoute 弹回，死循环。
+  //   无限重定向风险已排除：本分支的落点都是 /m/*，isMobileRoute=true ⇒ 不会再进本分支。
+  if (isNativeShell() && !isMobileRoute) {
     return { name: authStore.isAuthenticated ? "mobile-tasks" : "mobile-login" };
   }
 
