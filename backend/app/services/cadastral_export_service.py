@@ -22,6 +22,7 @@ from app.db.session import SessionLocal, set_current_user
 from app.models.user import User
 from app.services.cadastral_docx_service import cadastral_docx_service
 from app.services.contractor_service import contractor_service
+from app.services.survey_sheet_docx_service import SHEET_RENDERERS, survey_sheet_docx_service
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,9 @@ PAGE_SIZE = 100
 MAX_CONTRACTORS = 500
 #: 内存里最多保留多少个任务
 MAX_TASKS = 20
+
+#: 支持的导出类型：cadastral（地籍调查表）+ 两张摸底表
+SUPPORTED_SHEETS = ("cadastral",) + tuple(SHEET_RENDERERS)
 
 
 class CadastralExportService:
@@ -42,13 +46,21 @@ class CadastralExportService:
 
     # ── 任务生命周期 ────────────────────────────────────────────────────────
     def create_task(
-        self, *, filters: dict, user_id: int, region_label: str
+        self, *, filters: dict, user_id: int, region_label: str,
+        sheet: str = "cadastral",
     ) -> str:
+        if sheet not in SUPPORTED_SHEETS:
+            raise ValueError(f"不支持的导出类型：{sheet}")
         task_id = uuid.uuid4().hex
         with self._lock:
             self._prune_locked()
             self._tasks[task_id] = {
                 "id": task_id,
+                "sheet": sheet,
+                # ⛔ 归属绑定（审计 M2）：任务进度/产物只允许创建人（或
+                # data_scope=all 的平台管理员）访问，防止拿到 task_id 就能
+                # 下载他人导出的整村 Word 包。
+                "user_id": user_id,
                 "status": "pending",
                 "done": 0,
                 "total": 0,
@@ -62,23 +74,40 @@ class CadastralExportService:
             }
         thread = threading.Thread(
             target=self._run,
-            args=(task_id, filters, user_id, region_label),
+            args=(task_id, filters, user_id, region_label, sheet),
             daemon=True,
         )
         thread.start()
         return task_id
 
-    def get_progress(self, task_id: str) -> dict | None:
+    @staticmethod
+    def _ensure_owner(task: dict, current_user) -> None:
+        """越权访问导出任务时抛 PermissionError（端点层转 403）。"""
+        user_id = getattr(current_user, "id", None)
+        if user_id is not None and task.get("user_id") == user_id:
+            return
+        if getattr(current_user.role, "data_scope", None) == "all":
+            return
+        raise PermissionError("无权访问该导出任务")
+
+    def get_progress(self, task_id: str, current_user=None) -> dict | None:
         with self._lock:
             task = self._tasks.get(task_id)
             if task is None:
                 return None
+            if current_user is not None:
+                self._ensure_owner(task, current_user)
             return {key: value for key, value in task.items() if key != "archive"}
 
-    def get_archive(self, task_id: str) -> tuple[str, bytes] | None:
+    def get_archive(self, task_id: str, current_user=None) -> tuple[str, bytes] | None:
         with self._lock:
             task = self._tasks.get(task_id)
-            if task is None or not task.get("archive"):
+            if task is None:
+                return None
+            if current_user is not None:
+                # ⛔ 先鉴权再判产物：避免通过 403/404 差异探测他人任务是否存在
+                self._ensure_owner(task, current_user)
+            if not task.get("archive"):
                 return None
             return task["filename"] or "地籍调查表.zip", task["archive"]
 
@@ -97,7 +126,8 @@ class CadastralExportService:
 
     # ── 后台线程 ────────────────────────────────────────────────────────────
     def _run(
-        self, task_id: str, filters: dict, user_id: int, region_label: str
+        self, task_id: str, filters: dict, user_id: int, region_label: str,
+        sheet: str = "cadastral",
     ) -> None:
         db: Session = SessionLocal()
         try:
@@ -149,11 +179,16 @@ class CadastralExportService:
                         if not code:
                             continue
                         try:
-                            payload, filename = cadastral_docx_service.render_contractor(
-                                db, cbfbm=code
-                            )
+                            if sheet == "cadastral":
+                                payload, filename = cadastral_docx_service.render_contractor(
+                                    db, cbfbm=code
+                                )
+                            else:
+                                payload, filename = survey_sheet_docx_service.render_contractor(
+                                    db, cbfbm=code, sheet=sheet
+                                )
                         except Exception:  # 单户失败不应中断整批
-                            logger.exception("导出地籍调查表失败：%s", code)
+                            logger.exception("导出调查表失败：%s sheet=%s", code, sheet)
                             done += 1
                             continue
                         archive.writestr(
@@ -179,13 +214,19 @@ class CadastralExportService:
                 percent=100,
                 message=f"已生成 {done} 户，可以下载了",
                 archive=buffer.getvalue(),
-                filename=f"{region_label or '区域'}地籍调查表.zip",
+                filename=f"{region_label or '区域'}{self._sheet_label(sheet)}.zip",
             )
         except Exception as exc:  # noqa: BLE001 - 后台任务需要兜住所有异常
             logger.exception("批量导出地籍调查表失败：task=%s", task_id)
             self._update(task_id, status="failed", error=str(exc))
         finally:
             db.close()
+
+    @staticmethod
+    def _sheet_label(sheet: str) -> str:
+        if sheet == "cadastral":
+            return "地籍调查表"
+        return SHEET_RENDERERS.get(sheet, (None, "调查表"))[1]
 
     @staticmethod
     def _unique_name(used: set[str], filename: str) -> str:

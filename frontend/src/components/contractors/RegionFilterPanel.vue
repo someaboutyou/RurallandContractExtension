@@ -49,6 +49,8 @@
                   批量打印调查表
                 </el-dropdown-item>
                 <el-dropdown-item command="exportSurveyForms">导出地籍调查表（Word）</el-dropdown-item>
+                <el-dropdown-item command="exportLandChangeSheets">批量生成承包地变化摸底表（Word）</el-dropdown-item>
+                <el-dropdown-item command="exportMemberChangeSheets">批量生成成员变化摸底表（Word）</el-dropdown-item>
                 <el-dropdown-item command="printRoster">打印承包方清册</el-dropdown-item>
               </el-dropdown-menu>
             </template>

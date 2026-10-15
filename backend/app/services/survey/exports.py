@@ -53,7 +53,12 @@ class SurveyServiceExportsMixin:
         for item in source_contractors:
             latest_by_code.setdefault(item.cbfbm, item)
         contractors = list(latest_by_code.values())
-        data_batch_ids = {item.batch_id for item in contractors}
+        # ⛔ batch_id 只存在于任务表 SurveyCbfBase（result 表没有 batch_id，只有
+        #    source/last_import_batch_id）。曾在此写 {item.batch_id for item in contractors}
+        #    ⇒ AttributeError 500，「导出」按钮对所有批次不可用（2026-10-09 测试发现）。
+        #    语义不变：以**本批次任务行**为口径做成员/发包方收集的非空闸门——
+        #    新增承包方（create_contractor 会落 task 行，batch_id=本批次）天然被覆盖。
+        data_batch_ids = {task.batch_id for task in tasks}
         contractor_uids = {item.contractor_uid for item in contractors}
         members = db.scalars(
             select(SurveyCbfJtcyResult)
@@ -93,10 +98,14 @@ class SurveyServiceExportsMixin:
         ).all()
         allowed_uids = {item.contractor_uid for item in tasks}
         diffs = [item for item in diffs if item.contractor_uid in allowed_uids]
+        # 任务表（SurveyCbfBase）没有 confirmed_at 列 —— 确认时间只落在 result 表上
+        # （task.py:426 的 task.confirmed_at 赋值是静默无效的临时属性）。任务 CSV 的
+        # 「确认时间」用同 region 的最新 result 行回填，拿不到就留空。
+        confirmed_by_uid = {item.contractor_uid: item.confirmed_at for item in contractors}
 
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr("survey_tasks.csv", self._build_tasks_csv(tasks))
+            archive.writestr("survey_tasks.csv", self._build_tasks_csv(tasks, confirmed_by_uid))
             archive.writestr("survey_fbf_result.csv", self._build_issuer_results_csv(issuers))
             archive.writestr("survey_cbf_result.csv", self._build_contractor_results_csv(contractors))
             archive.writestr("survey_cbf_jtcy_result.csv", self._build_member_results_csv(members))
@@ -135,9 +144,20 @@ class SurveyServiceExportsMixin:
         return "yes" if value else "no"
 
 
-    def _build_tasks_csv(self, tasks: list[SurveyCbfBase]) -> bytes:
+    def _build_tasks_csv(self, tasks: list[SurveyCbfBase], confirmed_by_uid: dict[str, datetime | None]) -> bytes:
         return self._csv_bytes(
-            # repaired invalid string literal
+            # 表头在历史"invalid string literal"自动修复时被弄丢，此处按字段语义重建。
+            [
+                "批次内唯一标识",
+                "承包方编码",
+                "承包方名称",
+                "调查状态",
+                "是否变化",
+                "变化数",
+                "调查时间",
+                "确认时间",
+                "跳过原因",
+            ],
             [
                 [
                     item.contractor_uid,
@@ -147,7 +167,7 @@ class SurveyServiceExportsMixin:
                     self._bool_text(item.has_change),
                     item.change_count,
                     self._date_text(item.investigated_at),
-                    self._date_text(item.confirmed_at),
+                    self._date_text(confirmed_by_uid.get(item.contractor_uid)),
                     item.skip_reason or "",
                 ]
                 for item in tasks
@@ -256,7 +276,8 @@ class SurveyServiceExportsMixin:
                     "yes" if item.is_changed else "no",
                     item.change_type,
                     item.change_reason or "",
-                    item.policy_basis or "",
+                    # SurveyFbfResult 没有政策依据列（发包方口径本就无此字段），列保留、值留空。
+                    "",
                 ]
                 for item in issuers
             ],

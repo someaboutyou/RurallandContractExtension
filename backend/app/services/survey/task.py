@@ -423,7 +423,9 @@ class SurveyServiceTaskMixin:
             db.add(task)
         if task:
             task.task_status = "confirmed"
-            task.confirmed_at = now
+            # ⛔ 不要在这里写 task.confirmed_at：任务表(SurveyCbfBase)没有该列，
+            #    赋值只会成为 Python 属性、从不落库（曾误导 exports.py 误用）。
+            #    确认时间唯一落点在 result 表（上方 result.confirmed_at = now）。
             task.reviewed_at = now
         db.commit()
         return self.get_result(db, batch_id, contractor_uid, current_user)

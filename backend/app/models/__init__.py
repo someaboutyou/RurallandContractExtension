@@ -24,6 +24,9 @@ from app.models.survey import (
     SurveyFbfBase,
     SurveyFbfResult,
 )
+from app.models.survey_sheet import (
+    SurveyCbfMemberChangeSheet,
+)
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.workflow_definition_version import WorkflowDefinitionVersion
@@ -59,4 +62,5 @@ __all__ = [
     "SurveyCbdkxxResult",
     "SurveyDkBase",
     "SurveyDkResult",
+    "SurveyCbfMemberChangeSheet",
 ]

@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -82,6 +84,15 @@ class CadastralExportRequest(BaseModel):
     idNo: str | None = Field(default=None, max_length=40)
     address: str | None = Field(default=None, max_length=200)
     batchId: int | None = None
+
+
+class SurveySheetExportRequest(CadastralExportRequest):
+    """批量导出摸底表 Word 的请求（复用地籍调查表的筛选条件 + 表类型）。
+
+    ``sheetType``：``land-change``（包地变化摸底表）/ ``member-change``（家庭成员变化摸底表）。
+    """
+
+    sheetType: Literal["land-change", "member-change"]
 
 
 class CadastralExportProgressRead(BaseModel):

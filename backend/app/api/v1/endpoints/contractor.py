@@ -11,6 +11,7 @@ from app.schemas.contractor import (
     ContractorCreate,
     ContractorRead,
     ContractorUpdate,
+    SurveySheetExportRequest,
 )
 from app.schemas.pagination import PageResponse
 from app.schemas.response import ApiResponse
@@ -18,6 +19,8 @@ from app.services.cadastral_docx_service import cadastral_docx_service
 from app.services.cadastral_export_service import cadastral_export_service
 from app.services.contract_template_service import contract_template_service
 from app.services.contractor_service import contractor_service
+from app.services.data_access_service import data_access_service
+from app.services.survey_sheet_docx_service import survey_sheet_docx_service
 
 router = APIRouter()
 
@@ -153,7 +156,10 @@ def get_cadastral_survey_export_progress(
     task_id: str,
     current_user: User = Depends(require_permission("contractors.view")),
 ):
-    progress = cadastral_export_service.get_progress(task_id)
+    try:
+        progress = cadastral_export_service.get_progress(task_id, current_user)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     if progress is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导出任务不存在")
     return {"data": progress}
@@ -164,7 +170,116 @@ def download_cadastral_survey_export(
     task_id: str,
     current_user: User = Depends(require_permission("contractors.view")),
 ):
-    archive = cadastral_export_service.get_archive(task_id)
+    try:
+        archive = cadastral_export_service.get_archive(task_id, current_user)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    if archive is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="导出任务不存在或尚未完成"
+        )
+    filename, payload = archive
+    return Response(
+        content=payload,
+        media_type="application/zip",
+        headers={"Content-Disposition": _content_disposition(filename)},
+    )
+
+
+# ── 摸底表（2026-10-09 礼泉试点）：单户 Word 下载 + 区域批量导出 ────────────
+# 注意：以下路由必须排在 "/{contractor_code}" 之前，否则会被路径参数吞掉。
+
+
+def _download_survey_sheet_docx(
+    contractor_code: str, sheet: str, db: Session, current_user: User
+) -> Response:
+    data_access_service.ensure_code_in_scope(current_user, contractor_code)
+    try:
+        payload, filename = survey_sheet_docx_service.render_contractor(
+            db, cbfbm=contractor_code, sheet=sheet
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return Response(
+        content=payload,
+        media_type=DOCX_MEDIA_TYPE,
+        headers={"Content-Disposition": _content_disposition(filename)},
+    )
+
+
+@router.get("/{contractor_code}/land-change-sheet.docx")
+def download_land_change_sheet_docx(
+    contractor_code: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """单户《承包方包地变化情况摸底表》Word 下载。"""
+    return _download_survey_sheet_docx(contractor_code, "land-change", db, current_user)
+
+
+@router.get("/{contractor_code}/member-change-sheet.docx")
+def download_member_change_sheet_docx(
+    contractor_code: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """单户《承包农户家庭成员变化情况摸底表》Word 下载。"""
+    return _download_survey_sheet_docx(contractor_code, "member-change", db, current_user)
+
+
+@router.post("/survey-sheet/export", response_model=ApiResponse[dict])
+def create_survey_sheet_export(
+    payload: SurveySheetExportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """批量导出摸底表 Word（后台逐户生成，打包 zip；与地籍调查表同一套任务设施）。"""
+    filters = {
+        "keyword": payload.keyword,
+        "name": payload.name,
+        "member_name": payload.memberName,
+        "id_no": payload.idNo,
+        "address": payload.address,
+        "region_code": payload.regionCode,
+    }
+    try:
+        task_id = cadastral_export_service.create_task(
+            filters=filters,
+            user_id=current_user.id,
+            region_label=(payload.regionLabel or payload.regionCode or "区域"),
+            sheet=payload.sheetType,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"data": {"taskId": task_id}}
+
+
+@router.get(
+    "/survey-sheet/export/{task_id}",
+    response_model=ApiResponse[CadastralExportProgressRead],
+)
+def get_survey_sheet_export_progress(
+    task_id: str,
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    try:
+        progress = cadastral_export_service.get_progress(task_id, current_user)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    if progress is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导出任务不存在")
+    return {"data": progress}
+
+
+@router.get("/survey-sheet/export/{task_id}/download")
+def download_survey_sheet_export(
+    task_id: str,
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    try:
+        archive = cadastral_export_service.get_archive(task_id, current_user)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     if archive is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="导出任务不存在或尚未完成"
@@ -185,6 +300,9 @@ def download_cadastral_survey_docx(
     current_user: User = Depends(require_permission("contractors.view")),
 ):
     """单户《地籍调查表》Word 下载，文件名 ``CBFBM+CBFMC+地籍调查表``。"""
+    # ⛔ 显式归属校验（审计 L1）：与列表/详情接口同口径，不再只依赖 ORM
+    # 全局过滤器隐式兜底（防止未来新增非 scoped 模型或误用 skip_tenant_scope）。
+    data_access_service.ensure_code_in_scope(current_user, contractor_code)
     payload, filename = cadastral_docx_service.render_contractor(
         db, cbfbm=contractor_code, batch_id=batch_id
     )

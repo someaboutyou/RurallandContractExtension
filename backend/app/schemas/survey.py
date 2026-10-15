@@ -575,6 +575,9 @@ class SurveyMemberUpdate(BaseModel):
     policyBasis: str | None = None
     rightsDisposition: str | None = None
     remark: str | None = None
+    #: 家庭成员变化摸底表数据（宽松 dict；None = 不带摸底数据的旧客户端，
+    #  服务端跳过对应成员的摸底 upsert —— 见 services/survey/sheet.py）。
+    sheet: dict | None = None
 
 
 class SurveyIssuerUpdate(BaseModel):
@@ -739,3 +742,9 @@ class SurveyContractorRead(BaseModel):
     familyMembers: list[SurveyMemberRead]
     generatedRequestId: int | None = None
     generatedRequestNo: str | None = None
+
+
+# ── 摸底表（2026-10-09 礼泉试点；2026-10-10 简化）──────────────────────────
+# 《包地变化摸底表》纯推导无存储；《家庭成员变化摸底表》的摸底数据随
+# update_result 的 familyMembers[*].sheet 子对象提交（宽松 dict，细校验在
+# 服务层做；事实类字段一律不做必填闸门，见 MEMORY 必填闸门教训）。

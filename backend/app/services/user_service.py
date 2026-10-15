@@ -2,7 +2,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.security import hash_password
+from app.core.security import hash_password, validate_password_strength
 from app.domain.region_code import normalize_region_codes
 from app.models.region import Region
 from app.models.user import User
@@ -25,7 +25,13 @@ class UserService:
         role_id: int | None = None,
         tenant_code: str | None = None,
         status_filter: str | None = None,
+        current_user: User | None = None,
     ) -> tuple[list[dict], int]:
+        # ⛔ 租户边界（审计 M3）：User 模型不带 TenantScopedMixin，ORM 全局
+        # 过滤器管不到它 ⇒ 非平台管理员（data_scope≠all）强制只看本租户用户，
+        # 且不允许用查询参数越过这条线。
+        if current_user is not None and current_user.role.data_scope != "all":
+            tenant_code = current_user.tenant_code
         records, total = user_repository.list_users(
             db,
             page=page,
@@ -37,12 +43,14 @@ class UserService:
         )
         return [self.serialize_user(item) for item in records], total
 
-    def create_user(self, db: Session, payload: dict) -> dict:
+    def create_user(self, db: Session, payload: dict, operator: User | None = None) -> dict:
         self._validate_status(payload["status"])
         self._ensure_username_unique(db, payload["username"])
+        self._validate_password(payload["password"])
         role = self._get_role_or_404(db, payload["roleId"])
         region_permissions = self._build_region_permissions(db, payload.get("regionCodes") or [])
         region = self._get_home_region_from_permissions(db, region_permissions)
+        self._ensure_operator_tenant(operator, region.tenant_code, action="创建")
 
         user = User(
             username=payload["username"].strip(),
@@ -57,13 +65,16 @@ class UserService:
         user.region_permissions = region_permissions
         return self.serialize_user(user_repository.add_user(db, user))
 
-    def update_user(self, db: Session, user_id: int, payload: dict) -> dict:
+    def update_user(self, db: Session, user_id: int, payload: dict, operator: User | None = None) -> dict:
         user = self._get_user_or_404(db, user_id)
+        self._ensure_can_manage(operator, user)
         self._validate_status(payload["status"])
         self._ensure_username_unique(db, payload["username"], exclude_id=user_id)
         role = self._get_role_or_404(db, payload["roleId"])
         region_permissions = self._build_region_permissions(db, payload.get("regionCodes") or [], user=user)
         region = self._get_home_region_from_permissions(db, region_permissions)
+        # 更新会连带改写 tenant_code：非平台管理员不得把用户挪到别的租户
+        self._ensure_operator_tenant(operator, region.tenant_code, action="调整")
 
         user.username = payload["username"].strip()
         user.real_name = payload["realName"].strip()
@@ -75,16 +86,61 @@ class UserService:
         user.region_permissions = region_permissions
         return self.serialize_user(user_repository.update_user(db, user))
 
-    def reset_password(self, db: Session, user_id: int, password: str) -> None:
+    def reset_password(self, db: Session, user_id: int, password: str, operator: User | None = None) -> None:
         user = self._get_user_or_404(db, user_id)
+        self._ensure_can_manage(operator, user)
+        self._validate_password(password)
         user.password_hash = hash_password(password)
         user_repository.update_user(db, user)
 
-    def delete_user(self, db: Session, user_id: int, *, operator_id: int) -> None:
+    # ── 密码强度闸门（2026-10-09 弱口令审计）──────────────────────────────
+    @staticmethod
+    def _validate_password(password: str) -> None:
+        try:
+            validate_password_strength(password)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    def delete_user(self, db: Session, user_id: int, *, operator_id: int, operator: User | None = None) -> None:
         user = self._get_user_or_404(db, user_id)
         if user.id == operator_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="不能删除当前登录账号")
+        self._ensure_can_manage(operator, user)
         user_repository.delete_user(db, user)
+
+    # ── 用户管理越权闸门（审计 M3）────────────────────────────────────────
+    @staticmethod
+    def _is_platform_operator(operator: User | None) -> bool:
+        return operator is not None and operator.role.data_scope == "all"
+
+    def _ensure_can_manage(self, operator: User | None, target: User) -> None:
+        """修改/重置密码/删除用户前的归属校验：
+        - 平台管理员（data_scope=all）不受限；
+        - 其余用户只能操作**同租户**账号，且永远不能动平台管理员账号
+          （否则 users.manage 即等价于接管全系统 —— 水平越权 + 垂直提权链）。
+        """
+        if self._is_platform_operator(operator):
+            return
+        if target.role.data_scope == "all":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="仅平台管理员可操作平台管理员账号",
+            )
+        if target.tenant_code != operator.tenant_code:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权管理其他租户的用户",
+            )
+
+    def _ensure_operator_tenant(self, operator: User | None, target_tenant_code: str, *, action: str) -> None:
+        """创建用户 / 调整授权区域时，非平台管理员不得跨租户写入。"""
+        if self._is_platform_operator(operator) or operator is None:
+            return
+        if target_tenant_code != operator.tenant_code:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"无权将用户{action}到其他租户",
+            )
 
     def serialize_user(self, item: User) -> dict:
         return {

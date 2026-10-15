@@ -67,3 +67,6 @@ frontend/vite.config.js.timestamp-*.mjs
 fix_helpers.py
 .tmp-visual/
 .workbuddy/
+
+# dist 本地备份快照（不入库）
+frontend/dist.bak-*/

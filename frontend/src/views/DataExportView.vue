@@ -83,7 +83,8 @@
               <el-table-column prop="recordCount" label="记录数" min-width="90" />
               <el-table-column label="状态" min-width="160">
                 <template #default="{ row }">
-                  <el-tag v-if="row.status !== 'processing'" :type="row.status === 'success' ? 'success' : 'danger'">
+                  <el-tag v-if="row.isHistorical" type="info">历史</el-tag>
+                  <el-tag v-else-if="row.status !== 'processing'" :type="row.status === 'success' ? 'success' : 'danger'">
                     {{ statusLabel(row.status) }}
                   </el-tag>
                   <template v-else>
@@ -100,16 +101,25 @@
               <el-table-column label="创建时间" min-width="160">
                 <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
               </el-table-column>
-              <el-table-column label="操作" fixed="right" min-width="150">
+              <el-table-column label="操作" fixed="right" min-width="180">
                 <template #default="{ row }">
                   <div class="table-actions">
                     <el-button
                       link
                       type="primary"
-                      :disabled="row.status !== 'success'"
+                      :disabled="row.isHistorical || row.status !== 'success'"
                       @click="handleDownload(row)"
                     >
                       下载
+                    </el-button>
+                    <el-button
+                      v-if="!row.isHistorical"
+                      link
+                      type="warning"
+                      :disabled="row.status === 'processing'"
+                      @click="handleClear(row)"
+                    >
+                      清除
                     </el-button>
                     <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
                   </div>
@@ -140,6 +150,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 
 import { fetchRegionChildren, searchRegions } from "../api/region";
 import {
+  clearDataExport,
   createDataExport,
   deleteDataExport,
   downloadDataExport,
@@ -317,6 +328,29 @@ async function handleDownload(row) {
     downloadBlob(data, row.fileName || `${row.exportNo}.zip`);
   } catch (error) {
     ElMessage.error(error?.response?.data?.detail || "下载失败");
+  }
+}
+
+async function handleClear(row) {
+  try {
+    await ElMessageBox.confirm(
+      `确认清除导出「${row.exportNo}」吗？将删除服务器上的导出文件及产物目录，记录保留为历史（不可再下载）。`,
+      "清除导出",
+      {
+        type: "warning",
+        confirmButtonText: "清除",
+        cancelButtonText: "取消",
+      },
+    );
+  } catch {
+    return;
+  }
+  try {
+    await clearDataExport(row.id);
+    ElMessage.success("已清除，记录置为历史");
+    await loadRecords();
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.detail || "清除失败");
   }
 }
 

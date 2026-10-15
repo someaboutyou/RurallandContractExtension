@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TenantScopedMixin, TimestampMixin
@@ -34,3 +34,6 @@ class DataExport(TenantScopedMixin, TimestampMixin, Base):
     operator_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     operator_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 「清除」后置 True：服务器上的产物文件与 data_exports/<id>/ 目录已删除，
+    # 记录本身保留作为台账（可查操作人 / 区域 / 记录数），不可再下载。
+    is_historical: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

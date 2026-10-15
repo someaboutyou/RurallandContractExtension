@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>承包方承包地变化情况摸底表</title>
+<!--
+  《二轮土地承包到期后再延长三十年承包方承包地变化情况摸底表》
+  （2026-10-12 按试点工作模板原件对齐，结构分三段贴合同一张表：
+    ① 户级信息带：序号列 + 9 组「标签 | 填值」并排（代表姓名/身份证号/承包方编码/
+       有无承包合同/合同编号/有无农村土地承包经营权证/经营权证编号/承包地取得方式/
+       承包合同起止日期）；
+    ② 承包耕地变化情况明细：地块数/名称/编码/四至(东西南北)/面积/质量等级/
+       原二轮承包合同面积/登记颁证时面积/现有承包土地面积/变化原因 8 勾选列
+       (征收/互换/转让/退耕还林/退耕还草/实测增减/登记错误/其他)/变更时间/备注；
+    ③ 调查记事（预印填空句式）+ 调查员行、审核意见 + 审核人行。
+  数据拼装：app/services/survey/sheet.py::build_land_change_context
+  （变化原因勾选落列 = LAND_REASON_TARGET_INDEX；调查记事数字留空手填）。
+  A4 横向：HTML 是唯一母版，Word 导出走同一份（html_docx.build_docx）。
+-->
+<style>
+  @page { size: A4 landscape; margin: 0; }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    color: #000;
+    background: #f2f3f5;
+    font-family: "SimSun", "宋体", serif;
+    font-size: 10.5pt;
+  }
+
+  .print-btn {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 20;
+    padding: 8px 20px;
+    border: 0;
+    border-radius: 4px;
+    color: #fff;
+    background: #409eff;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  .page {
+    position: relative;
+    width: 297mm;
+    height: 210mm;
+    margin: 0 auto 14px;
+    padding: 10mm 15mm 8mm;
+    background: #fff;
+    overflow: hidden;
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+
+  .form-title {
+    margin: 0 0 3mm;
+    text-align: center;
+    font-family: "SimHei", "黑体", "SimSun", serif;
+    font-size: 15pt;
+    font-weight: 700;
+    line-height: 1.3;
+  }
+
+  .head-line {
+    width: 267mm;
+    margin: 0 0 1.5mm;
+    font-size: 10.5pt;
+    line-height: 1.8;
+  }
+
+  /* 横线填值：值落在下划线上，两侧垫全角空格使横线超出字长
+     （Word 转写为 w:u single —— 行中部的全角空格会被 Word 一并划线） */
+  .fill { text-decoration: underline; text-underline-offset: 2px; }
+
+  .tbl {
+    width: 267mm;
+    margin: 0 auto;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+
+  .tbl th, .tbl td {
+    border: 1px solid #000;
+    padding: 1mm 0.8mm;
+    text-align: center;
+    vertical-align: middle;
+    font-size: 9pt;
+    font-weight: 400;
+    line-height: 1.25;
+    word-break: break-all;
+  }
+
+  .tbl td.left { text-align: left; }
+
+  /* ☑/□ 两个符号必须同字体（MS Gothic / Segoe UI Symbol），标签文字走宋体 */
+  .box, .cb { font-family: "MS Gothic", "Segoe UI Symbol", "SimSun", "宋体", serif; }
+
+  /* 表内记事 / 签字 / 审核行（调查记事+调查员、审核意见+审核人 各合并为同一单元格） */
+  .tbl td.note-cell { text-align: left; padding: 1.5mm 2.5mm; font-size: 9.5pt; line-height: 1.7; }
+
+  @media print {
+    .page { box-shadow: none; }
+    .print-btn { display: none !important; }
+    .tbl tr { break-inside: avoid; page-break-inside: avoid; }
+  }
+
+  @media screen {
+    .page { box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12); }
+  }
+</style>
+</head>
+<body>
+
+<button class="print-btn" onclick="window.print()">打印</button>
+
+{% macro box(checked, off='') -%}
+{%- if checked -%}<span class="box">☑</span>{%- elif off -%}<span class="box">{{ off }}</span>{%- endif -%}
+{%- endmacro %}
+
+{# 横线填值：有值时两侧各垫 2 个全角空格使横线超出字长；空值保底空线 #}
+{% macro fillline(value, min_blank=8) -%}
+<span class="fill">{% if value %}　　{{ value }}　　{% else %}{{ '　' * min_blank }}{% endif %}</span>
+{%- endmacro %}
+
+{# 表头填值：有值直接印、不加下划线（原件手写体口径）；空段印 ＿ 实线空格
+   （不用下划线全角空格 —— Word 里会被压缩成很短一截，实测） #}
+{% macro fillval(value, min_blank=8) -%}
+{%- if value -%}{{ value }}{%- else -%}{{ bl(min_blank) }}{%- endif -%}
+{%- endmacro %}
+
+{# 实线空格：全角低横线 ＿ 连排成连续横线（记事句式专用；不用下划线空格 ——
+   行尾悬挂空格会把横线画出表格右边框外） #}
+{% macro bl(n=3) -%}{{ '＿' * n }}{%- endmacro %}
+
+{# 头部填值：值落在下划线上（已填值也带线，原件口径），空段印 ＿ 实线空格 #}
+{% macro fillul(value, min_blank=8) -%}
+{%- if value -%}<span class="fill">　　{{ value }}　　</span>{%- else -%}{{ bl(min_blank) }}{%- endif -%}
+{%- endmacro %}
+
+{# 变化原因勾选格：命中列印 √，未命中留空 #}
+{% macro reason_cell(reason_index, target) -%}
+{%- if reason_index is not none and reason_index == target -%}<td>√</td>{%- else -%}<td></td>{%- endif -%}
+{%- endmacro %}
+
+{# 10 而非 12：A4 横向底部要给 Word 表后隐式尾段落留一行余量（12/11 行实测溢出到第 2 页） #}
+{% set land_min_rows = land_min_rows or 10 %}
+
+<div class="page">
+  <div class="form-title">二轮土地承包到期后再延长三十年承包方承包地变化情况摸底表</div>
+  <div class="head-line">
+    {# 原件口径：值落在标签前的横线上 —— 县名+镇名同占一条线、后缀注记「苏木（镇）」；
+       村名在线上、后缀注记「嘎查（村）」；自然村名（无名时只剩横线）后缀「自然村」 #}
+    {% set issuer_line1 = ((contractor.issuerCounty or '') ~ ' ' ~ (contractor.issuerTown or '')) | trim %}
+    发包方名称：{{ fillul(issuer_line1, 10) }}　苏木（镇）{{ fillul(contractor.issuerVillage or '', 6) }}　嘎查（村）{{ fillul(contractor.issuerHamlet or '', 8) }}自然村　　　发包方编码：{{ fillul(contractor.issuerCode, 12) }}
+  </div>
+
+  {# ── 户级信息带：9 组「标签 | 填值」并排 ── #}
+  <table class="tbl">
+    <colgroup>
+      <col style="width:8mm">
+      <col style="width:15mm"><col style="width:15mm">
+      <col style="width:17mm"><col style="width:18mm">
+      <col style="width:13mm"><col style="width:15mm">
+      <col style="width:13mm"><col style="width:11mm">
+      <col style="width:13mm"><col style="width:13mm">
+      <col style="width:16mm"><col style="width:11mm">
+      <col style="width:12mm"><col style="width:12mm">
+      <col style="width:13mm"><col style="width:20mm">
+      <col style="width:13mm"><col style="width:19mm">
+    </colgroup>
+    <tr>
+      {# 序号标签拆成「序」「号」分住接缝两侧（序沉底、号顶格），
+          两格拼接成同一竖格后整体居中（原件口径）；接缝两边消边框 #}
+      <th style="border-bottom:none; vertical-align:bottom; padding-bottom:1.2mm;">序</th>
+      <th>承包方（代表）姓名</th>
+      <td>{{ contractor.name }}</td>
+      <th>承包方（代表）身份证号</th>
+      <td>{{ contractor.repIdNo }}</td>
+      <th>承包方编码</th>
+      <td>{{ contractor.code }}</td>
+      <th>有无承包合同</th>
+      <td><span class="cb">{{ box(sheet.hasContract) }}</span>有<br><span class="cb">{{ box(not sheet.hasContract) }}</span>无</td>
+      <th>承包合同编号</th>
+      <td>{{ sheet.contractNo }}</td>
+      <th>有无农村土地承包经营权证</th>
+      <td><span class="cb">{{ box(sheet.hasCertificate) }}</span>有<br><span class="cb">{{ box(not sheet.hasCertificate) }}</span>无</td>
+      <th>经营权证编号</th>
+      <td>{{ sheet.certificateNo }}</td>
+      <th>承包地取得方式</th>
+      <td><span class="cb">{{ box(sheet.familyContractMode == 'family') }}</span>家庭承包<br><span class="cb">{{ box(sheet.familyContractMode == 'other') }}</span>其他方式承包</td>
+      <th>承包合同起止日期</th>
+      <td>{{ sheet.contractStartDate }}<br>至<br>{{ sheet.contractEndDate }}</td>
+    </tr>
+  </table>
+
+  {# ── 承包耕地变化情况明细 ── #}
+  <table class="tbl">
+    <colgroup>
+      <col style="width:8mm"><col style="width:12mm"><col style="width:20mm"><col style="width:17mm">
+      <col style="width:12mm"><col style="width:12mm"><col style="width:12mm"><col style="width:12mm">
+      <col style="width:13mm"><col style="width:10mm"><col style="width:16mm"><col style="width:16mm">
+      <col style="width:16mm">
+      <col style="width:8mm"><col style="width:8mm"><col style="width:8mm"><col style="width:8mm">
+      <col style="width:8mm"><col style="width:8mm"><col style="width:8mm"><col style="width:8mm">
+      <col style="width:13mm"><col style="width:14mm">
+    </colgroup>
+    <tr>
+      {# 与上面户级带首格是同一竖格（接缝两边消边框），标签已写在户级带；
+         整条接缝只保留户级带的下边框（这边 top 消掉，否则两边叠成粗线） #}
+      <th rowspan="3" style="border-top:none; vertical-align:top; padding-top:1.2mm;">号</th>
+      <th colspan="22" style="border-top:none">承包耕地变化情况</th>
+    </tr>
+    <tr>
+      <th rowspan="2">承包地<br>块数</th>
+      <th rowspan="2">地块名称</th>
+      <th rowspan="2">地块编码</th>
+      <th colspan="4">四至</th>
+      <th rowspan="2">面积<br>（亩）</th>
+      <th rowspan="2">质量等级</th>
+      <th rowspan="2">原二轮承包合同面积（亩）</th>
+      <th rowspan="2">登记颁证时面积（亩）</th>
+      <th rowspan="2">现有承包土地面积（亩）</th>
+      <th colspan="8">变化原因</th>
+      <th rowspan="2">变更时间</th>
+      <th rowspan="2">备注</th>
+    </tr>
+    <tr>
+      <th>东至</th><th>西至</th><th>南至</th><th>北至</th>
+      <th>征收</th><th>互换</th><th>转让</th><th>退耕<br>还林</th>
+      <th>退耕<br>还草</th><th>实测<br>增减</th><th>登记<br>错误</th><th>其他</th>
+    </tr>
+    {% for item in items %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>{{ loop.index }}</td>
+      <td>{{ item.dkmc }}</td>
+      <td>{{ item.dkbm[-5:] }}</td>
+      <td>{{ item.east }}</td><td>{{ item.west }}</td><td>{{ item.south }}</td><td>{{ item.north }}</td>
+      <td>{{ item.areaMu }}</td>
+      <td>{{ item.qualityGrade }}</td>
+      <td>{{ item.originalAreaMu }}</td>
+      <td>{{ item.registeredAreaMu }}</td>
+      <td>{{ item.currentAreaMu }}</td>
+      {{ reason_cell(item.reasonIndex, 0) }}{{ reason_cell(item.reasonIndex, 1) }}{{ reason_cell(item.reasonIndex, 2) }}{{ reason_cell(item.reasonIndex, 3) }}{{ reason_cell(item.reasonIndex, 4) }}{{ reason_cell(item.reasonIndex, 5) }}{{ reason_cell(item.reasonIndex, 6) }}{{ reason_cell(item.reasonIndex, 7) }}
+      <td>{{ item.changeTime }}</td>
+      <td>{{ item.remark }}</td>
+    </tr>
+    {% endfor %}
+    {% for _ in range(land_min_rows - (items | length) if (items | length) < land_min_rows else 0) %}
+    <tr>
+      <td>&nbsp;</td>
+      {% for _ in range(22) %}<td></td>{% endfor %}
+    </tr>
+    {% endfor %}
+  </table>
+
+  {# ── 调查记事（预印填空句式）+ 调查员行 / 审核意见 + 审核人行 ── #}
+  <table class="tbl">
+    <colgroup><col style="width:267mm"></colgroup>
+    <tr>
+      {# 与上面明细表的接缝只保留明细表的下边框（这边 top 消掉，避免叠成粗线） #}
+      <td class="note-cell" style="border-top:none">
+        {# 调查记事：能从地块/成员数据推出的自动带数（fillul 有值印在横线上），
+           无数据源的槽位留 ＿ 实线空线手工填 #}
+        调查记事：二轮延包时{{ fillul(note.memberCount, 2) }}人分得二轮承包耕地{{ fillul(note.secondRoundAreaMu, 3) }}亩，人均分得耕地{{ fillul(note.perCapitaMu, 3) }}亩；{{ bl(2) }}年为{{ bl(1) }}个新生人口补地{{ bl(3) }}亩。{{ bl(2) }}年合同内退耕还林{{ bl(3) }}亩；{{ bl(2) }}年合同内退牧还草{{ bl(3) }}亩；{{ fillul(note.expropriationYear, 2) }}年合同耕地征收{{ fillul(note.expropriationAreaMu, 3) }}亩；{{ bl(2) }}年因{{ bl(4) }}原因抽回或放弃承包地{{ bl(3) }}亩；2018年土地确权时，确权面积{{ fillul(note.confirmAreaMu, 3) }}亩。承包意愿：{{ bl(8) }}<br>
+        <br>
+        调查员：{{ fillul(sheet.surveyorName, 6) }}　　　　　承包方（代表）：{{ fillul(contractor.name, 6) }}　　　　　调查日期：{{ fillul(sheet.surveyDate, 8) }}
+      </td>
+    </tr>
+    <tr style="height:14mm">
+      <td class="note-cell" style="vertical-align:bottom; padding-bottom:1.2mm;">审核意见：<br>
+        <br>
+        审核人：{{ fillul(sheet.auditorName, 8) }}　　　　　审核日期：{{ fillul(sheet.auditDate, 8) }}</td>
+    </tr>
+  </table>
+</div>
+
+</body>
+</html>

@@ -61,3 +61,33 @@ export function updateContractor(code, payload) {
 export function deleteContractor(code) {
   return http.delete(`/contractors/${code}`);
 }
+
+// ── 摸底表（2026-10-09 礼泉试点）─────────────────────────────
+
+/**
+ * 批量导出摸底表 Word：payload = { sheetType, regionCode, regionLabel, ...filters }。
+ * sheetType: "land-change" | "member-change"。复用地籍调查表的任务/进度/下载设施。
+ */
+export function startSurveySheetExport(payload) {
+  return http.post("/contractors/survey-sheet/export", payload);
+}
+
+export function fetchSurveySheetExportProgress(taskId) {
+  return http.get(`/contractors/survey-sheet/export/${taskId}`);
+}
+
+export function fetchSurveySheetExportArchive(taskId) {
+  return http.get(`/contractors/survey-sheet/export/${taskId}/download`, {
+    responseType: "blob",
+    timeout: 300000,
+  });
+}
+
+/** 单户摸底表 Word 下载，sheet: "land-change" | "member-change"。 */
+export function fetchSurveySheetDocx(code, sheet) {
+  const path = sheet === "land-change" ? "land-change-sheet.docx" : "member-change-sheet.docx";
+  return http.get(`/contractors/${code}/${path}`, {
+    responseType: "blob",
+    timeout: 300000,
+  });
+}

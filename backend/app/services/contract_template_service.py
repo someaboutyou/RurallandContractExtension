@@ -619,6 +619,22 @@ class ContractTemplateService:
         """Render the 地籍调查表 packet (封面 + 发包方 + 承包方 + 每地块两表)."""
         return self._render_cadastral(db, cbfbms=[cbfbm], batch_id=batch_id)
 
+    # ── 两张摸底表（2026-10-09 礼泉试点）：数据拼装在 survey/sheet.py ──────
+
+    def render_land_change_sheet(self, db: Session, *, cbfbm: str) -> str:
+        """《承包方承包地变化情况摸底表》HTML（自动带出 + 最新批次人工覆盖值）。"""
+        from app.services.survey.sheet import survey_sheet_service
+
+        ctx = survey_sheet_service.build_land_change_context(db, cbfbm=cbfbm)
+        return self._env.get_template("land_change_sheet.html").render(**ctx)
+
+    def render_member_change_sheet(self, db: Session, *, cbfbm: str) -> str:
+        """《承包农户家庭成员变化情况摸底表》HTML。"""
+        from app.services.survey.sheet import survey_sheet_service
+
+        ctx = survey_sheet_service.build_member_change_context(db, cbfbm=cbfbm)
+        return self._env.get_template("member_change_sheet.html").render(**ctx)
+
     def render_cadastral_survey_batch(
         self, db: Session, *, cbfbms: list[str], batch_id: int | None = None,
     ) -> str:

@@ -79,7 +79,7 @@ async def upload_shp(
 @router.post("/publish", response_model=ApiResponse[dict])
 def publish_raster(
     payload: PublishRequest,
-    _: User = Depends(require_permission("layers.manage")),
+    current_user: User = Depends(require_permission("layers.manage")),
 ):
     """启动影像发布任务（异步）"""
     # 验证tif存在
@@ -88,8 +88,8 @@ def publish_raster(
     except (FileNotFoundError, ValueError) as e:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
 
-    # 创建任务
-    task_id = raster_publish_service.create_task()
+    # 创建任务（绑定创建人，进度查询校验归属）
+    task_id = raster_publish_service.create_task(owner_user_id=current_user.id)
 
     # 后台线程执行发布
     def _run():
@@ -113,10 +113,13 @@ def publish_raster(
 @router.get("/progress/{task_id}", response_model=ApiResponse[dict])
 def get_progress(
     task_id: str,
-    _: User = Depends(require_permission("layers.manage")),
+    current_user: User = Depends(require_permission("layers.manage")),
 ):
-    """查询发布任务进度"""
-    task = raster_publish_service.get_task_progress(task_id)
+    """查询发布任务进度（仅任务创建人或平台管理员）"""
+    try:
+        task = raster_publish_service.get_task_progress(task_id, current_user)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在")
     return {"data": task}

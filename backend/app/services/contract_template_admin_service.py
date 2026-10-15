@@ -33,6 +33,8 @@ class ContractTemplateAdminService:
             "registration-application": {"name": "不动产登记申请书模板", "filename": "registration_application.html"},
             "cadastral-survey": {"name": "地籍调查表模板", "filename": "cadastral_survey.html"},
             "issuer-survey": {"name": "发包方调查表模板", "filename": "issuer_survey.html"},
+            "land-change-sheet": {"name": "包地变化摸底表模板", "filename": "land_change_sheet.html"},
+            "member-change-sheet": {"name": "家庭成员变化摸底表模板", "filename": "member_change_sheet.html"},
         }
 
     def get_contract_template(self) -> dict:
@@ -229,7 +231,108 @@ class ContractTemplateAdminService:
             "member_min_rows": CADASTRAL_MEMBER_MIN_ROWS,
             "points_per_page": CADASTRAL_POINTS_PER_PAGE,
             "packets": [_sample_cadastral_packet(parcels, family_members)],
+            # ── 两张摸底表的预览样例（字段与 survey/sheet.py 的上下文同键） ──
+            **_sample_sheet_context(),
         }
+
+
+def _sample_sheet_context() -> dict:
+    """两张摸底表预览样例（键与 ``survey/sheet.py`` 的打印上下文同源）。"""
+    return {
+        "land_min_rows": 6,
+        "member_min_rows": 8,
+        "totals": {"originalAreaMu": "2.87", "currentAreaMu": "2.87"},
+        "sheet": {
+            "contractNo": "341321103201010028J",
+            "originalContractNo": "",
+            "hasContract": True,
+            "contractSignDate": "1998-09-15",
+            "contractStartDate": "1998-09-15",
+            "familyContractMode": "family",
+            "hasCertificate": True,
+            "certificateNo": "341321103201010028J",
+            "originalRepresentative": "",
+            "surveyNote": "",
+            "auditNote": "",
+            "auditorName": "",
+            "auditDate": "",
+            "remark": "",
+        },
+        "items": [
+            {
+                "dkbm": "3413211032010100287",
+                "dkmc": "大梨园东西路南",
+                "east": "杨师傅", "south": "汪文远", "west": "王传远", "north": "王传明",
+                "areaMu": "0.68", "originalAreaMu": "0.68",
+                "registeredAreaMu": "0.68", "currentAreaMu": "0.68",
+                "changeReasonText": "", "changeTime": "", "remark": "",
+            },
+            {
+                "dkbm": "3413211032010100072",
+                "dkmc": "富士地（东）南段",
+                "east": "王传印", "south": "王集居民地", "west": "王传远", "north": "机耕路",
+                "areaMu": "0.95", "originalAreaMu": "0.95",
+                "registeredAreaMu": "0.95", "currentAreaMu": "0.95",
+                "changeReasonText": "互换", "changeTime": "2026-03-12", "remark": "",
+            },
+        ],
+        "rows": [
+            {
+                "memberName": "王传德", "idNo": "342221194803064018", "phone": "",
+                "relationText": "户主",
+                "participatedSecondRound": True, "inRegister": True, "is1996Member": True,
+                "srEventType": "", "srEventDate": "",
+                "extEventType": "", "extEventDate": "",
+                "changeTime": "", "inHousehold": True, "economicRelation": "",
+                "isFiscalSupported": False, "isCivilServant": False, "remark": "",
+            },
+            {
+                "memberName": "王大为", "idNo": "342221199502114017", "phone": "15385766993",
+                "relationText": "之子",
+                "participatedSecondRound": False, "inRegister": True, "is1996Member": False,
+                "srEventType": "add_birth", "srEventDate": "1995-02-11",
+                "extEventType": "", "extEventDate": "",
+                "changeTime": "1995.02", "inHousehold": True, "economicRelation": "本户成员",
+                "isFiscalSupported": False, "isCivilServant": False, "remark": "",
+            },
+            {
+                "memberName": "王李氏", "idNo": "", "phone": "",
+                "relationText": "母亲",
+                "participatedSecondRound": True, "inRegister": True, "is1996Member": True,
+                "srEventType": "sub_death", "srEventDate": "2012-06-18",
+                "extEventType": "", "extEventDate": "",
+                "changeTime": "2012.06", "inHousehold": False, "economicRelation": "",
+                "isFiscalSupported": False, "isCivilServant": False, "remark": "2012 年去世",
+            },
+        ],
+        "noteStats": {
+            "rep1996": "",
+            "rep2018": "王传德",
+            "pop1996": 2,
+            "joinExt": 2,
+            "addCount": 1,
+            "subCount": 1,
+            "currentCount": 2,
+            "registerCount": 3,
+            "collectiveCount": 1,
+            "fiscalCount": 0,
+            "civilCount": 0,
+            "compensatedCount": 0,
+            "withdrawCount": 0,
+        },
+        "contractor": {
+            "name": "王传德",
+            "code": "341321103201010028",
+            "groupName": "和谐村前王集一组　",
+            "postcode": "713200",
+            "issuerName": "泗洪县青阳镇城东居二组",
+            "issuerCounty": "泗洪县",
+            "issuerTown": "青阳镇",
+            "issuerVillage": "城东居",
+            "issuerHamlet": "二组",
+            "issuerCode": "32132410000102",
+        },
+    }
 
 
 def _survey_org_setting() -> str:
@@ -418,6 +521,7 @@ def _sample_cadastral_packet(parcels: list[dict], family_members: list[dict]) ->
         "contractor": {
             "name": "王传德",
             "code": "341321103201010028",
+            "groupName": "和谐村前王集一组　",
             "short_code": "0028",
             "type_text": "农户",
             "id_type": "居民身份证",

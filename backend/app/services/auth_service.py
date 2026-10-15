@@ -1,21 +1,40 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.login_throttle import LOCK_SECONDS, check_locked, record_failure, reset
 from app.core.security import create_access_token, verify_password
 from app.models.user import User
 from app.repositories.auth_repository import auth_repository
 
+logger = logging.getLogger(__name__)
+
 
 class AuthService:
-    def login(self, db: Session, username: str, password: str) -> dict:
+    def login(self, db: Session, username: str, password: str, client_ip: str = "") -> dict:
+        # ⛔ 登录失败锁定（审计 M4）：先查锁再验证，锁定期内一律 429，
+        # 防止对任意用户名在线爆破。
+        remaining = check_locked(username, client_ip)
+        if remaining > 0:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"登录失败次数过多，账号已临时锁定，请 {remaining} 秒后重试",
+            )
         user = auth_repository.get_user_by_username(db, username)
         if user is None or not verify_password(password, user.password_hash):
+            left = record_failure(username, client_ip)
+            logger.warning("登录失败 username=%s ip=%s 剩余尝试次数=%s", username, client_ip, left)
+            if left <= 0:
+                detail = f"连续登录失败次数过多，账号已锁定 {LOCK_SECONDS // 60} 分钟"
+            else:
+                detail = "用户名或密码错误"
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="用户名或密码错误",
+                detail=detail,
             )
         if user.status != "active":
             raise HTTPException(
@@ -23,6 +42,8 @@ class AuthService:
                 detail="用户已被禁用",
             )
 
+        # 登录成功：清除失败计数（只清「用户名+IP」这一条，不影响其他来源）
+        reset(username, client_ip)
         token = create_access_token(str(user.id))
         return {
             "access_token": token,

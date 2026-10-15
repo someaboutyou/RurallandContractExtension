@@ -21,3 +21,8 @@ export function downloadDataExport(id) {
 export function deleteDataExport(id) {
   return http.delete(`/data-exports/${id}`);
 }
+
+// 清除导出：删除服务器上的产物文件与以 id 命名的目录，记录置为历史
+export function clearDataExport(id) {
+  return http.post(`/data-exports/${id}/clear`);
+}

@@ -122,8 +122,10 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
-        docs_url="/docs",
-        redoc_url="/redoc",
+        # 生产默认关闭接口文档（审计 L2）：/docs 会把全部接口清单与参数结构
+        # 暴露给未认证用户。开发调试时在 backend/.env 设 ENABLE_DOCS=true。
+        docs_url="/docs" if settings.enable_docs else None,
+        redoc_url="/redoc" if settings.enable_docs else None,
         lifespan=lifespan,
     )
 

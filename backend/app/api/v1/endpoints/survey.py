@@ -915,6 +915,41 @@ def get_registration_application(
     }
 
 
+# ── 两张摸底表（2026-10-09 礼泉试点；2026-10-10 简化） ──────────────────────
+# 《包地变化摸底表》：纯现有数据推导，无独立存储与录入界面。
+# 《家庭成员变化摸底表》：填写入口在「承包方及其家庭成员」面板的成员行
+# 「摸底」按钮，数据随 update_result 提交（services/survey/result.py）；
+# 这里只保留打印入口。
+
+
+@router.get("/batches/{batch_id}/results/{contractor_uid}/land-change-sheet/print")
+def print_land_change_sheet(
+    batch_id: int,
+    contractor_uid: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """《承包方包地变化情况摸底表》打印 HTML。"""
+    result = survey_service.get_result(db, batch_id, contractor_uid, current_user)
+    cbfbm = result.get("code", "")
+    rendered = contract_template_service.render_land_change_sheet(db, cbfbm=cbfbm)
+    return Response(content=rendered, media_type="text/html; charset=utf-8")
+
+
+@router.get("/batches/{batch_id}/results/{contractor_uid}/member-change-sheet/print")
+def print_member_change_sheet(
+    batch_id: int,
+    contractor_uid: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """《承包农户家庭成员变化情况摸底表》打印 HTML。"""
+    result = survey_service.get_result(db, batch_id, contractor_uid, current_user)
+    cbfbm = result.get("code", "")
+    rendered = contract_template_service.render_member_change_sheet(db, cbfbm=cbfbm)
+    return Response(content=rendered, media_type="text/html; charset=utf-8")
+
+
 @router.get("/batches/{batch_id}/results/{contractor_uid}/cadastral-survey")
 def get_cadastral_survey(
     batch_id: int,

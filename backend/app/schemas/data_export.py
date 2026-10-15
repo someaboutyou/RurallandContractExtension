@@ -26,6 +26,7 @@ class DataExportRead(BaseModel):
     operatorId: int | None = None
     operatorName: str | None = None
     errorMessage: str | None = None
+    isHistorical: bool = False
     createdAt: datetime | None = None
     updatedAt: datetime | None = None
 
@@ -48,6 +49,7 @@ def serialize_export(item) -> dict:
         "operatorId": item.operator_id,
         "operatorName": item.operator_name,
         "errorMessage": item.error_message,
+        "isHistorical": bool(getattr(item, "is_historical", False)),
         "createdAt": item.created_at,
         "updatedAt": item.updated_at,
     }

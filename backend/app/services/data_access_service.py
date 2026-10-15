@@ -117,6 +117,14 @@ class DataAccessService:
         tenant_column: str = "tenant_code",
         region_column: str = "region_code",
     ) -> str:
+        """⚠️ 拼接式 SQL 片段（SQL 注入审计标记，2026-10-09）。
+
+        ``table_alias`` 会**原样拼进 SQL**，调用方必须传代码内常量，绝不能透传
+        用户输入；``tenant_code`` / ``region_code`` 来自库内授权数据（管理员维护）。
+        当前全仓库**没有调用方**（各处已改用 ORM ``build_scoped_filter`` / 绑定参数
+        的原生 SQL），保留仅为兼容历史引用。新增调用前请优先改用绑定参数写法
+        （参考 ``repositories/land_parcel_repository.py::_scope_conditions``）。
+        """
         if user.role.data_scope == "all":
             return "1=1"
         tenant_code = self.get_tenant_code(user)

@@ -352,8 +352,17 @@
       </el-table-column>
 
       <!-- 操作 -->
-      <el-table-column label="操作" width="150" fixed="right">
+      <el-table-column label="操作" width="180" fixed="right">
         <template #default="{ row }">
+          <el-button
+            link
+            type="primary"
+            size="small"
+            :disabled="row._deleted"
+            @click="openSheetDialog(row)"
+          >
+            摸底
+          </el-button>
           <el-button
             v-if="!readonly && !row._deleted && !row.isHouseholdHead"
             link
@@ -376,6 +385,97 @@
       </el-table-column>
     </el-table>
 
+    <!-- 成员摸底信息（家庭成员变化摸底表的填写入口，随「保存调查结果」一并提交）
+         2026-10-14 按试点模板原件分块（用户口径：二轮 1996~2026 分确权颁证前/后两段）：
+         ① 1996 年时点：列7 是否1996年二轮承包家庭成员（调查员判断）；
+         ② 二轮期 1996—2018（确权颁证前，列 8~17）：期内事件 + 事件时间；
+         ③ 延包期 2018—2026（确权颁证后，列 18~27）：期内事件 + 事件时间；
+         ④ 成员属性：列28 变动时间、列30 属本集体经济组织人口、列31 现户口所在地、列32 现居住地；
+         ⑤ 列33 财政供养、列34 其中公务员、列35 备注。
+         列5（参与二轮承包=列7−已补地−抽回，注1 公式）与列6（确权在册）由系统推导，不让调查员填。 -->
+    <el-dialog
+      v-model="sheetDialogVisible"
+      :title="`成员摸底信息 — ${sheetEditRow?.name || '未命名成员'}`"
+      width="720px"
+      append-to-body
+      destroy-on-close
+    >
+      <el-form v-if="sheetEditRow" label-position="left" label-width="230px" :disabled="readonly" class="sheet-form">
+        <div class="sheet-section">一、1996 年二轮承包时点（列 7；列 5/6 系统推导）</div>
+        <div class="sheet-grid">
+          <el-form-item label="列7 是否1996年二轮承包家庭成员">
+            <el-select v-model="sheetEditRow.sheet.isSecondRoundMember" size="small">
+              <el-option v-for="opt in YES_NO_UNSET_OPTIONS" :key="String(opt.value)" :label="opt.label" :value="opt.value" />
+            </el-select>
+          </el-form-item>
+        </div>
+
+        <div class="sheet-section">二、二轮承包期 1996—2018（确权颁证前，列 8~17）</div>
+        <div class="sheet-grid">
+          <el-form-item label="期内事件（增加/减少/已补地/抽回）">
+            <el-select v-model="sheetEditRow.sheet.srEventType" size="small" filterable clearable placeholder="未填">
+              <el-option v-for="opt in MEMBER_EVENT_TYPES" :key="opt.value" :label="opt.label" :value="opt.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="事件时间">
+            <el-date-picker v-model="sheetEditRow.sheet.srEventDate" type="date" size="small" format="YYYY-MM-DD" value-format="YYYY-MM-DD" placeholder="选择日期" style="width: 100%" />
+          </el-form-item>
+        </div>
+
+        <div class="sheet-section">三、确权颁证后至调查节点 2018—2026（列 18~27）</div>
+        <div class="sheet-grid">
+          <el-form-item label="期内事件（增加/减少/已补地/抽回）">
+            <el-select v-model="sheetEditRow.sheet.extEventType" size="small" filterable clearable placeholder="未填">
+              <el-option v-for="opt in MEMBER_EVENT_TYPES" :key="opt.value" :label="opt.label" :value="opt.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="事件时间">
+            <el-date-picker v-model="sheetEditRow.sheet.extEventDate" type="date" size="small" format="YYYY-MM-DD" value-format="YYYY-MM-DD" placeholder="选择日期" style="width: 100%" />
+          </el-form-item>
+        </div>
+
+        <div class="sheet-section">四、成员属性（列 28 / 30 / 31 / 32）</div>
+        <div class="sheet-grid">
+          <el-form-item label="列28 成员增减变动时间">
+            <el-date-picker v-model="sheetEditRow.sheet.restructureTime" type="date" size="small" format="YYYY-MM-DD" value-format="YYYY-MM-DD" placeholder="选择日期" style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="列30 是否为本集体经济组织成员">
+            <el-select v-model="sheetEditRow.sheet.economicRelation" size="small">
+              <el-option label="是" value="1" />
+              <el-option label="否" value="0" />
+              <el-option label="未填" value="" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="列31 现户口所在地">
+            <el-input v-model="sheetEditRow.sheet.hukouPlace" size="small" maxlength="200" placeholder="如：泗阳县××镇××村" />
+          </el-form-item>
+          <el-form-item label="列32 现居住地">
+            <el-input v-model="sheetEditRow.sheet.residencePlace" size="small" maxlength="200" placeholder="如：泗阳县××镇××村××组" />
+          </el-form-item>
+        </div>
+
+        <div class="sheet-section">五、身份标识（列 33 / 34）</div>
+        <div class="sheet-grid">
+          <el-form-item label="列33 财政供养人员（含国企编制、军官）">
+            <el-select v-model="sheetEditRow.sheet.isInstitutionStaff" size="small">
+              <el-option v-for="opt in YES_NO_UNSET_OPTIONS" :key="String(opt.value)" :label="opt.label" :value="opt.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="列34 其中：为国家公务员">
+            <el-select v-model="sheetEditRow.sheet.isCivilServant" size="small" @change="handleCivilServantChange">
+              <el-option v-for="opt in YES_NO_UNSET_OPTIONS" :key="String(opt.value)" :label="opt.label" :value="opt.value" />
+            </el-select>
+          </el-form-item>
+        </div>
+        <el-form-item label="列35 备注（公职单位、补地/抽回原因等）">
+          <el-input v-model="sheetEditRow.sheet.remark" type="textarea" :rows="2" maxlength="500" show-word-limit />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="sheetDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
     <ChangeDiffViewer ref="diffViewer" />
     <div
       v-if="diffTooltip.visible"
@@ -392,6 +492,7 @@ import { computed, ref, watch } from "vue";
 import ChangeDiffViewer from "./ChangeDiffViewer.vue";
 import { useDictionary } from "../../composables/useDictionary";
 import { evaluateIdNoIssue, ID_NO_MAX_LENGTH } from "../../utils/validators";
+import { MEMBER_EVENT_TYPES, YES_NO_UNSET_OPTIONS, createEmptyMemberSheet } from "../../config/surveySheets";
 
 const props = defineProps({
   readonly: { type: Boolean, default: false },
@@ -478,6 +579,13 @@ watch(
       // 为新加载的成员初始化 UI 标记字段
       if (m._deleted === undefined) m._deleted = false;
       if (m._isNew === undefined) m._isNew = false;
+      // 成员摸底数据（家庭成员变化摸底表）：后端缺失/老数据补全空对象。
+      // 「是否二轮家庭成员」的默认值由后端 attach_member_sheet_info 按
+      // "无摸底行 → 历史导入成员=是 / 系统新增(added)=否" 注入（2026-10-11 口径），
+      // 前端不按 null 兜底，避免覆盖用户显式选的"未填"；这里只防 sheet 对象整体缺失。
+      if (!m.sheet || typeof m.sheet !== "object") {
+        m.sheet = { ...createEmptyMemberSheet(), isSecondRoundMember: isAddedMemberRow(m) ? false : true };
+      }
       if (m.memberUid) {
         initialSnapshots.value.set(m.memberUid, {
           name: normalizeInput(m.name),
@@ -512,6 +620,12 @@ function isNewRow(row) {
   return row._isNew || (!row.memberUid && row.memberResultStatus === "added");
 }
 
+// 「是否二轮家庭成员」默认值判据：与 isNewRow 不同——已保存的新增行（有 memberUid、
+// 状态仍是 "added"）也算"系统新增"，不该回默认"是"（那是历史导入成员的口径）。
+function isAddedMemberRow(row) {
+  return row._isNew || row.memberResultStatus === "added";
+}
+
 function isModifiedRow(row) {
   if (row._deleted || isNewRow(row)) return false;
   const snap = getBaseMember(row);
@@ -543,8 +657,35 @@ function addMember() {
     policyBasis: "",
     rightsDisposition: "",
     remark: "",
+    // 新增成员：是否二轮家庭成员默认"否"（历史导入成员才默认"是"）
+    sheet: { ...createEmptyMemberSheet(), isSecondRoundMember: false },
     _isNew: true,
   });
+}
+
+// ── 成员摸底信息弹窗（家庭成员变化摸底表填写入口） ──────────────────────
+// 编辑直接绑定 row.sheet（结果对象的成员行），随「保存调查结果」一并提交，
+// 无独立保存按钮 —— 数据落库由 update_result 的 upsert_member_sheets 完成。
+const sheetDialogVisible = ref(false);
+const sheetEditRow = ref(null);
+
+function openSheetDialog(row) {
+  if (!row) return;
+  if (!row.sheet || typeof row.sheet !== "object") {
+    row.sheet = {
+      ...createEmptyMemberSheet(),
+      isSecondRoundMember: isAddedMemberRow(row) ? false : true,
+    };
+  }
+  sheetEditRow.value = row;
+  sheetDialogVisible.value = true;
+}
+
+// 列 34 ⊂ 列 33（纸质表口径）：选了"为国家公务员"，财政供养人口必然点亮
+function handleCivilServantChange(value) {
+  if (value === true && sheetEditRow.value?.sheet) {
+    sheetEditRow.value.sheet.isInstitutionStaff = true;
+  }
 }
 
 function setAsHead(row) {
@@ -841,6 +982,20 @@ defineExpose({ getValidMembers, validateIdNos });
 }
 
 .member-table { margin-top: 0; }
+
+/* 成员摸底信息弹窗 */
+.sheet-section {
+  font-size: 13px;
+  font-weight: 600;
+  color: #606266;
+  margin: 4px 0 8px;
+}
+.sheet-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 18px;
+  align-items: start;
+}
 
 .field-changed :deep(.el-input__wrapper),
 .field-changed :deep(.el-select__wrapper),

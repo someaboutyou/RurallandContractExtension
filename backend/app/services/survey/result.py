@@ -57,7 +57,16 @@ class SurveyServiceResultMixin:
             .execution_options(skip_tenant_scope=True)
         ).all()
         issuer, base_issuer = self._get_result_issuer(db, result)
-        return self._serialize_result(result, members, batch_id, base, base_members, issuer, base_issuer)
+        data = self._serialize_result(result, members, batch_id, base, base_members, issuer, base_issuer)
+        # 成员摸底数据（家庭成员变化摸底表）随结果一并返回：前端在
+        # 「承包方及其家庭成员」面板的成员行「摸底」按钮里编辑。
+        from app.services.survey.sheet import survey_sheet_service
+
+        survey_sheet_service.attach_member_sheet_info(
+            db, batch_id=batch_id, contractor_uid=contractor_uid,
+            members_payload=data.get("familyMembers") or [],
+        )
+        return data
 
 
     def update_result(self, db: Session, batch_id: int, contractor_uid: str, payload: dict, current_user: User) -> dict:
@@ -189,6 +198,7 @@ class SurveyServiceResultMixin:
                 SurveyCbfJtcyResult.contractor_uid == contractor_uid,
             )
         )
+        sheet_entries: list[tuple[str, dict]] = []
         for item in payload.get("familyMembers") or []:
             member_uid = item.get("memberUid") or str(uuid4())
             member_base = db.scalars(
@@ -239,6 +249,20 @@ class SurveyServiceResultMixin:
             )
             member.is_changed = self._member_changed(member, member_base)
             db.add(member)
+            # 成员摸底数据（家庭成员变化摸底表）：随成员行一起提交，稍后统一
+            # upsert（老客户端 / 合户分户等不带 sheet 的路径自然跳过）。
+            if isinstance(item.get("sheet"), dict):
+                sheet_entries.append((member_uid, item["sheet"]))
+
+        if sheet_entries:
+            from app.services.survey.sheet import survey_sheet_service
+
+            survey_sheet_service.upsert_member_sheets(
+                db, batch_id=data_batch_id, contractor_uid=contractor_uid,
+                cbfbm=result.cbfbm, tenant_code=batch.tenant_code,
+                region_code=result.group_region_code or result.region_code or "",
+                member_entries=sheet_entries, editor_name=current_user.real_name,
+            )
 
         changed_members = db.scalars(
             select(SurveyCbfJtcyResult).where(

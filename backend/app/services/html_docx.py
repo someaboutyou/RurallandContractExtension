@@ -426,6 +426,8 @@ def _run_properties(
         "east_asia": _font_name(merged.get("font-family"), for_east_asia=True),
         "size_half_points": int(round(size_pt * 2)),
         "bold": (weight.isdigit() and int(weight) >= 600) or weight in ("bold", "bolder"),
+        # 摸底表等表单的"横线填值"：text-decoration: underline → w:u
+        "underline": "underline" in (merged.get("text-decoration") or ""),
         "letter_spacing_twips": (
             None if not letter_spacing_pt else int(round(letter_spacing_pt * 20))
         ),
@@ -452,6 +454,10 @@ def _make_rpr(props: dict[str, object]) -> etree._Element | None:
     for name in ("sz", "szCs"):
         node = etree.SubElement(rpr, q(name))
         node.set(q("val"), size)
+    if props.get("underline"):
+        # OOXML 顺序：u 位于 sz/szCs 之后
+        node = etree.SubElement(rpr, q("u"))
+        node.set(q("val"), "single")
     return rpr
 
 
@@ -890,6 +896,19 @@ def _build_cell(
         return tc
 
     decls = styles.resolve(cell.element)
+    # 单元格级消线：相邻两张表上下拼接成一整张表时，接缝的两个格显式写
+    # border-top/border-bottom: none → tcBorders nil（覆盖整表 tblBorders 的 insideH）。
+    # 注意 tcPr 子元素顺序：tcBorders 必须在 tcMar / vAlign 之前。
+    none_sides = [
+        side
+        for side in ("top", "left", "bottom", "right")
+        if "none" in (decls.get(f"border-{side}") or "").lower()
+    ]
+    if none_sides:
+        tc_borders = etree.SubElement(tc_pr, q("tcBorders"))
+        for side in none_sides:
+            node = etree.SubElement(tc_borders, q(side))
+            node.set(q("val"), "nil")
     margins = _cell_margins(decls)
     if any(margins.values()):
         mar = etree.SubElement(tc_pr, q("tcMar"))

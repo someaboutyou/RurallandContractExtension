@@ -325,3 +325,20 @@ export function rollbackMergeSurveyHousehold(batchId, contractorUid) {
 export function mergeSurveyHousehold(batchId, contractorUid, payload) {
   return http.post(`/surveys/batches/${batchId}/results/${contractorUid}/merge-household`, payload);
 }
+
+// ── 两张摸底表（2026-10-09 礼泉试点；2026-10-10 简化）──────────────────
+// 摸底数据读写随调查结果（updateSurveyResult / fetchSurveyResult）走：
+// familyMembers[*].sheet。这里只保留两个打印入口。
+
+/** 返回打印 HTML 字符串（Response data）。 */
+export function printLandChangeSheet(batchId, contractorUid) {
+  return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/land-change-sheet/print`, {
+    timeout: 60000,
+  });
+}
+
+export function printMemberChangeSheet(batchId, contractorUid) {
+  return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/member-change-sheet/print`, {
+    timeout: 60000,
+  });
+}

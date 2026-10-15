@@ -20,8 +20,9 @@ def list_users(
     tenant_code: str | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("users.view")),
+    current_user: User = Depends(require_permission("users.view")),
 ):
+    # ⛔ 审计 M3：非平台管理员强制只返回本租户用户（见 user_service.list_users）
     items, total = user_service.list_users(
         db,
         page=page,
@@ -30,6 +31,7 @@ def list_users(
         role_id=role_id,
         tenant_code=tenant_code,
         status_filter=status_filter,
+        current_user=current_user,
     )
     return {"data": {"items": items, "total": total, "page": page, "pageSize": page_size}}
 
@@ -38,9 +40,9 @@ def list_users(
 def create_user(
     payload: UserCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("users.manage")),
+    current_user: User = Depends(require_permission("users.manage")),
 ):
-    return {"data": user_service.create_user(db, payload.model_dump())}
+    return {"data": user_service.create_user(db, payload.model_dump(), current_user)}
 
 
 @router.put("/{user_id}", response_model=ApiResponse[UserRead])
@@ -48,9 +50,9 @@ def update_user(
     user_id: int,
     payload: UserUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("users.manage")),
+    current_user: User = Depends(require_permission("users.manage")),
 ):
-    return {"data": user_service.update_user(db, user_id, payload.model_dump())}
+    return {"data": user_service.update_user(db, user_id, payload.model_dump(), current_user)}
 
 
 @router.post("/{user_id}/reset-password", response_model=ApiResponse[dict[str, bool]])
@@ -58,9 +60,10 @@ def reset_password(
     user_id: int,
     payload: UserPasswordReset,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("users.manage")),
+    current_user: User = Depends(require_permission("users.manage")),
 ):
-    user_service.reset_password(db, user_id, payload.password)
+    # ⛔ 审计 M3：重置密码 = 潜在提权链入口，禁止非平台管理员动平台管理员账号
+    user_service.reset_password(db, user_id, payload.password, current_user)
     return {"data": {"success": True}}
 
 
@@ -70,5 +73,5 @@ def delete_user(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("users.manage")),
 ):
-    user_service.delete_user(db, user_id, operator_id=current_user.id)
+    user_service.delete_user(db, user_id, operator_id=current_user.id, operator=current_user)
     return {"data": {"success": True}}

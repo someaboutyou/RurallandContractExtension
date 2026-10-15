@@ -138,6 +138,29 @@ $envLines.Add("TARGET_SRID=$TargetSrid") | Out-Null
 $envLines | Set-Content -Path $backendEnv -Encoding UTF8
 Write-Host "Target SRID: $TargetSrid (CGCS2000 / 3-degree Gauss-Kruger zone $(Get-SridZone $TargetSrid)) -> $backendEnv"
 
+# ── JWT 密钥（安全审计 H1）：缺失或仍为公开默认值时生成随机密钥 ──
+# 后端启动时检测到公开默认密钥会拒绝启动（app/core/config.py fail-fast）。
+$jwtSentinel = "replace-this-in-production"
+$jwtLine = $envLines | Where-Object { $_ -match '^\s*JWT_SECRET_KEY\s*=' } | Select-Object -First 1
+$needNewJwt = $true
+if ($jwtLine) {
+    $existingJwt = ($jwtLine -split '=', 2)[1].Trim()
+    if ($existingJwt -and $existingJwt -ne $jwtSentinel) {
+        $needNewJwt = $false
+        Write-Host "JWT secret already configured in $backendEnv"
+    }
+}
+if ($needNewJwt) {
+    $jwtBytes = New-Object byte[] 48
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($jwtBytes) } finally { $rng.Dispose() }
+    $jwtSecret = [Convert]::ToBase64String($jwtBytes)
+    $envLines = [System.Collections.Generic.List[string]]($envLines | Where-Object { $_ -notmatch '^\s*JWT_SECRET_KEY\s*=' })
+    $envLines.Add("JWT_SECRET_KEY=$jwtSecret") | Out-Null
+    $envLines | Set-Content -Path $backendEnv -Encoding UTF8
+    Write-Host "Generated random JWT_SECRET_KEY -> $backendEnv"
+}
+
 $marker = [ordered]@{
     platform = "windows"
     installedAt = (Get-Date).ToString("o")

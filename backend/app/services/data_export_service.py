@@ -3,6 +3,7 @@ import io
 import logging
 import os
 import random
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -374,13 +375,55 @@ class DataExportService:
             pageSize=page_size,
         )
 
+    def _tenant_check(self, db: Session, export_id: int, current_user) -> None:
+        """数据权限校验：与 delete_export 同口径，越权时抛 PermissionError。"""
+        tf = data_access_service.build_tenant_filter(DataExport, current_user)
+        if tf is not None and not db.scalar(select(DataExport).where(DataExport.id == export_id, tf)):
+            raise PermissionError("无权操作该导出记录")
+
+    def clear_export(self, db: Session, export_id: int, current_user) -> DataExport:
+        """清除导出：删除产物文件与 data_exports/<id>/ 目录，记录保留并置为历史。
+
+        与 delete_export 的区别：不删库行——导出编号 / 区域 / 记录数 / 操作人
+        留作台账可追溯，只是服务器上不再保留产物（is_historical=True 后不可再下载）。
+        """
+        export = db.get(DataExport, export_id)
+        if export is None:
+            raise KeyError("导出记录不存在")
+        self._tenant_check(db, export_id, current_user)
+
+        cleared_paths: list[str] = []
+        # 1) 以 id 命名的产物目录（所有导出类型的产物都落在 data_exports/<id>/ 下）
+        target_dir = _STORAGE_ROOT / str(export_id)
+        # ⛔ 防御：只允许删纯数字目录名，且必须位于 data_exports 根之下
+        if target_dir.parent == _STORAGE_ROOT and target_dir.exists():
+            shutil.rmtree(target_dir, ignore_errors=True)
+            cleared_paths.append(str(target_dir))
+        # 2) file_path 指向的单个文件（兜底：目录已删或路径在目录外）
+        if export.file_path:
+            abs_path = (_STORAGE_ROOT.parent / export.file_path).resolve()
+            if abs_path.exists() and _STORAGE_ROOT.parent.resolve() in abs_path.parents:
+                try:
+                    abs_path.unlink()
+                    cleared_paths.append(str(abs_path))
+                except OSError:
+                    logger.warning("清除导出产物失败 id=%s path=%s", export_id, abs_path)
+
+        export.is_historical = True
+        export.file_path = None  # 产物已删，置空防止误下载；file_name 保留作台账
+        db.commit()
+        db.refresh(export)
+        logger.info(
+            "导出记录已清除 id=%s export_no=%s 删除路径=%s",
+            export_id, export.export_no, cleared_paths or "无（产物本就不存在）",
+        )
+        return export
+
     def delete_export(self, db: Session, export_id: int, current_user) -> None:
         export = db.get(DataExport, export_id)
         if export is None:
             raise KeyError("导出记录不存在")
-        tf = data_access_service.build_tenant_filter(DataExport, current_user)
-        if tf is not None and not db.scalar(select(DataExport).where(DataExport.id == export_id, tf)):
-            raise PermissionError("无权删除该导出记录")
+        self._tenant_check(db, export_id, current_user)
         # 删除产物文件
         if export.file_path:
             abs_path = _STORAGE_ROOT.parent / export.file_path

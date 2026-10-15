@@ -8,6 +8,8 @@
       <el-button v-if="canRollbackMergeHousehold" type="warning" plain size="small" :loading="rollbackingMergeHousehold" @click="handleRollbackMergeHousehold">撤回合户</el-button>
       <span class="toolbar-print">
         <el-button type="primary" plain size="small" :loading="printingCadastral" :disabled="isCreatingContractorResult" @click="handlePrintCadastral">打印地籍调查表</el-button>
+        <el-button type="primary" plain size="small" :loading="printingLandSheet" :disabled="isCreatingContractorResult" @click="handlePrintLandSheet">生成承包地变化摸底表</el-button>
+        <el-button type="primary" plain size="small" :loading="printingMemberSheet" :disabled="isCreatingContractorResult" @click="handlePrintMemberSheet">生成成员变化摸底表</el-button>
       </span>
       <span v-if="dataReadOnly" class="toolbar-lock-hint">（当前为只读模式，只能查看详细信息）</span>
     </div>
@@ -135,6 +137,7 @@ import {
   revokeSurveyAuthorization, updateSurveyResult, uploadSurveyAttachment,
   persistSurveyPendingOperation,
   uploadSurveyAuthorizationFile, rollbackSplitSurveyHousehold, rollbackMergeSurveyHousehold,
+  printLandChangeSheet, printMemberChangeSheet,
 } from "../../../api/survey";
 import { collectContractorCodes, fetchAllBatchTasks } from "../../../utils/surveyCandidates";
 import { FALLBACK_SURVEY_ATTACHMENT_CATEGORIES, surveyAttachmentCategoryLabel } from "../../../config/surveyAttachmentCategories";
@@ -543,6 +546,49 @@ async function handlePrintCadastral() {
   } finally {
     printingCadastral.value = false;
   }
+}
+
+// ── 两张摸底表：生成（打印窗口） ──────────────────────────────────────────
+const printingLandSheet = ref(false);
+const printingMemberSheet = ref(false);
+
+async function printSurveySheet(loader, loadingRef, label) {
+  const batchId = props.activeBatch?.id;
+  const contractorUid = resultForm.contractorUid;
+  if (!batchId || !contractorUid) {
+    ElMessage.warning(`缺少批次或承包方信息，无法生成${label}`);
+    return;
+  }
+  loadingRef.value = true;
+  try {
+    const response = await loader(batchId, contractorUid);
+    // print 接口直接返回 HTML 文本
+    const html = typeof response.data === "string" ? response.data : response.data?.data?.renderedHtml || "";
+    if (!html) {
+      ElMessage.warning("无可用数据");
+      return;
+    }
+    const w = window.open("", "_blank", "width=1200,height=900");
+    if (!w) {
+      ElMessage.warning("浏览器拦截了打印窗口，请允许本站弹出窗口后重试");
+      return;
+    }
+    w.document.write(html);
+    w.document.close();
+    setTimeout(() => w.print(), 800);
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.detail || `生成${label}失败`);
+  } finally {
+    loadingRef.value = false;
+  }
+}
+
+function handlePrintLandSheet() {
+  printSurveySheet(printLandChangeSheet, printingLandSheet, "承包地变化摸底表");
+}
+
+function handlePrintMemberSheet() {
+  printSurveySheet(printMemberChangeSheet, printingMemberSheet, "成员变化摸底表");
 }
 
 function handlePendingOperation(operation) {

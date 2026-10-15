@@ -42,6 +42,7 @@ def upgrade_schema(engine: Engine) -> None:
     _upgrade_survey_boundary_uniqueness(engine)
     _upgrade_cbht_contract_columns(engine)
     _upgrade_data_export_progress(engine)
+    _upgrade_member_sheet_places(engine)
     _seed_survey_org_setting(engine)
 
 
@@ -133,7 +134,7 @@ def _upgrade_system_config(engine: Engine) -> None:
 
 
 def _upgrade_data_export_progress(engine: Engine) -> None:
-    """data_exports 补进度三列（progress / progress_message / worker_pid）。"""
+    """data_exports 补进度三列（progress / progress_message / worker_pid）与清除标记。"""
     inspector = inspect(engine)
     if not inspector.has_table("data_exports"):
         return
@@ -142,6 +143,18 @@ def _upgrade_data_export_progress(engine: Engine) -> None:
         _add_column_if_missing(connection, columns, "data_exports", "progress", "INTEGER NOT NULL DEFAULT 0")
         _add_column_if_missing(connection, columns, "data_exports", "progress_message", "VARCHAR(200)")
         _add_column_if_missing(connection, columns, "data_exports", "worker_pid", "INTEGER")
+        _add_column_if_missing(connection, columns, "data_exports", "is_historical", "BOOLEAN NOT NULL DEFAULT FALSE")
+
+
+def _upgrade_member_sheet_places(engine: Engine) -> None:
+    """家庭成员变化摸底表补「现户口所在地 / 现居住地」两列（2026-10-14 按试点模板原件，列 31 / 32）。"""
+    inspector = inspect(engine)
+    if not inspector.has_table("survey_cbf_member_change_sheets"):
+        return
+    columns = {c["name"] for c in inspector.get_columns("survey_cbf_member_change_sheets")}
+    with engine.begin() as connection:
+        _add_column_if_missing(connection, columns, "survey_cbf_member_change_sheets", "hukou_place", "VARCHAR(200)")
+        _add_column_if_missing(connection, columns, "survey_cbf_member_change_sheets", "residence_place", "VARCHAR(200)")
 
 
 def _normalize_region_scope_data(engine: Engine) -> None:

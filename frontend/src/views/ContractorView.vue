@@ -125,8 +125,11 @@ import {
   fetchCadastralExportProgress,
   fetchCadastralSurveyDocx,
   fetchContractors,
+  fetchSurveySheetExportArchive,
+  fetchSurveySheetExportProgress,
   printCadastralSurveys,
   startCadastralExport,
+  startSurveySheetExport,
 } from "../api/contractor";
 import { fetchRegionTree } from "../api/region";
 import { useDictionary } from "../composables/useDictionary";
@@ -231,6 +234,14 @@ function handleRegionAction({ command, data }) {
   }
   if (command === "exportSurveyForms") {
     exportSurveyFormsForRegion(data);
+    return;
+  }
+  if (command === "exportLandChangeSheets") {
+    exportSurveySheetsForRegion(data, "land-change", "承包地变化摸底表");
+    return;
+  }
+  if (command === "exportMemberChangeSheets") {
+    exportSurveySheetsForRegion(data, "member-change", "成员变化摸底表");
     return;
   }
   if (command === "printRoster") {
@@ -366,8 +377,81 @@ async function exportSurveyFormsForRegion(node) {
   }
 }
 
-async function downloadCadastralSurveyDocx(row) {
-  const loading = ElLoading.service({ lock: true, text: `正在生成「${row.name}」的地籍调查表…` });
+// ── 批量生成摸底表 Word（复用地籍调查表的后台任务 + 进度 + zip 下载） ──────
+
+async function exportSurveySheetsForRegion(node, sheetType, label) {
+  const regionCode = node?.value || "";
+  if (!regionCode) {
+    ElMessage.warning("请先在区域树中选择一个区域");
+    return;
+  }
+  const regionLabel = node?.label || node?.name || regionCode;
+
+  let taskId = "";
+  const preparing = ElLoading.service({ lock: true, text: `正在统计「${regionLabel}」的承包方…` });
+  try {
+    const { data } = await startSurveySheetExport({
+      sheetType,
+      regionCode,
+      regionLabel,
+      name: filters.name.trim() || undefined,
+      memberName: filters.memberName.trim() || undefined,
+      idNo: filters.idNo.trim() || undefined,
+      address: filters.address.trim() || undefined,
+    });
+    taskId = data?.data?.taskId || "";
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.detail || "创建导出任务失败");
+    return;
+  } finally {
+    preparing.close();
+  }
+  if (!taskId) {
+    ElMessage.warning("未能创建导出任务");
+    return;
+  }
+
+  const loading = ElLoading.service({ lock: true, text: `正在生成「${regionLabel}」的${label}…` });
+  try {
+    const progress = await pollSheetExport(taskId, (item) => {
+      const percent = item.percent ? `${item.percent}%` : "";
+      loading.setText(`正在生成${label} ${percent}　${item.message || ""}`.trim());
+    });
+    if (progress.status !== "completed") {
+      ElMessage.error(progress.error || "导出失败");
+      return;
+    }
+    const response = await fetchSurveySheetExportArchive(taskId);
+    const filename = resolveAttachmentName(
+      response.headers,
+      progress.filename || `${regionLabel}${label}.zip`
+    );
+    saveBlob(response.data, filename);
+    ElMessage.success(`已生成 ${progress.done || 0} 户${label}，请查看下载的文件`);
+  } catch (error) {
+    ElMessage.error((await readBlobError(error)) || `导出${label}失败`);
+  } finally {
+    loading.close();
+  }
+}
+
+async function pollSheetExport(taskId, onTick) {
+  const deadline = Date.now() + EXPORT_TIMEOUT;
+  for (;;) {
+    const { data } = await fetchSurveySheetExportProgress(taskId);
+    const progress = data?.data || {};
+    onTick?.(progress);
+    if (progress.status === "completed" || progress.status === "failed") {
+      return progress;
+    }
+    if (Date.now() > deadline) {
+      return { ...progress, status: "failed", error: "导出超时，请缩小区域后重试" };
+    }
+    await delay(EXPORT_POLL_INTERVAL);
+  }
+}
+
+async function downloadCadastralSurveyDocx(row) {  const loading = ElLoading.service({ lock: true, text: `正在生成「${row.name}」的地籍调查表…` });
   try {
     const response = await fetchCadastralSurveyDocx(row.code);
     const filename = resolveAttachmentName(

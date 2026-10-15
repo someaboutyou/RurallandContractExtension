@@ -7,9 +7,10 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db, require_permission
 from app.models.data_export import DataExport
 from app.models.user import User
-from app.schemas.data_export import DataExportCreate, DataExportRead
+from app.schemas.data_export import DataExportCreate, DataExportRead, serialize_export
 from app.schemas.pagination import PageResponse
 from app.schemas.response import ApiResponse
+from app.services.data_access_service import data_access_service
 from app.services.data_export_service import data_export_service
 
 router = APIRouter()
@@ -70,6 +71,18 @@ def download_data_export(
     export = db.get(DataExport, export_id)
     if export is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导出记录不存在")
+    # ⛔ 与 clear/delete 同口径的显式归属校验（审计 M1）：不再依赖 ORM 全局
+    # 过滤器隐式兜底——导出 ZIP 含承包方清册 + 家庭成员（大量个人信息），
+    # 必须显式拦：租户不符 403，区域超出授权范围 403。
+    try:
+        data_export_service._tenant_check(db, export_id, current_user)
+        data_access_service.ensure_region_in_scope(
+            current_user, export.region_code, detail="无权下载该区域的数据导出"
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    if getattr(export, "is_historical", False):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该导出已清除，产物文件不再保留")
     if not export.file_path:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="该导出无可用文件")
     abs_path = _STORAGE_ROOT / export.file_path
@@ -81,6 +94,22 @@ def download_data_export(
         media_type=ZIP_MEDIA_TYPE,
         headers={"Content-Disposition": _content_disposition(export.file_name or f"export_{export_id}.zip")},
     )
+
+
+@router.post("/{export_id}/clear", response_model=ApiResponse[DataExportRead])
+def clear_data_export(
+    export_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission(_EXPORT_PERM)),
+):
+    """清除导出：删除服务器上的产物文件与以 id 命名的目录，记录置为历史（保留台账）。"""
+    try:
+        record = data_export_service.clear_export(db, export_id, current_user)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导出记录不存在") from None
+    except PermissionError:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权清除该导出记录") from None
+    return {"data": DataExportRead(**serialize_export(record))}
 
 
 @router.delete("/{export_id}", response_model=ApiResponse[dict])

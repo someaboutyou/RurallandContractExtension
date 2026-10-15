@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>承包农户家庭成员变化情况摸底表</title>
+<!--
+  《二轮土地承包到期后再延长三十年承包方家庭成员变化情况摸底表》
+  （2026-10-12 按试点工作模板原件第三次对齐：
+    ① 顶部加大标题「第二轮土地到期后再延长30年试点工作模板」；
+    ② 发包方名称改分段式「旗县＿苏木（镇）＿嘎查（村）＿自然村」（fillline 填值，
+       数据来自 sheet.py::_load_issuer_parts 的区域链 6/9/12/14 位码）；
+    此前：横线填值两侧垫全角空格；列头/"代号"竖排逐字堆叠；调查记事+调查员、
+    审核意见+审核人各合并为同一单元格；35 数据列与原件逐列一致。
+  列结构（代号）：
+    序号(代号)｜1 家庭成员姓名｜2 与户主关系｜3 身份证号码｜4 联系电话｜
+    5 参与二轮承包人口｜6 土地确权登记家庭成员｜7 其中：1996年二轮承包家庭成员｜
+    8~17  二轮承包 1996年-2018年：增加(8新生/9婚入/10迁入/11其他)+12已补地人口+
+          减少(13去世/14婚出/15迁出/16其他)+17抽回或放弃承包地人口｜
+    18~27 确权颁证后到调查节点新增人员 2018年-2026年：同上 10 列｜
+    28 成员增减变动时间｜29 现有家庭成员人数｜30 为本集体经济组织成员人口｜
+    31 现户口所在地｜32 现居住地（2026-10-14 起由摸底弹窗录入落库，打印带出）｜
+    33 为财政供养人员、国企正式编制人员、部队军官的人口｜34 其中：为国家公务员的｜35 备注
+
+  ⚠️ 35 列宽表，A4 横向（267mm）装不下 ⇒ 用 **A3 横向**（420×297，正文区 390mm）。
+     html_docx.build_docx 按 .page 的 CSS width/height 生成分节页面尺寸，A3 无需特殊处理。
+  数据拼装：app/services/survey/sheet.py::build_member_change_context
+  （成员行缺则补；事件格命中印 YYYY.MM 短日期、无日期印 √）。
+-->
+<style>
+  @page { size: 420mm 297mm; margin: 0; }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    color: #000;
+    background: #f2f3f5;
+    font-family: "SimSun", "宋体", serif;
+    font-size: 10.5pt;
+  }
+
+  .print-btn {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 20;
+    padding: 8px 20px;
+    border: 0;
+    border-radius: 4px;
+    color: #fff;
+    background: #409eff;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  .page {
+    position: relative;
+    width: 420mm;
+    height: 297mm;
+    margin: 0 auto 14px;
+    padding: 10mm 15mm 8mm;
+    background: #fff;
+    overflow: hidden;
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+
+  .doc-title {
+    margin: 0 0 2mm;
+    text-align: center;
+    font-family: "SimHei", "黑体", "SimSun", serif;
+    font-size: 18pt;
+    font-weight: 700;
+    line-height: 1.3;
+  }
+
+  .form-title {
+    margin: 0 0 3mm;
+    text-align: center;
+    font-family: "SimHei", "黑体", "SimSun", serif;
+    font-size: 15pt;
+    font-weight: 700;
+    line-height: 1.3;
+  }
+
+  .head-line {
+    width: 390mm;
+    margin: 0 0 1.5mm;
+    font-size: 10pt;
+    line-height: 2;
+  }
+
+  /* 横线填值：值落在下划线上，两侧垫全角空格使横线超出字长（模拟手写填在横线上，
+     Word 转写为 w:u single —— 行中部的全角空格会被 Word 一并划线） */
+  .fill { text-decoration: underline; text-underline-offset: 2px; }
+
+  .tbl {
+    width: 390mm;
+    margin: 0 auto;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+
+  .tbl th, .tbl td {
+    border: 1px solid #000;
+    padding: 0.6mm 0.4mm;
+    text-align: center;
+    vertical-align: middle;
+    font-size: 8pt;
+    line-height: 1.15;
+    word-break: break-all;
+  }
+
+  .tbl th {
+    font-family: "SimHei", "黑体", "SimSun", serif;
+    font-weight: 700;
+  }
+
+  .tbl .inner-title th { font-size: 11pt; padding: 1.2mm 0; }
+
+  /* 竖排长表头的分段列（每段一列字，自左向右读） */
+  .vcol { display: inline-block; margin: 0 0.4mm; }
+
+  /* 表内记事 / 签字 / 审核行（调查记事+调查员、审核意见+审核人 已合并为同一单元格） */
+  .tbl td.note-cell { text-align: left; padding: 1.5mm 2.5mm; font-size: 9.5pt; line-height: 1.7; }
+
+  /* ☑/□ 两个符号必须同字体（MS Gothic / Segoe UI Symbol），标签文字走宋体 */
+  .box, .cb { font-family: "MS Gothic", "Segoe UI Symbol", "SimSun", "宋体", serif; }
+
+  .tbl td.date-cell { font-size: 6.8pt; }
+  .tbl td.left { text-align: left; }
+
+  .foot-note {
+    width: 390mm;
+    margin: 1mm auto 0;
+    font-size: 8pt;
+    line-height: 1.5;
+  }
+
+  @media print {
+    .page { box-shadow: none; }
+    .print-btn { display: none !important; }
+    .tbl tr { break-inside: avoid; page-break-inside: avoid; }
+  }
+
+  @media screen {
+    .page { box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12); }
+  }
+</style>
+</head>
+<body>
+
+<button class="print-btn" onclick="window.print()">打印</button>
+
+{% macro box(checked, off='□') -%}
+{%- if checked -%}<span class="box">☑</span>{%- elif off -%}<span class="box">{{ off }}</span>{%- endif -%}
+{%- endmacro %}
+
+{# 事件格：命中列印事件时间（短格式 YYYY.MM，无日期则 √），未命中留空 #}
+{% macro event_cell(event_type, target_type, event_date) -%}
+{%- if event_type == target_type -%}<td class="date-cell">{{ (event_date | replace('-', '.') | truncate(7, true, '')) if event_date else '√' }}</td>{%- else -%}<td></td>{%- endif -%}
+{%- endmacro %}
+
+{# 竖排文字：逐字堆叠；超过 8 字按 8 字/列分段并排（.vcol），与原件的多列竖排一致 #}
+{% macro v(text, per=8) -%}
+{%- set chars = text | list -%}
+{%- if chars | length <= per -%}
+{{ chars | join('<br>') | safe }}
+{%- else -%}
+{%- for start in range(0, chars | length, per) -%}<span class="vcol">{{ chars[start:start + per] | join('<br>') | safe }}</span>{%- endfor -%}
+{%- endif -%}
+{%- endmacro %}
+
+{# 横线填值：两侧各垫 2 个全角空格，横线超出字长；值为空时保底 8 格长的空线 #}
+{% macro fillline(value, min_blank=8) -%}
+<span class="fill">　　{{ value }}{% if not value %}{{ '　' * min_blank }}{% endif %}　　</span>
+{%- endmacro %}
+
+{# 列 5 参与二轮承包：1996 成员且未曾已补地/抽回（注 1 公式的行级口径） #}
+{% macro mark_round_participate(row) -%}
+{%- set has_left = row.srEventType in ('compensated', 'withdraw') or row.extEventType in ('compensated', 'withdraw') -%}
+{{ box(row.is1996Member and not has_left) }}
+{%- endmacro %}
+
+{% set member_min_rows = member_min_rows or 8 %}
+
+<div class="page">
+  <div class="doc-title">第二轮土地到期后再延长30年试点工作模板</div>
+  <div class="form-title">二轮土地承包到期后再延长三十年承包方家庭成员变化情况摸底表</div>
+  <div class="head-line">
+    发包方名称：{{ fillline(contractor.issuerCounty) }}苏木（镇）{{ fillline(contractor.issuerTown) }}嘎查（村）{{ fillline(contractor.issuerVillage) }}自然村{{ fillline(contractor.issuerHamlet) }}　　发包方编码：{{ fillline(contractor.issuerCode) }}<br>
+    承包方（代表）姓名：{{ fillline(contractor.name) }}　　　承包方编码：{{ fillline(contractor.code) }}　　　邮政编码：{{ fillline(contractor.postcode) }}
+  </div>
+
+  <table class="tbl">
+    <colgroup>
+      <col style="width:8mm"><col style="width:14mm"><col style="width:14mm"><col style="width:24mm">
+      <col style="width:14mm"><col style="width:10mm"><col style="width:10mm"><col style="width:10mm">
+      <col style="width:9mm"><col style="width:9mm"><col style="width:9mm"><col style="width:9mm">
+      <col style="width:9mm"><col style="width:9mm"><col style="width:9mm"><col style="width:9mm"><col style="width:9mm">
+      <col style="width:9mm"><col style="width:9mm"><col style="width:9mm"><col style="width:9mm">
+      <col style="width:9mm"><col style="width:9mm"><col style="width:9mm"><col style="width:9mm"><col style="width:9mm">
+      <col style="width:11mm"><col style="width:10mm"><col style="width:13mm">
+      <col style="width:16mm"><col style="width:16mm">
+      <col style="width:16mm"><col style="width:11mm"><col style="width:13mm">
+    </colgroup>
+    <tr class="inner-title"><th colspan="36">承 包 农 户 家 庭 成 员 变 化 情 况</th></tr>
+    <tr class="group">
+      <th rowspan="3">{{ v('序号') }}</th>
+      <th rowspan="3">{{ v('家庭成员姓名') }}</th>
+      <th rowspan="3">{{ v('与户主关系') }}</th>
+      <th rowspan="3">{{ v('身份证号码') }}</th>
+      <th rowspan="3">{{ v('联系电话') }}</th>
+      <th rowspan="3">{{ v('参与二轮承包人口') }}</th>
+      <th rowspan="3">{{ v('土地确权登记家庭成员') }}</th>
+      <th rowspan="3">其中：1996<br>{{ v('年二轮承包家庭成员') }}</th>
+      <th colspan="10">二轮承包 1996 年-2018 年</th>
+      <th colspan="10">确权颁证后到调查节点新增人员<br>2018 年-2026 年</th>
+      <th rowspan="3">{{ v('成员增减变动时间') }}</th>
+      <th rowspan="3">{{ v('现有家庭成员人数') }}</th>
+      <th rowspan="3">{{ v('为本集体经济组织成员人口') }}</th>
+      <th rowspan="3">{{ v('现户口所在地') }}</th>
+      <th rowspan="3">{{ v('现居住地') }}</th>
+      <th rowspan="3">{{ v('为财政供养人员、国企正式编制人员、部队军官的人口') }}</th>
+      <th rowspan="3">其中：<br>{{ v('为国家公务员的') }}</th>
+      <th rowspan="3">{{ v('备注') }}</th>
+    </tr>
+    <tr class="group">
+      <th colspan="4">增加</th>
+      <th rowspan="2">{{ v('已补地人口') }}</th>
+      <th colspan="4">减少</th>
+      <th rowspan="2">{{ v('抽回或放弃承包地人口') }}</th>
+      <th colspan="4">增加</th>
+      <th rowspan="2">{{ v('已补地人口') }}</th>
+      <th colspan="4">减少</th>
+      <th rowspan="2">{{ v('抽回或放弃承包地人口') }}</th>
+    </tr>
+    <tr class="group">
+      <th>{{ v('新生') }}</th><th>{{ v('婚入') }}</th><th>{{ v('迁入') }}</th><th>{{ v('其他') }}</th>
+      <th>{{ v('去世') }}</th><th>{{ v('婚出') }}</th><th>{{ v('迁出') }}</th><th>{{ v('其他') }}</th>
+      <th>{{ v('新生') }}</th><th>{{ v('婚入') }}</th><th>{{ v('迁入') }}</th><th>{{ v('其他') }}</th>
+      <th>{{ v('去世') }}</th><th>{{ v('婚出') }}</th><th>{{ v('迁出') }}</th><th>{{ v('其他') }}</th>
+    </tr>
+    <tr class="group" style="font-size:8pt">
+      <th>代<br>号</th>
+      {% for n in range(1, 36) %}<th>{{ n }}</th>{% endfor %}
+    </tr>
+    {% for row in rows %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>{{ row.memberName }}</td>
+      <td>{{ row.relationText }}</td>
+      <td>{{ row.idNo }}</td>
+      <td>{{ row.phone }}</td>
+      <td>{{ mark_round_participate(row) }}</td>
+      <td>{{ box(row.inRegister) }}</td>
+      <td>{{ box(row.is1996Member) }}</td>
+      {{ event_cell(row.srEventType, 'add_birth', row.srEventDate) }}
+      {{ event_cell(row.srEventType, 'add_married_in', row.srEventDate) }}
+      {{ event_cell(row.srEventType, 'add_move_in', row.srEventDate) }}
+      {{ event_cell(row.srEventType, 'add_other', row.srEventDate) }}
+      {{ event_cell(row.srEventType, 'compensated', row.srEventDate) }}
+      {{ event_cell(row.srEventType, 'sub_death', row.srEventDate) }}
+      {{ event_cell(row.srEventType, 'sub_married_out', row.srEventDate) }}
+      {{ event_cell(row.srEventType, 'sub_move_out', row.srEventDate) }}
+      {{ event_cell(row.srEventType, 'sub_other', row.srEventDate) }}
+      {{ event_cell(row.srEventType, 'withdraw', row.srEventDate) }}
+      {{ event_cell(row.extEventType, 'add_birth', row.extEventDate) }}
+      {{ event_cell(row.extEventType, 'add_married_in', row.extEventDate) }}
+      {{ event_cell(row.extEventType, 'add_move_in', row.extEventDate) }}
+      {{ event_cell(row.extEventType, 'add_other', row.extEventDate) }}
+      {{ event_cell(row.extEventType, 'compensated', row.extEventDate) }}
+      {{ event_cell(row.extEventType, 'sub_death', row.extEventDate) }}
+      {{ event_cell(row.extEventType, 'sub_married_out', row.extEventDate) }}
+      {{ event_cell(row.extEventType, 'sub_move_out', row.extEventDate) }}
+      {{ event_cell(row.extEventType, 'sub_other', row.extEventDate) }}
+      {{ event_cell(row.extEventType, 'withdraw', row.extEventDate) }}
+      <td class="date-cell">{{ row.changeTime }}</td>
+      <td>{{ box(row.inHousehold) }}</td>
+      <td>{{ box(row.economicRelation) }}</td>
+      <td class="left">{{ row.hukouPlace }}</td>
+      <td class="left">{{ row.residencePlace }}</td>
+      <td>{{ box(row.isFiscalSupported) }}</td>
+      <td>{{ box(row.isCivilServant) }}</td>
+      <td class="left">{{ row.remark }}</td>
+    </tr>
+    {% endfor %}
+    {% for _ in range(member_min_rows - (rows | length) if (rows | length) < member_min_rows else 0) %}
+    <tr>
+      <td>&nbsp;</td>
+      {% for _ in range(35) %}<td></td>{% endfor %}
+    </tr>
+    {% endfor %}
+    {% set ns = namespace(
+        round_participate=0, register=0, m1996=0, comp_sr=0, wd_sr=0,
+        comp_ext=0, wd_ext=0, household=0, collective=0, fiscal=0, civil=0) %}
+    {% for row in rows %}
+      {% set has_left = row.srEventType in ('compensated', 'withdraw') or row.extEventType in ('compensated', 'withdraw') %}
+      {% if row.is1996Member and not has_left %}{% set ns.round_participate = ns.round_participate + 1 %}{% endif %}
+      {% if row.inRegister %}{% set ns.register = ns.register + 1 %}{% endif %}
+      {% if row.is1996Member %}{% set ns.m1996 = ns.m1996 + 1 %}{% endif %}
+      {% if row.srEventType == 'compensated' %}{% set ns.comp_sr = ns.comp_sr + 1 %}{% endif %}
+      {% if row.srEventType == 'withdraw' %}{% set ns.wd_sr = ns.wd_sr + 1 %}{% endif %}
+      {% if row.extEventType == 'compensated' %}{% set ns.comp_ext = ns.comp_ext + 1 %}{% endif %}
+      {% if row.extEventType == 'withdraw' %}{% set ns.wd_ext = ns.wd_ext + 1 %}{% endif %}
+      {% if row.inHousehold %}{% set ns.household = ns.household + 1 %}{% endif %}
+      {% if row.economicRelation %}{% set ns.collective = ns.collective + 1 %}{% endif %}
+      {% if row.isFiscalSupported %}{% set ns.fiscal = ns.fiscal + 1 %}{% endif %}
+      {% if row.isCivilServant %}{% set ns.civil = ns.civil + 1 %}{% endif %}
+    {% endfor %}
+    <tr style="font-weight:700">
+      <td colspan="4">合计</td>
+      <td></td>
+      <td>{{ ns.round_participate }}</td>
+      <td>{{ ns.register }}</td>
+      <td>{{ ns.m1996 }}</td>
+      <td colspan="4"></td>
+      <td>{{ ns.comp_sr }}</td>
+      <td colspan="4"></td>
+      <td>{{ ns.wd_sr }}</td>
+      <td colspan="4"></td>
+      <td>{{ ns.comp_ext }}</td>
+      <td colspan="4"></td>
+      <td>{{ ns.wd_ext }}</td>
+      <td></td>
+      <td>{{ ns.household }}</td>
+      <td>{{ ns.collective }}</td>
+      <td colspan="2"></td>
+      <td>{{ ns.fiscal }}</td>
+      <td>{{ ns.civil }}</td>
+      <td></td>
+    </tr>
+    {# 调查记事 + 调查员：原件为一个单元格（记事文字在上、调查员签字行在下） #}
+    <tr>
+      <td colspan="36" class="note-cell">调查记事：该户 1996 年落实二轮延包时户代表为 {{ noteStats.rep1996 }}，2018 年土地确权时户代表为
+        {{ noteStats.rep2018 }}。1996 年落实二轮延包时户内人口 {{ noteStats.pop1996 }} 人，其中
+        {{ noteStats.joinExt }} 人参与二轮延包，1996 年至调查节点该户内家庭成员增加 {{ noteStats.addCount }}
+        人，减少 {{ noteStats.subCount }} 人，现有家庭成员 {{ noteStats.currentCount }} 人，其中：
+        {{ noteStats.registerCount }} 人在确权登记颁证时登记为家庭成员，{{ noteStats.collectiveCount }}
+        人为本集体经济组织成员人口；属为财政供养人员人口 {{ noteStats.fiscalCount }} 人，其中为国家公务员的
+        {{ noteStats.civilCount }} 人。在现有新增人口中，已补地 {{ noteStats.compensatedCount }} 人，属抽回或放弃承包地
+        {{ noteStats.withdrawCount }} 人。<br>
+        <br>
+        调查员：　　　　　　　　　　承包方（代表）：{{ fillline(contractor.name) }}　　　　　　　　　　调查日期：　　　　年　　月　　日</td>
+    </tr>
+    {# 审核意见 + 审核人：原件同为合并在一个单元格（意见留白在上、审核人行落底） #}
+    <tr style="height:16mm">
+      <td colspan="36" class="note-cell" style="vertical-align:bottom; padding-bottom:1.2mm;">审核意见：<br>
+        <br>
+        审核人：　　　　　　　　　　审核日期：　　　　年　　月　　日</td>
+    </tr>
+  </table>
+
+  <div class="foot-note">
+    注：1. 代号 5=7-12-17-22-27；29=7+8+9+10+11-13-14-15-16+18+19+20-21-23-24-25-26。<br>
+    　　2. 与户主关系按如下表述：户主、配偶、父亲、母亲、儿子、儿媳、女儿、女婿、兄、嫂、弟、弟媳、姐、姐夫、妹、妹夫、侄子、侄女、外甥、外甥女、孙子、孙媳妇、孙女、孙女婿、外孙子、外孙女、外孙女婿、岳父、岳母、公公、婆婆等。<br>
+    　　3. 国家公务员、事业单位正式员工，聘任制员工除外。<br>
+    　　4. 代号 35"备注"中备注财政供养人员、国有企业正式编制人员、部队军官人员现工作单位；补地、抽回原因、时间、面积等。
+  </div>
+</div>
+
+</body>
+</html>

@@ -609,11 +609,16 @@ class RasterPublishService:
             })
             logger.info("Task %s: %d%% - %s", task_id, progress, message)
 
-    def create_task(self) -> str:
-        """创建新任务"""
+    def create_task(self, owner_user_id: int | None = None) -> str:
+        """创建新任务。
+
+        ⛔ 归属绑定（审计 M2）：进度查询只允许创建人（或 data_scope=all）访问，
+        防止拿到 task_id 即可窥视他人发布任务。
+        """
         task_id = uuid.uuid4().hex
         _tasks[task_id] = {
             "id": task_id,
+            "owner_user_id": owner_user_id,
             "progress": 0,
             "message": "等待开始...",
             "status": "pending",
@@ -621,9 +626,18 @@ class RasterPublishService:
         }
         return task_id
 
-    def get_task_progress(self, task_id: str) -> dict[str, Any] | None:
-        """获取任务进度"""
-        return _tasks.get(task_id)
+    def get_task_progress(self, task_id: str, current_user=None) -> dict[str, Any] | None:
+        """获取任务进度（越权时抛 PermissionError，端点层转 403）。"""
+        task = _tasks.get(task_id)
+        if task is None or current_user is None:
+            return task
+        user_id = getattr(current_user, "id", None)
+        if task.get("owner_user_id") is not None and user_id is not None \
+                and task["owner_user_id"] == user_id:
+            return task
+        if getattr(current_user.role, "data_scope", None) == "all":
+            return task
+        raise PermissionError("无权访问该发布任务")
 
     def set_task_result(self, task_id: str, result: dict[str, Any]):
         """设置任务结果"""
