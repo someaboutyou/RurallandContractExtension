@@ -13,6 +13,14 @@ SURVEY_ORG_DICT_TYPE = "survey_org"
 SURVEY_ORG_DICT_NAME = "调查单位（机构）"
 DEFAULT_SURVEY_ORG = "江苏中天吉奥信息技术股份有限公司"
 
+# 手机 App 下载地址（外网）：PC 端右上角二维码指向的下载入口。
+# 这类部署的外网下载服务器与内网后端不是一台机器，所以 IP / 端口 / 路径
+# 全部走字典配置，不在代码里写死。约定与上方一致：item_value 为配置键，
+# item_name 为实际取用的值；item_name 留空 = 该项未配置。
+APP_DOWNLOAD_DICT_TYPE = "app_download"
+APP_DOWNLOAD_DICT_NAME = "手机App下载地址（外网）"
+APP_DOWNLOAD_KEYS = ("ip", "port", "path")
+
 
 class DictionaryService:
     def list_items(
@@ -81,6 +89,43 @@ class DictionaryService:
         if item is None:
             return default
         return (item.item_name or "").strip() or item.item_value or default
+
+    def get_app_download_parts(self, db: Session) -> dict[str, str]:
+        """读取 app_download 字典的已配置项（item_name 即实际值，留空视为未配置）。"""
+        stmt = select(DictionaryItem).where(
+            DictionaryItem.dict_type == APP_DOWNLOAD_DICT_TYPE,
+            DictionaryItem.enabled == True,  # noqa: E712
+        )
+        parts: dict[str, str] = {}
+        for item in db.scalars(stmt).all():
+            key = (item.item_value or "").strip()
+            value = (item.item_name or "").strip()
+            # 只认已填了实际值的键；运维误把值填进 item_value 不会串进 URL
+            if key in APP_DOWNLOAD_KEYS and value:
+                parts[key] = value
+        return parts
+
+    def compose_app_download_url(self, db: Session) -> str | None:
+        """把 ip / port / path 拼成完整下载地址。
+
+        - ip 未配置 → 返回 None（前端隐藏二维码入口，提示先去字典管理配置）；
+        - port 未配置 → 按默认 80 端口省略；path 未配置 → 指向站点根。
+        - path 无论带不带前导斜杠都能正确拼接。
+        """
+        parts = self.get_app_download_parts(db)
+        ip = parts.get("ip", "").strip()
+        if not ip:
+            return None
+        # IPv6 字面量含冒号，URL 里要加方括号，否则端口分隔符歧义
+        host = f"[{ip}]" if ":" in ip else ip
+        url = f"http://{host}"
+        port = parts.get("port", "").strip()
+        if port:
+            url += f":{port}"
+        path = parts.get("path", "").strip()
+        if path:
+            url += path if path.startswith("/") else f"/{path}"
+        return url
 
     def create_item(self, db: Session, payload: dict) -> dict:
         item = DictionaryItem(

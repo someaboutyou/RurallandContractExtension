@@ -135,7 +135,40 @@ if (-not (Test-Path $backendEnv)) {
 $envLines = [System.Collections.Generic.List[string]](Get-Content $backendEnv)
 $envLines = [System.Collections.Generic.List[string]]($envLines | Where-Object { $_ -notmatch '^\s*TARGET_SRID\s*=' })
 $envLines.Add("TARGET_SRID=$TargetSrid") | Out-Null
-$envLines | Set-Content -Path $backendEnv -Encoding UTF8
+
+# ── 区域初始化范围（6 位国家统计局县级区划码，可选）──
+# 写进 .env 后，后端首次启动 bootstrap 会从随包分发的 region_full.zip 自动
+# 「缺则补」出 省->市->县->镇->村 五级区域，部署人无需手工录入任何区域。
+$existingCounties = $null
+$countyLine = Select-String -Path $backendEnv -Pattern '^\s*REGION_SEED_COUNTIES\s*=\s*(\S*)' -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($countyLine) { $existingCounties = $countyLine.Matches[0].Groups[1].Value }
+if ($null -ne $existingCounties) {
+    if ($existingCounties) {
+        Write-Host "Region seed counties already configured: $existingCounties - $backendEnv"
+    }
+} else {
+    Write-Host ""
+    Write-Host "=== 区域初始化（可选）==="
+    Write-Host "  输入项目所在地的 6 位国家统计局行政区划代码，首次启动自动建好 省/市/县/镇/村 区域树。"
+    Write-Host "  支持县级码（如 150523），也支持市级码（末两位 00，如 150500 = 初始化全市下所有旗县）。"
+    Write-Host "  多个码用英文逗号分隔。直接回车 = 跳过（之后仍可在 /regions 手工建）。"
+    $countyAnswer = (Read-Host "请输入 6 位县级行政区划代码" ).Trim()
+    if ($countyAnswer) {
+        $countyAnswer = ($countyAnswer -replace '[，、;；]', ',')
+        $countyParts = @($countyAnswer.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $badCodes = @($countyParts | Where-Object { $_ -notmatch '^\d{6}$' })
+        if ($badCodes.Count -gt 0) {
+            throw "行政区划码必须是 6 位数字，收到：$($badCodes -join ', ')"
+        }
+        $envLines = [System.Collections.Generic.List[string]]($envLines | Where-Object { $_ -notmatch '^\s*REGION_SEED_COUNTIES\s*=' })
+        $envLines.Add("REGION_SEED_COUNTIES=$($countyParts -join ',')") | Out-Null
+        Write-Host "Region seed counties: $($countyParts -join ',') -> $backendEnv"
+    }
+}
+# ⛔ 不能用 Set-Content -Encoding UTF8：PS 5.1 会写 BOM，pydantic-settings 按
+# utf-8 读时首键名变 "\ufeffapp_name" 报 extra_forbidden。必须无 BOM UTF-8。
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllLines($backendEnv, [string[]]$envLines, $utf8NoBom)
 Write-Host "Target SRID: $TargetSrid (CGCS2000 / 3-degree Gauss-Kruger zone $(Get-SridZone $TargetSrid)) -> $backendEnv"
 
 # ── JWT 密钥（安全审计 H1）：缺失或仍为公开默认值时生成随机密钥 ──
@@ -157,7 +190,10 @@ if ($needNewJwt) {
     $jwtSecret = [Convert]::ToBase64String($jwtBytes)
     $envLines = [System.Collections.Generic.List[string]]($envLines | Where-Object { $_ -notmatch '^\s*JWT_SECRET_KEY\s*=' })
     $envLines.Add("JWT_SECRET_KEY=$jwtSecret") | Out-Null
-    $envLines | Set-Content -Path $backendEnv -Encoding UTF8
+    # ⛔ 不能用 Set-Content -Encoding UTF8：PS 5.1 会写 BOM，pydantic-settings 按
+    # utf-8 读时首键名变 "\ufeffapp_name" 报 extra_forbidden。必须无 BOM UTF-8。
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllLines($backendEnv, [string[]]$envLines, $utf8NoBom)
     Write-Host "Generated random JWT_SECRET_KEY -> $backendEnv"
 }
 

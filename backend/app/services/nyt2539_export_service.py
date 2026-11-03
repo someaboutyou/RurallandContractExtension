@@ -53,6 +53,7 @@ from sqlalchemy import exists, func, literal_column, select
 from sqlalchemy.orm import Session, aliased
 
 from app.models.cbht import CONTRACT_STATUS_ACTIVE, Cbht
+from app.paths import STORAGE_DIR
 from app.models.survey import (
     SurveyCbfJtcyResult,
     SurveyCbfResult,
@@ -828,7 +829,7 @@ def build_standard_export(
     if export_type not in SUPPORTED_EXPORT_TYPES:
         raise ValueError(f"不支持的导出格式：{export_type}")
 
-    storage_root = Path(__file__).resolve().parents[2] / "storage" / "data_exports"
+    storage_root = STORAGE_DIR / "data_exports"
     work_dir = storage_root / str(export.id) / "work"
     if work_dir.exists():
         shutil.rmtree(work_dir)

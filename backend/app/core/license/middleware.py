@@ -18,8 +18,9 @@ class LicenseCheckMiddleware(BaseHTTPMiddleware):
 
     # API 白名单（前缀匹配，不受授权限制）
     # - /api/v1/license：必须放行，否则授权失效时无法查询状态、获取机器码、
-    #   上传新授权文件。安全由端点自身鉴权兜底（审计 H2）：/machine-code 需
-    #   登录，/upload、/reload 仅平台管理员；未认证请求在端点层得到 401。
+    #   上传新授权文件。安全由端点自身鉴权兜底（审计 H2 修订）：/machine-code
+    #   免登录；/upload、/reload 走 require_license_upload_permission——授权
+    #   失效时允许匿名（bootstrap 死锁修复），授权有效时仅平台管理员。
     # - /api/v1/auth   ：放行登录动作本身，使未授权时仍能进入系统看到授权提示并上传授权文件
     #   （业务数据接口仍会被拦截，见下方第 3 步）
     _API_WHITELIST = (

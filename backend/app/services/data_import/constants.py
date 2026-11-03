@@ -73,6 +73,40 @@ CBDKXX_FIELD_MAP: dict[str, list[str]] = {
     "region_code": ["region_code", "REGION_CODE", "regionCode"],
 }
 
+CBHT_FIELD_MAP: dict[str, list[str]] = {
+    "cbhtbm": ["cbhtbm", "CBHTBM"],
+    "ycbhtbm": ["ycbhtbm", "YCBHTBM"],
+    "fbfbm": ["fbfbm", "FBFBM"],
+    "cbfbm": ["cbfbm", "CBFBM"],
+    "cbfs": ["cbfs", "CBFS"],
+    "cbqxq": ["cbqxq", "CBQXQ"],
+    "cbqxz": ["cbqxz", "CBQXZ"],
+    "htzmj": ["htzmj", "HTZMJ"],
+    "cbdkzs": ["cbdkzs", "CBDKZS"],
+    "qdsj": ["qdsj", "QDSJ"],
+    "htzmjm": ["htzmjm", "HTZMJM"],
+    "yhtzmj": ["yhtzmj", "YHTZMJ"],
+    "yhtzmjm": ["yhtzmjm", "YHTZMJM"],
+}
+
+# 国标包 JZD/JZX shp 的属性补充映射（仅取库内有落点的属性；
+# 点位与点号由 DK 图形推导，见 gb_package.derive_and_enrich_boundaries）
+JZD_ATTR_FIELD_MAP: dict[str, list[str]] = {
+    "jzdh": ["jzdh", "JZDH"],
+    "jblx": ["jblx", "JBLX"],
+    "dkbm": ["dkbm", "DKBM"],
+}
+
+JZX_ATTR_FIELD_MAP: dict[str, list[str]] = {
+    "qjzdh": ["qjzdh", "QJZDH"],
+    "zdjzdh": ["zdjzdh", "ZJZDH"],
+    "jzxlb": ["jzxlb", "JZXLB"],
+    "jzxwz": ["jzxwz", "JZXWZ"],
+    "jzxsm": ["jzxsm", "JZXSM"],
+    "dkbm": ["dkbm", "DKBM"],
+}
+
+
 DK_FIELD_MAP: dict[str, list[str]] = {
     "bsm": ["bsm", "BSM"],
     "ysdm": ["ysdm", "YSDM"],
@@ -99,6 +133,7 @@ FIELD_MAPS: dict[str, dict[str, list[str]]] = {
     "cbf_jtcy": MEMBER_FIELD_MAP,
     "fbf": FBF_FIELD_MAP,
     "cbdkxx": CBDKXX_FIELD_MAP,
+    "cbht": CBHT_FIELD_MAP,
     "dk": DK_FIELD_MAP,
 }
 
@@ -115,6 +150,31 @@ GDB_LAYER_ALIASES: dict[str, set[str]] = {
     "cbdkxx": {"cbdkxx"},
     "dk": {"dk"},
 }
+
+# ---------------------------------------------------------------------------
+# 国标包（NY/T 2539 标准数据包）元数据
+# ---------------------------------------------------------------------------
+
+#: 权属 mdb 里的表 → file_type，按导入顺序排列（cbht 依赖 cbf 先入库）
+GB_MDB_TABLE_ORDER: tuple[str, ...] = ("fbf", "cbf", "cbf_jtcy", "cbht", "cbdkxx")
+
+GB_MDB_TABLE_NAMES: dict[str, str] = {
+    "fbf": "FBF",
+    "cbf": "CBF",
+    "cbf_jtcy": "CBF_JTCY",
+    "cbht": "CBHT",
+    "cbdkxx": "CBDKXX",
+}
+
+#: 矢量目录下的 shp 文件名前缀 → file_type（文件名形如 DK1505262019.shp）
+GB_SHP_LAYER_ALIASES: dict[str, set[str]] = {
+    "dk": {"dk"},
+    "jzd": {"jzd"},
+    "jzx": {"jzx"},
+}
+
+GB_SHP_LAYER_ORDER: tuple[str, ...] = ("dk", "jzd", "jzx")
+
 
 # ---------------------------------------------------------------------------
 # CSV template definitions

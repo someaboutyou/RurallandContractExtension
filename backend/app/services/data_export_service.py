@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models.data_export import DataExport
 from app.models.survey import SurveyCbfJtcyResult, SurveyCbfResult
+from app.paths import STORAGE_DIR
 from app.schemas.data_export import DataExportRead, serialize_export
 from app.schemas.pagination import PageResponse
 from app.services import nyt2539_export_service
@@ -26,7 +27,7 @@ from app.services.export_progress import (
 logger = logging.getLogger(__name__)
 
 # 导出产物落地目录：backend/storage/data_exports/<export_id>/<file>.zip
-_STORAGE_ROOT = Path(__file__).resolve().parents[2] / "storage" / "data_exports"
+_STORAGE_ROOT = STORAGE_DIR / "data_exports"
 
 # 承包方类型 / 证件类型 / 调查状态 / 结果状态 的中文标签（仅做展示，不臆造业务含义）
 _CBF_LX_LABEL = {"1": "农户", "2": "其他"}

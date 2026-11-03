@@ -11,6 +11,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.crs import get_target_srid
+from app.models.cbht import CONTRACT_SOURCE_IMPORTED, CONTRACT_STATUS_ACTIVE, Cbht
 from app.models.data_import import DataImportBatch, DataImportFile, DataImportRow
 from app.models.fbf import Fbf
 from app.models.survey import (
@@ -110,35 +111,43 @@ def _import_cbf_row(db, batch, survey_batch, row_record, data, current_user, now
 
 def _import_member_row(db, batch, survey_batch, row_record, data, current_user, now, context=None):
     chunk_no = max(1, (row_record.row_no - 1) // 5000 + 1)
-    required = ["cbfbm", "cyxm", "cyzjlx", "cyzjhm", "cyxb", "yhzgx"]
-    ensure_required(data, required)
-    data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="out of scope")
-    if context and "contractor_result_by_cbfbm" in context:
-        contractor_result = context["contractor_result_by_cbfbm"].get(data["cbfbm"])
+    # 宽松导入：与 _gdb_member 同口径——cbfbm/cyzjhm 缺失也落库（导入即整理）。
+    cbfbm = data.get("cbfbm") or ""
+    cyzjhm = data.get("cyzjhm") or ""
+    if cbfbm:
+        data_access_service.ensure_code_in_scope(current_user, cbfbm, detail="out of scope")
+        if context and "contractor_result_by_cbfbm" in context:
+            contractor_result = context["contractor_result_by_cbfbm"].get(cbfbm)
+        else:
+            contractor_result = db.scalar(select(SurveyCbfResult).where(SurveyCbfResult.cbfbm == cbfbm).order_by(SurveyCbfResult.id.desc()))
     else:
-        contractor_result = db.scalar(select(SurveyCbfResult).where(SurveyCbfResult.cbfbm == data["cbfbm"]).order_by(SurveyCbfResult.id.desc()))
-    if contractor_result is None:
-        raise ValueError(f"contractor not found: {data['cbfbm']}")
-    member_uid = str(uuid5(NAMESPACE_URL, f"survey:member:{data['cbfbm']}:{data['cyzjhm']}"))
-    if context and "member_result_by_cbfbm_member" in context:
-        result = context["member_result_by_cbfbm_member"].get((data["cbfbm"], data["cyzjhm"]))
+        contractor_result = None
+    tenant_code = contractor_result.tenant_code if contractor_result else (data_access_service.get_tenant_code(current_user) or data_access_service.derive_tenant_code(batch.region_code))
+    region_code = contractor_result.region_code if contractor_result else batch.region_code
+    member_uid = str(uuid5(NAMESPACE_URL, f"survey:member:{cbfbm}:{cyzjhm}"))
+    if cbfbm and cyzjhm:
+        if context and "member_result_by_cbfbm_member" in context:
+            result = context["member_result_by_cbfbm_member"].get((cbfbm, cyzjhm))
+        else:
+            result = db.scalar(select(SurveyCbfJtcyResult).where(SurveyCbfJtcyResult.cbfbm == cbfbm, SurveyCbfJtcyResult.cyzjhm == cyzjhm).order_by(SurveyCbfJtcyResult.id.desc()))
     else:
-        result = db.scalar(select(SurveyCbfJtcyResult).where(SurveyCbfJtcyResult.cbfbm == data["cbfbm"], SurveyCbfJtcyResult.cyzjhm == data["cyzjhm"]).order_by(SurveyCbfJtcyResult.id.desc()))
+        # 缺键行没有稳定身份，直接插入为独立行
+        result = None
     operation = "update" if result else "insert"
     result_before = snapshot_model(result) if result else None
     if result is None:
-        result = SurveyCbfJtcyResult(tenant_code=contractor_result.tenant_code, region_code=contractor_result.region_code, contractor_uid=contractor_result.contractor_uid, member_uid=member_uid, initialized_at=now)
+        result = SurveyCbfJtcyResult(tenant_code=tenant_code, region_code=region_code, contractor_uid=contractor_result.contractor_uid if contractor_result else "", member_uid=member_uid, initialized_at=now)
         db.add(result)
-    result.tenant_code = contractor_result.tenant_code
-    result.region_code = contractor_result.region_code
-    result.contractor_uid = contractor_result.contractor_uid
+    result.tenant_code = tenant_code
+    result.region_code = region_code
+    result.contractor_uid = contractor_result.contractor_uid if contractor_result else (result.contractor_uid or "")
     result.member_uid = member_uid
-    result.cbfbm = data["cbfbm"]
-    result.cyxm = data["cyxm"]
-    result.cyzjlx = data["cyzjlx"]
-    result.cyzjhm = data["cyzjhm"]
-    result.cyxb = data["cyxb"]
-    result.yhzgx = data["yhzgx"]
+    result.cbfbm = cbfbm or (result.cbfbm or "")
+    result.cyxm = data.get("cyxm") or (result.cyxm or "")
+    result.cyzjlx = data.get("cyzjlx") or (result.cyzjlx or "")
+    result.cyzjhm = cyzjhm or (result.cyzjhm or "")
+    result.cyxb = data.get("cyxb") or (result.cyxb or "")
+    result.yhzgx = data.get("yhzgx") or (result.yhzgx or "")
     result.cybz = data.get("cybz")
     result.sfgyr = data.get("sfgyr")
     result.cybzsm = data.get("cybzsm")
@@ -291,9 +300,64 @@ def import_gdb_result_row(db, batch, survey_batch, row_record, file_type, data, 
         return _gdb_fbf(db, batch, row_record, data, current_user, now, chunk_no)
     if file_type == "cbdkxx":
         return _gdb_cbdkxx(db, batch, row_record, data, current_user, now, chunk_no)
+    if file_type == "cbht":
+        return _gdb_cbht(db, batch, row_record, data, current_user, now, chunk_no)
     if file_type == "dk":
         return _gdb_dk(db, batch, row_record, data, current_user, now, geometry, chunk_no)
     raise ValueError(f"unsupported data type: {file_type}")
+
+
+def _gdb_cbht(db, batch, row_record, data, current_user, now, chunk_no):
+    """国标包权属 mdb 的 CBHT（承包合同）落库。
+
+    Cbht 主键即 cbhtbm；承包方 uid 从已导入的承包方成果反查（cbf 先于 cbht
+    导入，查不到时只留空不报错——合同本身仍是完整数据）。
+    """
+    required = ["cbhtbm"]
+    ensure_required(data, required)
+    region_code = resolve_effective_import_region(
+        batch, current_user, data.get("cbfbm"), batch.region_code
+    )
+    tenant_code = data_access_service.get_tenant_code(current_user) or data_access_service.derive_tenant_code(region_code)
+    result = db.scalar(
+        select(Cbht).where(Cbht.tenant_code == tenant_code, Cbht.cbhtbm == data["cbhtbm"])
+    )
+    operation = "update" if result else "insert"
+    before = snapshot_model(result) if result else None
+    if result is None:
+        result = Cbht(tenant_code=tenant_code, cbhtbm=data["cbhtbm"])
+        db.add(result)
+    result.tenant_code = tenant_code
+    result.ycbhtbm = data.get("ycbhtbm")
+    result.fbfbm = data.get("fbfbm")
+    result.cbfbm = data.get("cbfbm")
+    result.cbfs = data.get("cbfs")
+    result.cbqxq = parse_datetime(data.get("cbqxq"))
+    result.cbqxz = parse_datetime(data.get("cbqxz"))
+    result.htzmj = parse_decimal(data.get("htzmj"))
+    result.cbdkzs = parse_int(data.get("cbdkzs")) if data.get("cbdkzs") else None
+    result.qdsj = parse_datetime(data.get("qdsj"))
+    result.htzmjm = parse_decimal(data.get("htzmjm"))
+    result.yhtzmj = parse_decimal(data.get("yhtzmj"))
+    result.yhtzmjm = parse_decimal(data.get("yhtzmjm"))
+    result.contract_status = CONTRACT_STATUS_ACTIVE
+    result.contract_source = CONTRACT_SOURCE_IMPORTED
+    contractor_uid = None
+    if data.get("cbfbm"):
+        contractor = db.scalar(
+            select(SurveyCbfResult).where(
+                SurveyCbfResult.tenant_code == tenant_code,
+                SurveyCbfResult.cbfbm == data["cbfbm"],
+            ).order_by(SurveyCbfResult.id.desc())
+        )
+        contractor_uid = contractor.contractor_uid if contractor else None
+    result.contractor_uid = contractor_uid
+    result.survey_batch_id = None
+    result.source_import_batch_id = result.source_import_batch_id or batch.id
+    result.last_import_batch_id = batch.id
+    db.flush()
+    record_operation(db, batch, row_record, result, operation, before, chunk_no)
+    return operation, result.cbhtbm
 
 
 def _gdb_cbf(db, batch, row_record, data, current_user, now, chunk_no):
@@ -342,29 +406,41 @@ def _gdb_cbf(db, batch, row_record, data, current_user, now, chunk_no):
 
 
 def _gdb_member(db, batch, row_record, data, current_user, now, chunk_no):
-    required = ["cbfbm", "cyxm", "cyzjlx", "cyzjhm", "cyxb", "yhzgx"]
-    ensure_required(data, required)
-    data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="out of scope")
-    contractor = db.scalar(select(SurveyCbfResult).where(SurveyCbfResult.cbfbm == data["cbfbm"]).order_by(SurveyCbfResult.id.desc()))
-    if contractor is None:
-        raise ValueError(f"contractor not found: {data['cbfbm']}")
-    member_uid = str(uuid5(NAMESPACE_URL, f"survey:member:{data['cbfbm']}:{data['cyzjhm']}"))
-    result = db.scalar(select(SurveyCbfJtcyResult).where(SurveyCbfJtcyResult.tenant_code == contractor.tenant_code, SurveyCbfJtcyResult.cbfbm == data["cbfbm"], SurveyCbfJtcyResult.cyzjhm == data["cyzjhm"]))
+    """成员行宽松导入：cbfbm/cyzjhm 等字段缺失也落库（导入即整理）。
+
+    - 缺 cbfbm：挂不上承包方，tenant/region 退回批次/用户，contractor_uid 落空串；
+    - 缺 cyzjhm：构不成稳定去重键，不做 upsert、直接插入为独立行，保住每一行待清洗；
+    - upsert 命中时来源空值不覆盖已有非空值（缺则补、不清空）。
+    """
+    cbfbm = data.get("cbfbm") or ""
+    cyzjhm = data.get("cyzjhm") or ""
+    if cbfbm:
+        data_access_service.ensure_code_in_scope(current_user, cbfbm, detail="out of scope")
+        contractor = db.scalar(select(SurveyCbfResult).where(SurveyCbfResult.cbfbm == cbfbm).order_by(SurveyCbfResult.id.desc()))
+    else:
+        contractor = None
+    tenant_code = contractor.tenant_code if contractor else (data_access_service.get_tenant_code(current_user) or data_access_service.derive_tenant_code(batch.region_code))
+    region_code = contractor.region_code if contractor else batch.region_code
+    member_uid = str(uuid5(NAMESPACE_URL, f"survey:member:{cbfbm}:{cyzjhm}"))
+    if cbfbm and cyzjhm:
+        result = db.scalar(select(SurveyCbfJtcyResult).where(SurveyCbfJtcyResult.tenant_code == tenant_code, SurveyCbfJtcyResult.cbfbm == cbfbm, SurveyCbfJtcyResult.cyzjhm == cyzjhm))
+    else:
+        result = None
     operation = "update" if result else "insert"
     before = snapshot_model(result) if result else None
     if result is None:
-        result = SurveyCbfJtcyResult(tenant_code=contractor.tenant_code, region_code=contractor.region_code, contractor_uid=contractor.contractor_uid, member_uid=member_uid, initialized_at=now)
+        result = SurveyCbfJtcyResult(tenant_code=tenant_code, region_code=region_code, contractor_uid=contractor.contractor_uid if contractor else "", member_uid=member_uid, initialized_at=now)
         db.add(result)
-    result.tenant_code = contractor.tenant_code
-    result.region_code = contractor.region_code
-    result.contractor_uid = contractor.contractor_uid
+    result.tenant_code = tenant_code
+    result.region_code = region_code
+    result.contractor_uid = contractor.contractor_uid if contractor else (result.contractor_uid or "")
     result.member_uid = member_uid
-    result.cbfbm = data["cbfbm"]
-    result.cyxm = data["cyxm"]
-    result.cyzjlx = data["cyzjlx"]
-    result.cyzjhm = data["cyzjhm"]
-    result.cyxb = data["cyxb"]
-    result.yhzgx = data["yhzgx"]
+    result.cbfbm = cbfbm or (result.cbfbm or "")
+    result.cyxm = data.get("cyxm") or (result.cyxm or "")
+    result.cyzjlx = data.get("cyzjlx") or (result.cyzjlx or "")
+    result.cyzjhm = cyzjhm or (result.cyzjhm or "")
+    result.cyxb = data.get("cyxb") or (result.cyxb or "")
+    result.yhzgx = data.get("yhzgx") or (result.yhzgx or "")
     result.cybz = data.get("cybz")
     result.sfgyr = data.get("sfgyr")
     result.cybzsm = data.get("cybzsm")

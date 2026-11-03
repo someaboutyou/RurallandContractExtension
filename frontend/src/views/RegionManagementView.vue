@@ -47,6 +47,7 @@
         <el-form-item label="区域级别" prop="level">
           <el-select v-model="form.level">
             <el-option label="省级" value="province" />
+            <el-option label="市级" value="city" />
             <el-option label="县级" value="county" />
             <el-option label="镇级" value="town" />
             <el-option label="村级" value="village" />
@@ -118,11 +119,11 @@ function createEmptyForm() {
 }
 
 function levelLabel(value) {
-  return { province: "省级", county: "县级", town: "镇级", village: "村级" }[value] || value;
+  return { province: "省级", city: "市级", county: "县级", town: "镇级", village: "村级" }[value] || value;
 }
 
 function childLevel(parentLevel) {
-  return { province: "county", county: "town", town: "village" }[parentLevel] || "village";
+  return { province: "city", city: "county", county: "town", town: "village" }[parentLevel] || "village";
 }
 
 async function loadRegions() {

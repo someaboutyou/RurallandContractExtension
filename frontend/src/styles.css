@@ -89,7 +89,7 @@ a {
 }
 
 .app-topbar-inner {
-  #min-height: 78px;
+  min-height: 78px;
   display: grid;
   grid-template-columns: minmax(260px, 340px) minmax(480px, 1fr) minmax(220px, auto);
   gap: 30px;
@@ -339,6 +339,41 @@ a {
 .topbar-dropdown .el-dropdown-menu,
 .profile-dropdown .el-dropdown-menu {
   padding: 6px;
+}
+
+/* 右上角「下载App」二维码弹层 */
+.app-download-popover {
+  border-radius: var(--radius-xl);
+}
+
+.app-download-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px;
+}
+
+.app-download-qr {
+  width: 192px;
+  height: 192px;
+  display: block;
+  border-radius: var(--radius-md);
+}
+
+.app-download-url {
+  max-width: 100%;
+  font-size: 12px;
+  color: #5b6b7a;
+  word-break: break-all;
+  text-align: center;
+  line-height: 1.4;
+}
+
+.app-download-tip {
+  font-size: 13px;
+  font-weight: 600;
+  color: #243325;
 }
 
 .topbar-dropdown .el-dropdown-menu__item {

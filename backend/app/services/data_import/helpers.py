@@ -197,6 +197,8 @@ def entity_key(file_type: str, data: dict) -> str | None:
         return data.get("fbfbm")
     if file_type == "cbdkxx" and data.get("dkbm") and data.get("cbfbm"):
         return f"{data['dkbm']}:{data['cbfbm']}"
+    if file_type == "cbht" and data.get("cbhtbm"):
+        return data.get("cbhtbm")
     if file_type == "dk":
         return data.get("dkbm")
     return None

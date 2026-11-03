@@ -1,7 +1,19 @@
+param(
+    # -Silent: run with no console window (launched by start-production-silent.vbs).
+    # Startup output is captured to runtime\logs\startup-silent.log via transcript.
+    [switch]$Silent
+)
+
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $runtimeRoot = Join-Path $projectRoot "runtime"
+$logDir = Join-Path $runtimeRoot "logs"
+
+if ($Silent) {
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    Start-Transcript -Path (Join-Path $logDir "startup-silent.log") -Append | Out-Null
+}
 $stateDir = Join-Path $runtimeRoot ".state"
 $installMarker = Join-Path $stateDir "installed.json"
 $initMarker = Join-Path $stateDir "initialized.json"
@@ -112,7 +124,10 @@ if (-not (Test-Path $frontendDist)) {
     Write-Host "The backend will serve API and docs, but no frontend UI."
 }
 
-$backendProcess = Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "`"$backendScript`"" -WorkingDirectory $projectRoot -PassThru
+# 静默后台运行：不加 -NoExit（start-backend.ps1 内部会阻塞在 uvicorn 上），
+# 窗口隐藏后用户无法误关控制台；日志仍在 runtime\logs\backend.log。
+$backendArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$backendScript`"")
+$backendProcess = Start-Process powershell -ArgumentList $backendArgs -WorkingDirectory $projectRoot -PassThru -WindowStyle Hidden
 Set-Content -Path (Join-Path $stateDir "backend.pid") -Value $backendProcess.Id -Encoding ASCII
 
 Write-Host ""
@@ -122,4 +137,8 @@ Write-Host "GeoServer: http://127.0.0.1:8080/geoserver"
 Write-Host "Backend:   http://127.0.0.1:8000"
 if (Test-Path $frontendDist) {
     Write-Host "Frontend:  http://127.0.0.1:8000 (served by backend)"
+}
+
+if ($Silent) {
+    Stop-Transcript | Out-Null
 }

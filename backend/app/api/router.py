@@ -22,6 +22,7 @@ from app.api.v1.endpoints import (
     request_workflow_mapping,
     role,
     survey,
+    system,
     tenant,
     user,
     workflow_definition,
@@ -51,4 +52,5 @@ api_router.include_router(request_attachment_template.router, prefix="/request-a
 api_router.include_router(request_case.router, prefix="/requests", tags=["Requests"])
 api_router.include_router(request_workflow_mapping.router, prefix="/request-workflow-mappings", tags=["RequestWorkflowMappings"])
 api_router.include_router(survey.router, prefix="/surveys", tags=["Surveys"])
+api_router.include_router(system.router, prefix="/system", tags=["System"])
 api_router.include_router(workflow_definition.router, prefix="/workflow-definitions", tags=["WorkflowDefinitions"])

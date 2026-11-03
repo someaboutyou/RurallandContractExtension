@@ -57,6 +57,118 @@ class GeoServerService:
                 updated += 1
         logger.info("GeoServer bbox recalculation finished: updated=%s", updated)
 
+    def ensure_feature_type(self, layer_name: str) -> bool:
+        """确保 featuretype/layer 存在；缺失时按同名 PostGIS 表自动创建。
+
+        GeoServer 会自动从 geometry_columns 读取 SRID、从表数据计算 bbox，
+        无需调用方传投影参数。返回 True 表示本次实际执行了创建。
+        """
+        layer_ref = self._normalize_layer_ref(layer_name)
+        native_name = layer_ref.split(":", 1)[-1]
+        ft_url = (
+            f"{self.base_url}/rest/workspaces/{self.workspace}/datastores/{self.store_name}"
+            f"/featuretypes/{native_name}.json"
+        )
+        try:
+            self._request_json_no_body(ft_url, timeout=10)
+            return False  # 已存在
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404:
+                raise
+
+        # 发布被跳过过的典型场景：GeoServer 启动时几何表还没有数据/不存在。
+        # 用表元数据创建，SRS/bbox 由 GeoServer 自行解析。
+        self._request_json(
+            f"{self.base_url}/rest/workspaces/{self.workspace}/datastores/{self.store_name}/featuretypes.json",
+            "POST",
+            {"featureType": {"name": native_name, "nativeName": native_name, "enabled": True}},
+            timeout=20,
+        )
+        # 图层默认样式：与 start-geoserver.ps1 一致，每层用同名工作区样式（样式早已上传）。
+        try:
+            layer_url = f"{self.base_url}/rest/layers/{urllib.parse.quote(layer_ref, safe='')}.json"
+            layer_json = self._request_json_no_body(layer_url, timeout=10)
+            layer = layer_json.get("layer") or {}
+            layer["defaultStyle"] = {"name": layer_ref}
+            self._request_json(layer_url, "PUT", {"layer": layer}, timeout=10)
+        except Exception as exc:  # noqa: BLE001 —— 样式设置失败不回滚发布
+            logger.warning("GeoServer default style not set: layer=%s error=%s", layer_ref, exc)
+        logger.info("GeoServer feature type created: %s", layer_ref)
+        return True
+
+    def truncate_tile_cache(self, layer_name: str) -> None:
+        """清空该层的 GWC 瓦片缓存（幂等、秒级）。
+
+        导入新数据后，旧范围内已缓存的瓦片不会自动失效（expireCache=0），
+        与其重切片不如直接清空 —— GWC 会在请求时按需重绘。
+        """
+        layer_ref = self._normalize_layer_ref(layer_name)
+        url = f"{self.base_url}/gwc/rest/seed/{urllib.parse.quote(layer_ref, safe='')}.json"
+        payload = {
+            "seedRequest": {
+                "name": layer_ref,
+                "gridSetId": "EPSG:4326",
+                "type": "truncate",
+                "format": "image/png",
+                # ⛔ GWC 对 truncate 同样要求 zoom 区间，缺了直接 NPE 500
+                # （SeedRequest.getZoomStart() is null，2026-10-22 实测）
+                "zoomStart": 0,
+                "zoomStop": 20,
+                "threadCount": 4,
+            }
+        }
+        self._request_json(url, "POST", payload, timeout=20)
+        logger.info("GeoServer tile cache truncated: %s", layer_ref)
+
+    def is_running(self) -> bool:
+        """探活：只要服务端返回了 HTTP 响应就算在跑（含 302/401）。
+
+        ⛔ 不能用 /web/ 200 判活 —— 它会 302 到登录页，urllib 抛异常会被误判
+        成"未启动"（2026-10-22 实测）。连接类错误（拒绝/超时）才算未启动。
+        """
+        try:
+            request = urllib.request.Request(
+                f"{self.base_url}/web/", headers={"Authorization": self._auth_header()}
+            )
+            with urllib.request.urlopen(request, timeout=3):
+                return True
+        except urllib.error.HTTPError:
+            return True  # 服务端有响应（302/401 等），实例在跑
+        except Exception:  # noqa: BLE001 —— 连接拒绝/超时 = 未启动
+            return False
+
+    def refresh_after_data_change(self) -> dict:
+        """数据导入后的图层自愈（幂等，逐层容错）。
+
+        每个默认图层执行四步：
+        ① ensure_feature_type —— 发布被跳过的补发布；
+        ② recalculate bounds —— bbox 按最新数据重算；
+        ③ ensure_tile_layer —— gridSubset 固定为全幅 EPSG:4326，避免退化范围导致 TileOutOfRange；
+        ④ truncate 瓦片缓存 —— 旧瓦片作废，WMTS 按需重绘。
+        GeoServer 未启动时整体跳过，不抛错（调用方是导入收口，不能阻断导入）。
+        """
+        result: dict = {"geoserverRunning": False, "layers": {}}
+        if not self.is_running():
+            logger.info("GeoServer not running; skip layer refresh")
+            return result
+        result["geoserverRunning"] = True
+        for layer_name in self.default_layers:
+            info: dict = {}
+            try:
+                info["created"] = self.ensure_feature_type(layer_name)
+                info["boundsRecalculated"] = self.recalculate_feature_type_bounds(layer_name)
+                self.ensure_tile_layer(layer_name)
+                self.truncate_tile_cache(layer_name)
+                info["ok"] = True
+            except Exception as exc:  # noqa: BLE001 —— 单层失败不影响其余图层
+                info["ok"] = False
+                info["error"] = str(exc)
+                logger.warning("GeoServer layer refresh failed: layer=%s error=%s", layer_name, exc)
+            result["layers"][layer_name] = info
+        logger.info("GeoServer layer refresh finished: %s", json.dumps(result, ensure_ascii=False))
+        return result
+
+
     def seed_tile_cache(
         self,
         layer_name: str,
@@ -105,6 +217,51 @@ class GeoServerService:
             "type": seed_type,
             "bounds": resolved_bounds,
             "wmtsUrl": self.build_wmts_url(layer_ref, grid_set_id=grid_set_id, mime_format=mime_format),
+        }
+
+    def get_seed_task_status(self, layer_name: str) -> dict:
+        """查询图层的切片缓存种子任务运行状态。
+
+        GWC REST：GET /gwc/rest/seed/{layer}.json 返回 long-array-array，
+        每行是一个拆分后的子任务：[已完成切片数, 总切片数, 保留位, 任务ID, 线程状态]，
+        空数组表示当前没有任务在跑（2026-10-21 实测：一次 seed 请求按 threadCount
+        拆成多个子任务，各行的已完成数独立增长，总数相同为整个请求的切片总量）。
+        """
+        layer_ref = self._normalize_layer_ref(layer_name)
+        url = f"{self.base_url}/gwc/rest/seed/{urllib.parse.quote(layer_ref, safe='')}.json"
+        empty = {"running": False, "tasks": [], "tilesDone": 0, "tilesTotal": 0, "progress": 0.0, "layerName": layer_ref}
+        try:
+            data = self._request_json_no_body(url, timeout=10)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return empty
+            raise
+        rows = data.get("long-array-array") or []
+        tasks: list[dict] = []
+        tiles_done = 0
+        tiles_total = 0
+        for row in rows:
+            try:
+                row_done = max(0, int(row[0])) if len(row) > 0 else 0
+                row_total = int(row[1]) if len(row) > 1 else 0
+                task_id = int(row[3]) if len(row) > 3 else 0
+            except (TypeError, ValueError):
+                continue
+            if row_total <= 0:
+                continue
+            tiles_done += row_done
+            tiles_total = max(tiles_total, row_total)
+            tasks.append({"taskId": task_id, "tilesDone": row_done, "tilesTotal": row_total})
+        if not tasks:
+            return empty
+        progress = round(min(tiles_done * 100.0 / tiles_total, 99.9), 1) if tiles_total > 0 else 0.0
+        return {
+            "running": True,
+            "tasks": tasks,
+            "tilesDone": tiles_done,
+            "tilesTotal": tiles_total,
+            "progress": progress,
+            "layerName": layer_ref,
         }
 
     def get_layer_bounds(self, layer_name: str, *, grid_set_id: str = "EPSG:4326") -> list[float] | None:
@@ -165,8 +322,9 @@ class GeoServerService:
     def repair_local_tile_layer_meta(self, layer_name: str) -> None:
         data_dir = os.getenv("GEOSERVER_DATA_DIR")
         if not data_dir:
-            project_root = Path(__file__).resolve().parents[3]
-            data_dir = str(project_root / "runtime" / "data" / "geoserver-data")
+            from app.paths import PROJECT_ROOT
+
+            data_dir = str(PROJECT_ROOT / "runtime" / "data" / "geoserver-data")
         gwc_dir = Path(data_dir) / "gwc-layers"
         if not gwc_dir.exists():
             return

@@ -1,11 +1,19 @@
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # backend/ 目录（config.py 位于 backend/app/core/ 下）。
 # .env 一律按绝对路径解析：无论从项目根、backend/ 还是脚本里启动，
 # 加载行为保持一致（离线验收脚本不依赖 cwd）。
+#
+# ⛔ Cython 编译布局：backend/dist/app/core/config.pyd → parents[2] = backend/dist，
+# 而 install.ps1 在目标机把 .env 写到 backend/.env（package.ps1 排除一切 .env，
+# dist 里也不会有）。模块位于 dist/ 内 ⇒ 跑的是编译产物，.env 回落到上一级 backend/。
+# 否则编译产物在构建自检和目标机上都会因找不到 .env 被下方 JWT fail-fast 拦死。
 _BACKEND_DIR = Path(__file__).resolve().parents[2]
+if _BACKEND_DIR.name.lower() == "dist":
+    _BACKEND_DIR = _BACKEND_DIR.parent
 
 # ⛔ 安全哨兵：jwt_secret_key 等于该默认值时启动即失败（见文件末尾 fail-fast）。
 _INSECURE_JWT_DEFAULT = "replace-this-in-production"
@@ -46,6 +54,11 @@ class Settings(BaseSettings):
     #: 首次启动固化进 system_config 表，此后不再允许修改（改带只能走全库迁移工具）。
     #: 环境变量名 TARGET_SRID，默认 4527（CGCS2000 3°带 39 带）保持现网兼容。
     target_srid: int = 4527
+    #: 区域初始化范围：6 位国家统计局县级区划码，逗号分隔（如 150502,150521）。
+    #: 安装时由 install.ps1 让部署人填写后写入 .env；后端首次启动 bootstrap 从
+    #: 随包分发的 region_full.zip（fetch_region_seed.py --full 生成）抽取
+    #: 省->市->县->镇->村 子树「缺则补」。留空则退回 region_seed.json / 内置兜底。
+    region_seed_counties: str = ""
     jwt_secret_key: str = _INSECURE_JWT_DEFAULT
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 60 * 8
@@ -53,12 +66,20 @@ class Settings(BaseSettings):
     #: 开发调试时在 .env 里设 ENABLE_DOCS=true 打开。
     enable_docs: bool = False
 
-    model_config = SettingsConfigDict(env_file=_BACKEND_DIR / ".env", env_file_encoding="utf-8")
+    # ⛔ 编码必须 utf-8-sig：install.ps1（PS 5.1 Set-Content -Encoding UTF8）等
+    # Windows 工具写 .env 可能带 BOM，按裸 utf-8 读时首键名会变成 "\ufeffapp_name"，
+    # 被 pydantic 当多余字段拒掉（extra_forbidden，目标机 init 阶段炸过）。utf-8-sig
+    # 对无 BOM 文件行为与 utf-8 完全一致，读带 BOM 文件自动剥离。
+    model_config = SettingsConfigDict(env_file=_BACKEND_DIR / ".env", env_file_encoding="utf-8-sig")
 
     @property
     def sqlalchemy_database_uri(self) -> str:
+        # ⛔ 密码必须 URL 编码：init.ps1/start-postgres.ps1 生成的随机密码曾含
+        # !#$%&* 等字符，裸拼进 URI 时 # 被当 fragment、% 被当百分号编码，
+        # psycopg 解析出的密码就错了 ⇒ FATAL: password authentication failed
+        # （2026-10-19 目标机全新部署 init 阶段踩过）。quote_plus 对任意密码安全。
         return (
-            f"postgresql+psycopg://{self.database_user}:{self.database_password}"
+            f"postgresql+psycopg://{quote_plus(self.database_user)}:{quote_plus(self.database_password)}"
             f"@{self.database_host}:{self.database_port}/{self.database_name}"
         )
 

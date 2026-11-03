@@ -16,6 +16,7 @@ from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.models.data_import import DataImportBatch, DataImportFile, DataImportOperation, DataImportRow
+from app.models.cbht import Cbht
 from app.models.fbf import Fbf
 from app.models.survey import (
     SurveyBatch,
@@ -24,6 +25,8 @@ from app.models.survey import (
     SurveyCbdkxxResult,
     SurveyDkResult,
     SurveyFbfResult,
+    SurveyJzdResult,
+    SurveyJzxResult,
 )
 from app.models.user import User
 from app.services.data_access_service import data_access_service
@@ -168,6 +171,13 @@ class DataImportService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="import batch not found")
         from .progress import start_gdb_import_job
         return await start_gdb_import_job(db, batch, upload_file, current_user, background_tasks)
+
+    async def start_gb_import_job(self, db, batch_id, upload_file, current_user, background_tasks):
+        batch = db.get(DataImportBatch, batch_id)
+        if batch is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="import batch not found")
+        from .gb_package import start_gb_import_job
+        return await start_gb_import_job(db, batch, upload_file, current_user, background_tasks)
 
     def _process_csv_content(self, db, batch, *, file_type, original_name, content_type, content, current_user, now, remark=None):
         file_hash = hashlib.sha256(content).hexdigest()
@@ -317,7 +327,18 @@ class DataImportService:
         db.refresh(batch)
         return serialize_batch(batch)
     def _rollback_model_map(self):
-        models = [Fbf, SurveyCbfResult, SurveyCbfJtcyResult, SurveyFbfResult, SurveyCbdkxxResult, SurveyDkResult]
+        # 界址线先于界址点删除（线引用点号）；合同表独立。
+        models = [
+            Fbf,
+            SurveyCbfResult,
+            SurveyCbfJtcyResult,
+            SurveyFbfResult,
+            SurveyCbdkxxResult,
+            SurveyJzxResult,
+            SurveyJzdResult,
+            SurveyDkResult,
+            Cbht,
+        ]
         return {model.__tablename__: model for model in models}
 
     def run_gdb_import_job(self, batch_id, stored_path, filename, content_type, user_id, job_id):

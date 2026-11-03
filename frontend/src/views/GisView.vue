@@ -424,6 +424,7 @@ import { getArea, getLength } from "ol/sphere";
 import { fetchGisParcel, fetchContractorParcels, searchGisBusiness } from "../api/gis";
 import { useDictionary } from "../composables/useDictionary";
 import { fetchMapLayers } from "../api/mapLayer";
+import { fetchMapConfig } from "../api/system";
 import { basemapConfigs as fallbackBasemaps, vectorLayerConfigs as fallbackVectors } from "../config/mapLayers";
 
 const ui = {
@@ -622,6 +623,22 @@ const mapRootRef = ref(null);
 const scaleLineRef = ref(null);
 const parcelPopupRef = ref(null);
 const mapRef = shallowRef(null);
+// 部署初始化固化的地图默认中心点（system_config.map_center，来自 /system/map-config）。
+// null = 未配置（旧部署），走历史内置兜底坐标。
+const deploymentMapCenter = ref(null);
+
+// 部署地中心点定位（部署人在安装时填的 6 位行政区划码对应区域中心）。
+async function loadMapConfig() {
+  try {
+    const { data } = await fetchMapConfig();
+    const center = data?.data?.mapCenter;
+    if (Array.isArray(center) && center.length === 2 && center.every((item) => Number.isFinite(item))) {
+      deploymentMapCenter.value = center;
+    }
+  } catch (_error) {
+    // 未配置或接口不可达：保持历史兜底中心
+  }
+}
 
 const activeTool = ref("layers");
 const activeBasemap = ref("image");
@@ -1927,9 +1944,17 @@ async function fitToPrimaryLayer() {
       lonLatExtent = await fetchWmsLonLatExtent(primaryLayer);
     }
     // Older GeoServer deployments may omit the WMS LatLonBoundingBox even
-    // though the layer is valid. Keep the known published layer extent as a
-    // final fallback so the map cannot reset to the unrelated demo center.
+    // though the layer is valid. Fall back to the deployment center when
+    // configured, otherwise keep the known published layer extent.
     if (!lonLatExtent && primaryLayer.key === "survey_dk_result") {
+      if (deploymentMapCenter.value) {
+        mapRef.value.getView().animate({
+          center: fromLonLat(deploymentMapCenter.value),
+          zoom: 12,
+          duration: 600,
+        });
+        return;
+      }
       lonLatExtent = [117.9404025, 33.1306737, 118.6706148, 33.7457243];
     }
     if (lonLatExtent) {
@@ -1952,6 +1977,14 @@ async function fitToPrimaryLayer() {
     }
   } catch (_error) {
     if (primaryLayer.key === "survey_dk_result") {
+      if (deploymentMapCenter.value) {
+        mapRef.value.getView().animate({
+          center: fromLonLat(deploymentMapCenter.value),
+          zoom: 12,
+          duration: 600,
+        });
+        return;
+      }
       const webMercatorExtent = transformExtent(
         [117.9404025, 33.1306737, 118.6706148, 33.7457243],
         "EPSG:4326",
@@ -1969,9 +2002,8 @@ async function fitToPrimaryLayer() {
     }
   }
 
-  const fallbackCenter = primaryLayer?.key === "survey_dk_result"
-    ? [118.3055, 33.4382]
-    : [120.12345, 30.6789];
+  const fallbackCenter = deploymentMapCenter.value
+    ?? (primaryLayer?.key === "survey_dk_result" ? [118.3055, 33.4382] : [120.12345, 30.6789]);
   mapRef.value.getView().animate({
     center: fromLonLat(fallbackCenter),
     zoom: 15,
@@ -2017,7 +2049,7 @@ async function buildMap() {
     layers: [...basemapLayerInstances.values(), ...layerInstances.values()],
     controls: [scaleControl],
     view: new View({
-      center: fromLonLat([120.12345, 30.6789]),
+      center: fromLonLat(deploymentMapCenter.value ?? [120.12345, 30.6789]),
       zoom: 15,
       minZoom: 5,
       maxZoom: 19,
@@ -2382,6 +2414,7 @@ async function resetView() {
 let disposed = false;
 
 onMounted(async () => {
+  await loadMapConfig();
   await loadLayerConfigs();
   if (disposed) return;
   await buildMap();

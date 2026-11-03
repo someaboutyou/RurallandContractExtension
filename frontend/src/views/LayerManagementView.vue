@@ -223,7 +223,7 @@
                   {{ ui.selectFromGeoserver }}
                 </el-button>
                 <el-button
-                  v-if="service.serviceType === 'WMS' || service.serviceType === 'WMTS'"
+                  v-if="service.serviceType === 'WMTS'"
                   plain
                   type="warning"
                   :disabled="!service.serviceUrl"
@@ -284,45 +284,59 @@
     </template>
   </el-dialog>
 
-  <el-dialog v-model="cacheDialogVisible" :title="ui.cacheDialogTitle" width="520px" destroy-on-close>
-    <el-form :model="cacheForm" class="compact-form" label-position="top">
-      <div class="form-grid">
-        <el-form-item :label="ui.geoserverLayerName">
-          <el-input v-model="cacheForm.layerName" disabled />
-        </el-form-item>
-        <el-form-item :label="ui.gridSetId">
-          <el-select v-model="cacheForm.gridSetId">
-            <el-option label="EPSG:4326" value="EPSG:4326" />
-            <el-option label="EPSG:900913" value="EPSG:900913" />
-          </el-select>
-        </el-form-item>
-        <el-form-item :label="ui.zoomStart">
-          <el-input-number v-model="cacheForm.zoomStart" :min="0" :max="24" style="width: 100%" />
-        </el-form-item>
-        <el-form-item :label="ui.zoomStop">
-          <el-input-number v-model="cacheForm.zoomStop" :min="0" :max="24" style="width: 100%" />
-        </el-form-item>
-        <el-form-item :label="ui.cacheType">
-          <el-select v-model="cacheForm.type">
-            <el-option :label="ui.cacheTypeReseed" value="reseed" />
-            <el-option :label="ui.cacheTypeSeed" value="seed" />
-            <el-option :label="ui.cacheTypeTruncate" value="truncate" />
-          </el-select>
-        </el-form-item>
-        <el-form-item :label="ui.threadCount">
-          <el-input-number v-model="cacheForm.threadCount" :min="1" :max="8" style="width: 100%" />
-        </el-form-item>
+  <el-dialog v-model="cacheDialogVisible" :title="ui.cacheDialogTitle" width="520px" destroy-on-close @close="handleCacheDialogClosed">
+    <template v-if="!cacheProgress.active">
+      <el-form :model="cacheForm" class="compact-form" label-position="top">
+        <div class="form-grid">
+          <el-form-item :label="ui.geoserverLayerName">
+            <el-input v-model="cacheForm.layerName" disabled />
+          </el-form-item>
+          <el-form-item :label="ui.gridSetId">
+            <el-select v-model="cacheForm.gridSetId">
+              <el-option label="EPSG:4326" value="EPSG:4326" />
+              <el-option label="EPSG:900913" value="EPSG:900913" />
+            </el-select>
+          </el-form-item>
+          <el-form-item :label="ui.zoomStart">
+            <el-input-number v-model="cacheForm.zoomStart" :min="0" :max="24" style="width: 100%" />
+          </el-form-item>
+          <el-form-item :label="ui.zoomStop">
+            <el-input-number v-model="cacheForm.zoomStop" :min="0" :max="24" style="width: 100%" />
+          </el-form-item>
+          <el-form-item :label="ui.cacheType">
+            <el-select v-model="cacheForm.type">
+              <el-option :label="ui.cacheTypeReseed" value="reseed" />
+              <el-option :label="ui.cacheTypeSeed" value="seed" />
+              <el-option :label="ui.cacheTypeTruncate" value="truncate" />
+            </el-select>
+          </el-form-item>
+          <el-form-item :label="ui.threadCount">
+            <el-input-number v-model="cacheForm.threadCount" :min="1" :max="8" style="width: 100%" />
+          </el-form-item>
+        </div>
+      </el-form>
+    </template>
+    <template v-else>
+      <div class="cache-progress">
+        <p style="margin: 0 0 12px; font-size: 13px; color: #606266; word-break: break-all;">{{ cacheProgress.layerName }}</p>
+        <el-progress :percentage="cacheProgress.percent" :stroke-width="14" :status="cacheProgress.finished ? 'success' : undefined" />
+        <p style="margin: 10px 0 0; font-size: 12px; color: #909399;">
+          {{ cacheProgress.finished ? ui.cacheDone : ui.cacheRunning }}（{{ cacheProgress.tilesDone }}/{{ cacheProgress.tilesTotal }} {{ ui.tilesUnit }}）
+        </p>
       </div>
-    </el-form>
+    </template>
     <template #footer>
-      <el-button @click="cacheDialogVisible = false">{{ ui.cancel }}</el-button>
-      <el-button type="warning" :loading="cacheSubmitting" @click="handleSeedCache">{{ ui.seedCache }}</el-button>
+      <template v-if="!cacheProgress.active">
+        <el-button @click="cacheDialogVisible = false">{{ ui.cancel }}</el-button>
+        <el-button type="warning" :loading="cacheSubmitting" @click="handleSeedCache">{{ ui.seedCache }}</el-button>
+      </template>
+      <el-button v-else type="primary" @click="cacheDialogVisible = false">{{ ui.closeButton }}</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup>
-import { computed, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
 import {
@@ -330,6 +344,7 @@ import {
   deleteMapLayer,
   fetchGeoserverLayers,
   fetchMapLayers,
+  getMapLayerCacheStatus,
   recalculateAllMapLayerBboxes,
   recalculateMapLayerBbox,
   seedMapLayerServiceCache,
@@ -436,6 +451,10 @@ const ui = {
   threadCount: "\u7ebf\u7a0b\u6570",
   cacheSuccess: "\u7f13\u5b58\u4efb\u52a1\u5df2\u63d0\u4ea4",
   cacheFailed: "\u7f13\u5b58\u4efb\u52a1\u521b\u5efa\u5931\u8d25",
+  cacheRunning: "\u6b63\u5728\u751f\u6210\u5207\u7247",
+  cacheDone: "\u7f13\u5b58\u4efb\u52a1\u5df2\u5b8c\u6210",
+  tilesUnit: "\u7247",
+  closeButton: "\u5173\u95ed",
 };
 
 function formatText(template, value) {
@@ -559,6 +578,15 @@ const bulkBboxLoading = ref(false);
 const dialogVisible = ref(false);
 const cacheDialogVisible = ref(false);
 const cacheSubmitting = ref(false);
+const cacheProgress = reactive({
+  active: false,
+  layerName: "",
+  tilesDone: 0,
+  tilesTotal: 0,
+  percent: 0,
+  finished: false,
+});
+let cachePollTimer = null;
 const editingId = ref(0);
 const formRef = ref();
 const activeServiceTab = ref("");
@@ -979,7 +1007,7 @@ async function handleSeedCache() {
       }
     }
     ElMessage.success(ui.cacheSuccess);
-    cacheDialogVisible.value = false;
+    startCachePolling(cacheForm.layerName);
   } catch (error) {
     ElMessage.error(error?.response?.data?.detail || ui.cacheFailed);
   } finally {
@@ -987,6 +1015,59 @@ async function handleSeedCache() {
     pendingCacheService = null;
   }
 }
+
+function stopCachePolling() {
+  if (cachePollTimer) {
+    clearInterval(cachePollTimer);
+    cachePollTimer = null;
+  }
+}
+
+function startCachePolling(layerName) {
+  stopCachePolling();
+  Object.assign(cacheProgress, {
+    active: true,
+    layerName,
+    tilesDone: 0,
+    tilesTotal: 0,
+    percent: 0,
+    finished: false,
+  });
+  const poll = async () => {
+    try {
+      const { data } = await getMapLayerCacheStatus(layerName);
+      const status = data?.data || {};
+      if (status.running) {
+        cacheProgress.tilesDone = status.tilesDone || 0;
+        cacheProgress.tilesTotal = status.tilesTotal || 0;
+        cacheProgress.percent = Math.min(99, Math.max(1, Math.round(status.progress || 1)));
+      } else {
+        cacheProgress.tilesDone = cacheProgress.tilesTotal;
+        cacheProgress.percent = 100;
+        cacheProgress.finished = true;
+        stopCachePolling();
+      }
+    } catch (_error) {
+      // 单次查询失败不打断轮询，等下一拍重试
+    }
+  };
+  poll();
+  cachePollTimer = setInterval(poll, 2000);
+}
+
+function handleCacheDialogClosed() {
+  stopCachePolling();
+  Object.assign(cacheProgress, {
+    active: false,
+    layerName: "",
+    tilesDone: 0,
+    tilesTotal: 0,
+    percent: 0,
+    finished: false,
+  });
+}
+
+onBeforeUnmount(stopCachePolling);
 
 function openGeoserverPicker(service) {
   pendingService = service;

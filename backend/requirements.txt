@@ -11,7 +11,10 @@ pyproj==3.6.1
 fiona==1.10.1
 # NY/T 2539 标准格式导出：mdb 属性表经 ADO (ACE OLEDB) 写入；
 # 实测 ODBC (pyodbc) 路径 CREATE_DB 后同进程 SQLDriverConnect 会段错误，勿改回。
+# 国标包导入：mdb 经 pyodbc + ACE ODBC 驱动只读（读路径实测无段错误，
+# 与上面被禁的"写路径"是两回事）；驱动依赖 Access Database Engine。
 pywin32==312
+pyodbc>=5.0
 redis==5.2.1
 httpx==0.28.1
 jinja2==3.1.6

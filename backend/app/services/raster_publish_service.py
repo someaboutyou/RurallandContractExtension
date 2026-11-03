@@ -31,11 +31,14 @@ class RasterPublishService:
     """影像发布服务"""
 
     def __init__(self):
+        # ⛔ 走 app.paths（编译布局下裸 parents[N] 会解析到 backend/dist/runtime/...）
+        from app.paths import RUNTIME_DIR
+
         self.geoserver_data_dir = os.getenv(
             "GEOSERVER_DATA_DIR",
-            str(Path(__file__).resolve().parents[3] / "runtime" / "data" / "geoserver-data")
+            str(RUNTIME_DIR / "data" / "geoserver-data")
         )
-        self.temp_dir = str(Path(__file__).resolve().parents[3] / "runtime" / "temp" / "raster-publish")
+        self.temp_dir = str(RUNTIME_DIR / "temp" / "raster-publish")
         os.makedirs(self.temp_dir, exist_ok=True)
 
     def validate_tif(self, tif_path: str) -> dict[str, Any]:

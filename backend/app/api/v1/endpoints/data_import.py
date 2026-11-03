@@ -91,14 +91,12 @@ async def upload_import_archive(
     return {"data": await data_import_service.upload_archive(db, batch_id, file, current_user)}
 
 
-@router.post("/{batch_id}/gdb", response_model=ApiResponse[DataImportJobRead])
-async def upload_import_gdb(
-    batch_id: int,
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("contractors.manage")),
-):
+def _validate_archive_upload(db: Session, batch_id: int) -> DataImportBatch:
+    """GDB 包 / 国标包上传共用的三重前置校验。
+
+    1. 批次存在；2. 该批次无进行中的导入；3. 区域唯一性（同级 / 上下级区域
+    已有活跃批次则 409，防止覆盖）。
+    """
     # Check 1: batch exists
     batch = db.get(DataImportBatch, batch_id)
     if batch is None:
@@ -113,7 +111,6 @@ async def upload_import_gdb(
 
     # Check 3: region containment
     if batch.region_code:
-        from sqlalchemy import or_
         active_statuses = ("uploaded", "processing", "success", "partial_success")
         other_batches = db.scalars(
             select(DataImportBatch).where(
@@ -141,13 +138,47 @@ async def upload_import_gdb(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"该区域的下级区域「{other.region_name or other.region_code}」已有导入批次「{other.import_name}」，导入上级区域会覆盖下级数据",
                 )
+    return batch
 
+
+@router.post("/{batch_id}/gdb", response_model=ApiResponse[DataImportJobRead])
+async def upload_import_gdb(
+    batch_id: int,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    batch = _validate_archive_upload(db, batch_id)
     user_id = current_user.id
     try:
         return {"data": await data_import_service.start_gdb_import_job(db, batch_id, file, current_user, background_tasks)}
     except Exception:
         logger.exception(
             "GDB upload endpoint failed: batch_id=%s filename=%s user_id=%s",
+            batch_id,
+            file.filename,
+            user_id,
+        )
+        raise
+
+
+@router.post("/{batch_id}/package", response_model=ApiResponse[DataImportJobRead])
+async def upload_import_gb_package(
+    batch_id: int,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """国标包上传：ZIP 内含权属数据（mdb）与矢量数据（shp）。"""
+    batch = _validate_archive_upload(db, batch_id)
+    user_id = current_user.id
+    try:
+        return {"data": await data_import_service.start_gb_import_job(db, batch_id, file, current_user, background_tasks)}
+    except Exception:
+        logger.exception(
+            "GB package upload endpoint failed: batch_id=%s filename=%s user_id=%s",
             batch_id,
             file.filename,
             user_id,

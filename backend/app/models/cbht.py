@@ -42,3 +42,6 @@ class Cbht(TenantScopedMixin, Base):
     contractor_uid: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     generated_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # 导入追踪（国标包 / GDB 导入回滚依赖，见 data_import 包 rollback）
+    source_import_batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_import_batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True)

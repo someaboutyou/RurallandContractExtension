@@ -386,90 +386,106 @@
     </el-table>
 
     <!-- 成员摸底信息（家庭成员变化摸底表的填写入口，随「保存调查结果」一并提交）
-         2026-10-14 按试点模板原件分块（用户口径：二轮 1996~2026 分确权颁证前/后两段）：
-         ① 1996 年时点：列7 是否1996年二轮承包家庭成员（调查员判断）；
-         ② 二轮期 1996—2018（确权颁证前，列 8~17）：期内事件 + 事件时间；
-         ③ 延包期 2018—2026（确权颁证后，列 18~27）：期内事件 + 事件时间；
-         ④ 成员属性：列28 变动时间、列30 属本集体经济组织人口、列31 现户口所在地、列32 现居住地；
-         ⑤ 列33 财政供养、列34 其中公务员、列35 备注。
-         列5（参与二轮承包=列7−已补地−抽回，注1 公式）与列6（确权在册）由系统推导，不让调查员填。 -->
+         2026-10-15 界面重构（用户要求：去掉「列 N」术语、布局舒适）：
+         ① 一、1996 年时点：是否本户家庭成员；二、三 = 两个承包期，每期 =
+           事件下拉（仅进出 8 类，按在户状态过滤）+ 事件时间 + 「已补地」「被抽回
+           或放弃承包地」两个独立复选框（与事件正交可同时成立）；
+         ② 四、成员属性；五、身份标识与备注；
+         ③ 打印表中的「成员增减变动时间」由两期事件时间自动取最后者，无需填写；
+         ④ 事件下拉若已有值与当前在户状态矛盾（历史数据），以「（与状态矛盾）」
+           后缀兜底显示，保存时会被状态机拦截并逐条点名。 -->
     <el-dialog
       v-model="sheetDialogVisible"
       :title="`成员摸底信息 — ${sheetEditRow?.name || '未命名成员'}`"
-      width="720px"
+      width="680px"
       append-to-body
       destroy-on-close
     >
-      <el-form v-if="sheetEditRow" label-position="left" label-width="230px" :disabled="readonly" class="sheet-form">
-        <div class="sheet-section">一、1996 年二轮承包时点（列 7；列 5/6 系统推导）</div>
+      <el-form v-if="sheetEditRow" label-position="top" :disabled="readonly" class="sheet-form">
+        <div class="sheet-section">一、1996 年二轮承包时点</div>
         <div class="sheet-grid">
-          <el-form-item label="列7 是否1996年二轮承包家庭成员">
-            <el-select v-model="sheetEditRow.sheet.isSecondRoundMember" size="small">
+          <el-form-item label="当时是否本户家庭成员">
+            <el-select v-model="sheetEditRow.sheet.isSecondRoundMember" size="small" @change="reconcileSheetEvents">
               <el-option v-for="opt in YES_NO_UNSET_OPTIONS" :key="String(opt.value)" :label="opt.label" :value="opt.value" />
             </el-select>
           </el-form-item>
+          <div class="sheet-hint">
+            「参与二轮承包人口」「确权登记家庭成员」由系统按摸底表口径自动推导，无需在此填写。
+          </div>
         </div>
 
-        <div class="sheet-section">二、二轮承包期 1996—2018（确权颁证前，列 8~17）</div>
+        <div class="sheet-section">二、二轮承包期 · 1996 — 2018（确权颁证前）</div>
         <div class="sheet-grid">
-          <el-form-item label="期内事件（增加/减少/已补地/抽回）">
-            <el-select v-model="sheetEditRow.sheet.srEventType" size="small" filterable clearable placeholder="未填">
-              <el-option v-for="opt in MEMBER_EVENT_TYPES" :key="opt.value" :label="opt.label" :value="opt.value" />
+          <el-form-item label="期内事件">
+            <el-select v-model="sheetEditRow.sheet.srEventType" size="small" filterable clearable placeholder="未填" @change="reconcileSheetEvents">
+              <el-option v-for="opt in srOpts" :key="opt.value" :label="opt.label" :value="opt.value" />
             </el-select>
           </el-form-item>
           <el-form-item label="事件时间">
-            <el-date-picker v-model="sheetEditRow.sheet.srEventDate" type="date" size="small" format="YYYY-MM-DD" value-format="YYYY-MM-DD" placeholder="选择日期" style="width: 100%" />
+            <el-date-picker v-model="sheetEditRow.sheet.srEventDate" type="date" size="small" format="YYYY-MM-DD" value-format="YYYY-MM-DD" placeholder="选择日期" :disabled-date="disableSrDate" />
+          </el-form-item>
+          <el-form-item label="补地与承包地处置" class="sheet-span-2">
+            <div class="sheet-checks">
+              <el-checkbox v-model="sheetEditRow.sheet.srCompensated">已补地</el-checkbox>
+              <el-checkbox v-model="sheetEditRow.sheet.srWithdraw">被抽回或放弃承包地</el-checkbox>
+            </div>
           </el-form-item>
         </div>
 
-        <div class="sheet-section">三、确权颁证后至调查节点 2018—2026（列 18~27）</div>
+        <div class="sheet-section">三、延包期 · 2018 — 2026（确权颁证后）</div>
         <div class="sheet-grid">
-          <el-form-item label="期内事件（增加/减少/已补地/抽回）">
-            <el-select v-model="sheetEditRow.sheet.extEventType" size="small" filterable clearable placeholder="未填">
-              <el-option v-for="opt in MEMBER_EVENT_TYPES" :key="opt.value" :label="opt.label" :value="opt.value" />
+          <el-form-item label="期内事件">
+            <el-select v-model="sheetEditRow.sheet.extEventType" size="small" filterable clearable placeholder="未填" @change="reconcileSheetEvents">
+              <el-option v-for="opt in extOpts" :key="opt.value" :label="opt.label" :value="opt.value" />
             </el-select>
           </el-form-item>
           <el-form-item label="事件时间">
-            <el-date-picker v-model="sheetEditRow.sheet.extEventDate" type="date" size="small" format="YYYY-MM-DD" value-format="YYYY-MM-DD" placeholder="选择日期" style="width: 100%" />
+            <el-date-picker v-model="sheetEditRow.sheet.extEventDate" type="date" size="small" format="YYYY-MM-DD" value-format="YYYY-MM-DD" placeholder="选择日期" :disabled-date="disableExtDate" />
+          </el-form-item>
+          <el-form-item label="补地与承包地处置" class="sheet-span-2">
+            <div class="sheet-checks">
+              <el-checkbox v-model="sheetEditRow.sheet.extCompensated">已补地</el-checkbox>
+              <el-checkbox v-model="sheetEditRow.sheet.extWithdraw">被抽回或放弃承包地</el-checkbox>
+            </div>
           </el-form-item>
         </div>
 
-        <div class="sheet-section">四、成员属性（列 28 / 30 / 31 / 32）</div>
+        <div class="sheet-section">四、成员属性</div>
         <div class="sheet-grid">
-          <el-form-item label="列28 成员增减变动时间">
-            <el-date-picker v-model="sheetEditRow.sheet.restructureTime" type="date" size="small" format="YYYY-MM-DD" value-format="YYYY-MM-DD" placeholder="选择日期" style="width: 100%" />
-          </el-form-item>
-          <el-form-item label="列30 是否为本集体经济组织成员">
+          <el-form-item label="是否为本集体经济组织成员">
             <el-select v-model="sheetEditRow.sheet.economicRelation" size="small">
               <el-option label="是" value="1" />
               <el-option label="否" value="0" />
               <el-option label="未填" value="" />
             </el-select>
           </el-form-item>
-          <el-form-item label="列31 现户口所在地">
+          <el-form-item label="现户口所在地">
             <el-input v-model="sheetEditRow.sheet.hukouPlace" size="small" maxlength="200" placeholder="如：泗阳县××镇××村" />
           </el-form-item>
-          <el-form-item label="列32 现居住地">
+          <el-form-item label="现居住地" class="sheet-span-2">
             <el-input v-model="sheetEditRow.sheet.residencePlace" size="small" maxlength="200" placeholder="如：泗阳县××镇××村××组" />
           </el-form-item>
         </div>
 
-        <div class="sheet-section">五、身份标识（列 33 / 34）</div>
+        <div class="sheet-section">五、身份标识</div>
         <div class="sheet-grid">
-          <el-form-item label="列33 财政供养人员（含国企编制、军官）">
+          <el-form-item label="财政供养人员（国企正式编制、部队军官等）">
             <el-select v-model="sheetEditRow.sheet.isInstitutionStaff" size="small">
               <el-option v-for="opt in YES_NO_UNSET_OPTIONS" :key="String(opt.value)" :label="opt.label" :value="opt.value" />
             </el-select>
           </el-form-item>
-          <el-form-item label="列34 其中：为国家公务员">
+          <el-form-item label="其中：为国家公务员">
             <el-select v-model="sheetEditRow.sheet.isCivilServant" size="small" @change="handleCivilServantChange">
               <el-option v-for="opt in YES_NO_UNSET_OPTIONS" :key="String(opt.value)" :label="opt.label" :value="opt.value" />
             </el-select>
           </el-form-item>
+          <el-form-item label="备注（公职单位、补地 / 抽回原因等）" class="sheet-span-2">
+            <el-input v-model="sheetEditRow.sheet.remark" type="textarea" :rows="2" maxlength="500" show-word-limit />
+          </el-form-item>
         </div>
-        <el-form-item label="列35 备注（公职单位、补地/抽回原因等）">
-          <el-input v-model="sheetEditRow.sheet.remark" type="textarea" :rows="2" maxlength="500" show-word-limit />
-        </el-form-item>
+        <div class="sheet-hint">
+          打印表中的「成员增减变动时间」由两期「事件时间」自动取最后者，无需填写。事件留空也可以保存。
+        </div>
       </el-form>
       <template #footer>
         <el-button @click="sheetDialogVisible = false">关闭</el-button>
@@ -489,10 +505,11 @@
 
 <script setup>
 import { computed, ref, watch } from "vue";
+import { ElMessage } from "element-plus";
 import ChangeDiffViewer from "./ChangeDiffViewer.vue";
 import { useDictionary } from "../../composables/useDictionary";
 import { evaluateIdNoIssue, ID_NO_MAX_LENGTH } from "../../utils/validators";
-import { MEMBER_EVENT_TYPES, YES_NO_UNSET_OPTIONS, createEmptyMemberSheet } from "../../config/surveySheets";
+import { MEMBER_EVENT_MAP, YES_NO_UNSET_OPTIONS, createEmptyMemberSheet, srEventOptions, extEventOptions } from "../../config/surveySheets";
 
 const props = defineProps({
   readonly: { type: Boolean, default: false },
@@ -668,6 +685,44 @@ function addMember() {
 // 无独立保存按钮 —— 数据落库由 update_result 的 upsert_member_sheets 完成。
 const sheetDialogVisible = ref(false);
 const sheetEditRow = ref(null);
+
+// 两期事件下拉按「在户状态机」过滤：期初在户只能选减少类，期初不在户只能选增加类
+// （列7 未填时不限制）。判据与 config/surveySheets.js、后端 sheet.py 同源。
+// ⚠️ 兜底显示：已有值若与当前状态矛盾（历史数据），仍以中文文案
+// 「（与状态矛盾）」后缀进选项 —— 否则 el-select 会露出原始码值（如 add_move_in）。
+function withCurrentValue(value, options) {
+  if (value && !options.some((opt) => opt.value === value)) {
+    return [...options, { value, label: `${MEMBER_EVENT_MAP[value] || value}（与在户状态矛盾）` }];
+  }
+  return options;
+}
+const srOpts = computed(() => withCurrentValue(sheetEditRow.value?.sheet?.srEventType || "", srEventOptions(sheetEditRow.value?.sheet)));
+const extOpts = computed(() => withCurrentValue(sheetEditRow.value?.sheet?.extEventType || "", extEventOptions(sheetEditRow.value?.sheet)));
+
+// 事件时间边界（2026-10-15 用户口径）：二轮期 ≤ 2018-12-31，延包期 ≥ 2019-01-01
+// （判据常量与 config/surveySheets.js、后端 sheet.py 同源；历史越界值由保存闸门点名）
+function disableSrDate(d) {
+  return d.getTime() > new Date(2018, 11, 31).getTime();
+}
+function disableExtDate(d) {
+  return d.getTime() < new Date(2019, 0, 1).getTime();
+}
+
+// 列7 / 二轮期事件变化后，若另一期已选事件与新状态矛盾，自动清空并提示
+function reconcileSheetEvents() {
+  const s = sheetEditRow.value?.sheet;
+  if (!s) return;
+  if (s.srEventType && !srOpts.value.some((opt) => opt.value === s.srEventType)) {
+    ElMessage.warning("二轮期事件与「1996 年是否家庭成员」矛盾，已清空（必须有进才有出）");
+    s.srEventType = "";
+    s.srEventDate = null;
+  }
+  if (s.extEventType && !extOpts.value.some((opt) => opt.value === s.extEventType)) {
+    ElMessage.warning("延包期事件与前期在户状态矛盾，已清空（出了还可以再进，反之须先出）");
+    s.extEventType = "";
+    s.extEventDate = null;
+  }
+}
 
 function openSheetDialog(row) {
   if (!row) return;
@@ -983,18 +1038,61 @@ defineExpose({ getValidMembers, validateIdNos });
 
 .member-table { margin-top: 0; }
 
-/* 成员摸底信息弹窗 */
+/* 成员摸底信息弹窗（2026-10-15 重构：顶部标签 + 两列网格，杜绝标签溢出换行） */
 .sheet-section {
+  display: flex;
+  align-items: center;
   font-size: 13px;
   font-weight: 600;
+  color: #303133;
+  margin: 12px 0 6px;
+  padding: 2px 0 2px 8px;
+  border-left: 3px solid #409eff;
+  line-height: 1.4;
+}
+.sheet-form :deep(.el-form-item) {
+  margin-bottom: 12px;
+}
+.sheet-form :deep(.el-form-item__label) {
+  padding-bottom: 2px;
+  line-height: 1.4;
+  font-size: 12.5px;
   color: #606266;
-  margin: 4px 0 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sheet-form :deep(.el-select),
+.sheet-form :deep(.el-date-editor.el-input),
+.sheet-form :deep(.el-date-editor.el-date-editor--date),
+.sheet-form :deep(.el-input) {
+  width: 100%;
 }
 .sheet-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 18px;
+  gap: 0 20px;
   align-items: start;
+}
+.sheet-span-2 {
+  grid-column: 1 / -1;
+}
+.sheet-hint {
+  grid-column: 1 / -1;
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #909399;
+}
+.sheet-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 28px;
+  padding: 4px 0 2px;
+}
+.sheet-checks :deep(.el-checkbox) {
+  margin-right: 0;
+  height: 24px;
 }
 
 .field-changed :deep(.el-input__wrapper),

@@ -81,3 +81,31 @@ def finish_batch_import(
     batch.imported_at = now
     db.commit()
     db.refresh(batch)
+
+    # 业务数据落库后反推补齐镇/村/组区域（缺则补，幂等）。
+    # 种子只提供省/市/县三级国标链路，镇/村/组以导入数据为准 —— 所有导入路径
+    # （CSV / GDB / 国标包）都收敛到本函数收尾，挂这里一次即可全覆盖。
+    try:
+        from app.db.init_db import sync_regions_from_business_codes
+
+        sync_regions_from_business_codes(db)
+    except Exception:  # noqa: BLE001 —— 区域反推失败不阻断导入结果
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "导入收尾阶段反推补齐镇/村/组区域失败（batch=%s）", batch.import_no
+        )
+
+    # 图层自愈：导入可能新增几何/扩大数据范围，确保 GeoServer 图层可用并刷新缓存
+    # （补发布缺失的 featuretype → 重算 bbox → 固定 gridSubset → 清空过期瓦片）。
+    # 内部已做「GeoServer 未启动则整体跳过 + 逐层容错」，失败只记日志不阻断导入。
+    try:
+        from app.services.geoserver_service import geoserver_service
+
+        geoserver_service.refresh_after_data_change()
+    except Exception:  # noqa: BLE001 —— 图层刷新失败不阻断导入结果
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "导入收尾阶段刷新 GeoServer 图层失败（batch=%s）", batch.import_no
+        )

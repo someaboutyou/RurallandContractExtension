@@ -23,8 +23,10 @@ from app.schemas.response import ApiResponse
 
 router = APIRouter()
 
-# backend/app/api/v1/endpoints/ → parents[4] = backend/，与 license.py 的 storage 定位一致
-UPDATES_DIR = Path(__file__).resolve().parents[4] / "storage" / "app-updates"
+# ⛔ 存储路径一律走 app.paths（编译布局下裸 parents[N] 会解析到 backend/dist/storage）
+from app.paths import STORAGE_DIR
+
+UPDATES_DIR = STORAGE_DIR / "app-updates"
 MANIFEST_FILE = UPDATES_DIR / "latest.json"
 
 

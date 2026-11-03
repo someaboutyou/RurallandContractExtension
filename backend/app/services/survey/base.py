@@ -15,6 +15,7 @@ from app.models.survey import (
 )
 from app.db.sequences import next_no as generate_business_no
 from app.models.user import User
+from app.paths import STORAGE_DIR
 from app.services.data_access_service import data_access_service
 from app.services.relation_codes import (
     HEAD_RELATION_VALUE,
@@ -80,8 +81,8 @@ def default_member_change_reason(contractor_change_type: str | None, member) -> 
 
 
 class SurveyServiceBase:
-    attachment_root = Path(__file__).resolve().parents[3] / "storage" / "survey_attachments"
-    authorization_root = Path(__file__).resolve().parents[3] / "storage" / "survey_authorizations"
+    attachment_root = STORAGE_DIR / "survey_attachments"
+    authorization_root = STORAGE_DIR / "survey_authorizations"
     operation_change_types = {
         "change_head",
         "member_maintain",

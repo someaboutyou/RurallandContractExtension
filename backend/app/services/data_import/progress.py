@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.core.crs import crs_to_epsg, describe_mismatch, get_target_srid
 from app.db.session import SessionLocal, set_current_user
 from app.models.data_import import DataImportBatch, DataImportFile
+from app.paths import STORAGE_DIR
 from app.models.user import User
 from app.services.data_access_service import data_access_service
 from app.services.data_import_progress import data_import_progress
@@ -122,7 +123,7 @@ async def start_gdb_import_job(
     if not filename.lower().endswith(".zip"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="please upload a ZIP archive containing a .gdb directory")
 
-    storage_dir = Path(__file__).resolve().parents[2] / "storage" / "data_imports" / str(batch.id)
+    storage_dir = STORAGE_DIR / "data_imports" / str(batch.id)
     storage_dir.mkdir(parents=True, exist_ok=True)
     stored_path = storage_dir / f"{datetime.now():%Y%m%d%H%M%S}_{Path(filename).name}"
     stored_path.write_bytes(content)
@@ -455,15 +456,16 @@ def process_gdb_layer(
             row_status = "pending"
             try:
                 with db.begin_nested():
-                    if not item["entity_key"]:
-                        raise ValueError("Missing entity key")
-                    if item["entity_key"] in seen_keys:
-                        raise ValueError(f"Duplicate entity key: {item['entity_key']}")
+                    # 缺键行（如成员缺 cbfbm/cyzjhm）照常落库做整理，仅用行号合成
+                    # 临时键防同批重复计签；真实 entity_key 仍原样记录。
+                    dedup_key = item["entity_key"] or f"__unkeyed__:{item['row_no']}"
+                    if dedup_key in seen_keys:
+                        raise ValueError(f"Duplicate entity key: {dedup_key}")
                     operation, target_id = import_row(
                         db, batch, import_file, row_record, file_type, item["normalized"],
                         current_user, now, item.get("geometry"), context,
                     )
-                seen_keys.add(item["entity_key"])
+                seen_keys.add(dedup_key)
                 row_record.operation_type = operation
                 row_status = "success"
                 row_record.target_id = target_id

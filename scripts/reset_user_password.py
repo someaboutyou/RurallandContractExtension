@@ -28,7 +28,15 @@ if _runtime_env.exists():
         key, value = line.split("=", 1)
         os.environ.setdefault(key.strip(), value.strip())
 
-sys.path.insert(0, str(PROJECT_ROOT / "backend"))
+# ⛔ 布局自适应：源码布局 app 在 backend/，编译布局（生产部署）在 backend/dist/app。
+# 源码存在时优先源码，否则落到编译版。
+_backend_root = PROJECT_ROOT / "backend"
+for _candidate in (_backend_root / "dist", _backend_root):
+    if (_candidate / "app").exists():
+        sys.path.insert(0, str(_candidate))
+if not any((p / "app").exists() for p in (_backend_root, _backend_root / "dist")):
+    print(f"找不到 app 包：{_backend_root} 与 {_backend_root / 'dist'} 下均无 app/，请确认部署布局")
+    sys.exit(3)
 
 from sqlalchemy import select  # noqa: E402
 

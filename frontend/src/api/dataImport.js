@@ -38,6 +38,13 @@ export function uploadImportGdb(batchId, formData) {
   });
 }
 
+export function uploadImportGbPackage(batchId, formData) {
+  return http.post(`/data-imports/${batchId}/package`, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    timeout: 300000,
+  });
+}
+
 export function fetchImportProgress(batchId) {
   return http.get(`/data-imports/${batchId}/progress`);
 }

@@ -72,6 +72,41 @@ if ($runtimeEnv.ContainsKey("DATABASE_USER") -and $DbUser -eq "RurallandContract
 if ($runtimeEnv.ContainsKey("DATABASE_PASSWORD") -and $DbPassword -eq "RurallandContractExtension") { $DbPassword = $runtimeEnv["DATABASE_PASSWORD"] }
 if ($runtimeEnv.ContainsKey("GEOSERVER_PORT") -and $Port -eq 8080) { $Port = [int]$runtimeEnv["GEOSERVER_PORT"] }
 
+# ── 目标投影坐标系解析 ──
+# 优先级：显式 -LayerSrs 参数 > runtime.env TARGET_SRID > 数据库 system_config.target_srid > 默认 4527。
+# system_config 是权威值（后端首次启动固化 / 还原现场库携带）；runtime.env 可能缺键（旧初始化产物）。
+# 各图层定义里硬编码的 "EPSG:4527" 只是占位值，发布前替换为实际带号，否则整层重投影
+# 偏移、地图空白、点选为空（2026-10-21 事故：4528 数据按 4527 发布）。
+# stbhhx（EPSG:4490 经纬度）等非占位值的图层保持自身定义不动。
+function Get-SystemConfigTargetSrid([string]$HostName, [int]$Port, [string]$Database, [string]$User, [string]$Password) {
+    if (-not (Test-Path $psql)) { return $null }
+    $sql = "SELECT value FROM system_config WHERE key = 'target_srid'"
+    $previousPassword = $env:PGPASSWORD
+    $env:PGPASSWORD = $Password
+    try {
+        $result = & $psql "-h" $HostName "-p" "$Port" "-U" $User "-d" $Database "-tAc" $sql
+        if ($LASTEXITCODE -ne 0) { return $null }
+        return (($result | Out-String).Trim())
+    } finally {
+        $env:PGPASSWORD = $previousPassword
+    }
+}
+
+if ($LayerSrs -ne "EPSG:4527") {
+    $targetSrs = $LayerSrs
+} elseif ($runtimeEnv.ContainsKey("TARGET_SRID")) {
+    $targetSrs = "EPSG:$($runtimeEnv["TARGET_SRID"])"
+} else {
+    $configSrid = Get-SystemConfigTargetSrid $DbHost $DbPort $DbName $DbUser $DbPassword
+    if ($configSrid -match '^\d+$') { $targetSrs = "EPSG:$configSrid" } else { $targetSrs = "EPSG:4527" }
+}
+if ($targetSrs -ne "EPSG:4527") {
+    foreach ($def in $layerDefs) {
+        if ($def.Srs -eq "EPSG:4527") { $def.Srs = $targetSrs }
+    }
+    Write-Host "Target projected SRS: $targetSrs"
+}
+
 function Read-Choice([string]$Prompt, [string[]]$Allowed, [string]$Default) {
     if ($NonInteractive) {
         return $Default
@@ -506,6 +541,14 @@ if (-not (Test-GeoServerEndpoint $storeUrl $headers)) {
 
 # ── Upload SLD Styles ──
 Write-Host "Uploading SLD styles..."
+# 默认图层缺 SLD 时硬失败（或强警告）：样式缺失时图层仍会发布成功，
+# 但前端请求会报 StyleNotDefined、整层看不见（2026-10-21 新机器安装事故）。
+$defaultSldPath = Join-Path $stylesDir "$DefaultLayer.sld"
+if (-not (Test-Path $defaultSldPath)) {
+    $msg = "SLD style file not found: $defaultSldPath. Layers would publish without styles (StyleNotDefined at request time). Check that datas\geoserver-styles was shipped with the package."
+    if ($RequireDefaultLayer) { throw $msg }
+    Write-Host "WARNING: $msg"
+}
 foreach ($layerDef in $layerDefs) {
     $sldPath = Join-Path $stylesDir "$($layerDef.Style).sld"
     Publish-GeoServerStyle -StyleName $layerDef.Style -SldPath $sldPath -Headers $headers

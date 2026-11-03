@@ -1,4 +1,4 @@
-param(
+﻿param(
     [int]$Port = 15432,
     [string]$DbName = "erlunyanbao",
     [string]$DbUser = "RurallandContractExtension",
@@ -75,7 +75,11 @@ function Test-ExtensionExists([string]$Name) {
 }
 
 function New-RandomPassword {
-    $chars = "ABCDEFGHKMNPQRSTUVWXYZabcdefghkmnpqrstuvwxyz23456789!#$%&*"
+    # ⛔ 只用字母数字：特殊字符（!#$%&* 等）会被 SQLAlchemy URI / GeoServer 数据源
+    # XML 等下游按字面量拼接的消费方打碎（# 当 fragment、% 当百分号编码、& 截断参数），
+    # 表现为 FATAL: password authentication failed（2026-10-19 目标机 init 踩过）。
+    # 24 位纯字母数字熵仍约 136 bit，足够。
+    $chars = "ABCDEFGHKMNPQRSTUVWXYZabcdefghkmnpqrstuvwxyz23456789"
     $random = [System.Security.Cryptography.RandomNumberGenerator]::Create()
     $bytes = New-Object byte[] 24
     $random.GetBytes($bytes)

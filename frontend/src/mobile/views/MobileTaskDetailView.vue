@@ -135,6 +135,9 @@
                   <van-tag v-if="isHouseholdHead(member)" color="#ee0a24" plain>户主</van-tag>
                   <van-tag v-if="member.isCoOwner === '1'" type="success" plain>共有人</van-tag>
                   <van-tag v-if="member._isNew" type="success">新增</van-tag>
+                  <van-tag :type="memberSheetFilled(member.sheet) ? 'success' : 'default'" plain>
+                    {{ memberSheetFilled(member.sheet) ? "已摸底" : "摸底未填" }}
+                  </van-tag>
                 </div>
                 <div class="m-member__ops">
                   <van-button size="mini" plain type="primary" @click="openMemberEdit(member)">编辑</van-button>
@@ -334,6 +337,7 @@ import { evaluateIdNoIssue } from "../../utils/validators";
 import { markTaskListDirty } from "../taskListState";
 import { isOcrAvailable } from "../ocr/idCapture.js";
 import MemberEditPopup from "../components/MemberEditPopup.vue";
+import { memberSheetFilled, validateMemberSheetFlow } from "../../config/surveySheets";
 import {
   VanButton,
   VanCell,
@@ -711,6 +715,9 @@ function collectValidationProblems() {
       problems.push(`成员「${label}」的证件号码：${memberIssue.message}`);
     }
   }
+  // 摸底状态机预检（与 PC 端 handleSaveResult / 后端 sheet.py 同判据同文案）：
+  // 必须有进才有出、出了还可以再进；事件时间不得越期。整户逐条点名。
+  problems.push(...validateMemberSheetFlow(validMembers.value));
   return problems;
 }
 

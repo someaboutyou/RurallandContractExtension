@@ -114,6 +114,7 @@ import { computed, nextTick, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
 import ContractorMemberPanel from "../ContractorMemberPanel.vue";
+import { validateMemberSheetFlow } from "../../../config/surveySheets";
 import ParcelInfoPanel from "../ParcelInfoPanel.vue";
 import PlotSketchMapPanel from "../PlotSketchMapPanel.vue";
 import ContractInfoPanel from "../ContractInfoPanel.vue";
@@ -896,6 +897,10 @@ async function handleSaveResult() {
   const idNoProblem = contractorMemberPanel.value?.validateIdNos?.()
     ?? (resultForm.idNo?.trim() ? "" : "承包方证件号码：请输入证件号码");
   if (idNoProblem) { ElMessage.warning(idNoProblem.split("\n").join("；")); return; }
+  // 成员摸底「在户状态机」预检（与后端 sheet.py::validate_member_sheet_flow 同判据）：
+  // 可以为空，但必须有进才有出，出了还可以再进 —— 违规逐条点名，不发请求。
+  const sheetProblems = validateMemberSheetFlow((resultForm.familyMembers || []).filter((m) => !m._deleted));
+  if (sheetProblems.length) { ElMessage.warning(sheetProblems.join("；")); return; }
   savingResult.value = true;
   creatingContractor.value = isCreatingContractorResult.value;
   try {

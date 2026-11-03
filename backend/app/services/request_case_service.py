@@ -27,10 +27,11 @@ from app.services.request_attachment_template_service import request_attachment_
 from app.services.request_workflow_mapping_service import request_workflow_mapping_service
 from app.services.workflow_definition_service import workflow_definition_service
 from app.services.workflow_service import WorkflowTaskConfig, workflow_service
+from app.paths import STORAGE_DIR
 
 
 class RequestCaseService:
-    attachment_root = Path(__file__).resolve().parents[2] / "storage" / "request_attachments"
+    attachment_root = STORAGE_DIR / "request_attachments"
     attachment_template_presets = {
         "首次登记": {
             "apply": [

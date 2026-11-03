@@ -3,10 +3,12 @@ import re
 import json
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.security import hash_password
+from app.db.region_full import load_centroids, parse_county_codes
 from app.domain.survey_attachment import (
     DEFAULT_SURVEY_ATTACHMENT_CATEGORY_NAMES,
     SURVEY_ATTACHMENT_STAGE_NAME,
@@ -22,6 +24,7 @@ from app.models.request_case import RequestCase
 from app.models.request_case_attachment import RequestCaseAttachment
 from app.models.request_workflow_mapping import RequestWorkflowMapping
 from app.models.role import Role
+from app.models.survey import SurveyCbfResult
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.user_region_permission import UserRegionPermission
@@ -496,6 +499,7 @@ LEGACY_DEFAULT_MAP_LAYER_KEYS = {
 
 def seed_initial_data(db: Session) -> None:
     ensure_default_regions(db)
+    ensure_map_center(db)
     ensure_tenants(db)
     sync_region_tenants(db)
     ensure_default_roles(db)
@@ -815,35 +819,221 @@ def ensure_demo_request_attachments(db: Session) -> None:
         db.commit()
 
 
+REGION_SEED_FILE = Path(__file__).with_name("region_seed.json")
+
+
 def ensure_default_regions(db: Session) -> None:
+    """区域初始化（2026-10-22 起）。
+
+    region_seed.json 由 fetch_region_seed.py 生成为**全国 省->市->县 三级**种子；
+    部署范围由 .env 的 REGION_SEED_COUNTIES（6 位码，县/市/省均可）决定：
+    只把配置码所在的省(/市/县)链路「缺则补」进 regions 表，不整库灌入全国区县。
+
+    ⚠️ 镇/村/组三级不在种子里 —— 由业务数据导入完成后
+    sync_regions_from_business_codes 从发包方编码反推补齐（缺则补，幂等）。
+    """
+    county_codes = parse_county_codes(settings.region_seed_counties)
+    items = _load_national_seed_items()
+    if county_codes:
+        if not items:
+            print(
+                "[seed] 警告：REGION_SEED_COUNTIES 已配置但 region_seed.json 缺失/无效，"
+                "跳过该初始化路径（构建机需运行 scripts/fetch_region_seed.py 生成并随包分发）"
+            )
+        else:
+            selected = _select_seed_subtree(items, county_codes)
+            if selected:
+                _insert_region_items(db, selected)
+                return
+            print(
+                f"[seed] 警告：配置码 {county_codes} 在全国种子里未找到对应链路，"
+                "跳过该初始化路径"
+            )
+
+    # 部署码未配置（dev / 演示库）：走内置 DEFAULT_REGIONS 兜底（泗洪演示数据）
     existing_codes = set(db.scalars(select(Region.code)).all())
-    if all(item["code"] in existing_codes for item in DEFAULT_REGIONS):
+    if not all(item["code"] in existing_codes for item in DEFAULT_REGIONS):
+        created_by_code: dict[str, Region] = {}
+        for item in DEFAULT_REGIONS:
+            region = db.scalar(select(Region).where(Region.code == item["code"]))
+            if region is None:
+                parent_id = None
+                if item["parent_code"]:
+                    parent = created_by_code.get(item["parent_code"]) or db.scalar(
+                        select(Region).where(Region.code == item["parent_code"])
+                    )
+                    parent_id = parent.id if parent else None
+                region = Region(
+                    name=item["name"],
+                    code=item["code"],
+                    level=item["level"],
+                    full_name=item["full_name"],
+                    parent_id=parent_id,
+                )
+                db.add(region)
+                db.flush()
+            created_by_code[item["code"]] = region
+        db.commit()
+
+
+def _load_national_seed_items() -> list[dict]:
+    """读取全国三级区域种子 region_seed.json（scripts/fetch_region_seed.py 生成）。
+
+    返回 regions 列表（省->市->县，含 parent_code）；文件缺失/损坏返回空列表。
+    """
+    if not REGION_SEED_FILE.exists():
+        return []
+    try:
+        # 源码/配置文件可能带 BOM，统一用 utf-8-sig
+        payload = json.loads(REGION_SEED_FILE.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"[seed] 区域种子文件读取失败，跳过：{REGION_SEED_FILE} ({exc})")
+        return []
+    return payload.get("regions") or []
+
+
+def _select_seed_subtree(items: list[dict], codes: list[str]) -> list[dict]:
+    """从全国种子里抽取配置码覆盖的省(/市/县)链路。
+
+    沿 parent_code 向上回溯，保证父节点先于子节点；输出按
+    (码长, 码) 排序，使省(X X 0 0 0 0) < 市(X X X X 0 0) < 县。
+    配置码在种子里找不到时打印警告（不中断，交由业务导入反推兜底）。
+    """
+    by_code = {item.get("code"): item for item in items if item.get("code")}
+    selected: dict[str, dict] = {}
+
+    def take(code: str) -> None:
+        if code in selected:
+            return
+        item = by_code.get(code)
+        if item is None:
+            return
+        selected[code] = item
+        parent_code = (item.get("parent_code") or "").strip()
+        if parent_code:
+            take(parent_code)
+
+    for code in codes:
+        take(code)
+
+    missing = [code for code in codes if code not in selected]
+    if missing:
+        print(f"[seed] 警告：配置码 {missing} 不在全国种子里（请核对 6 位国家统计局区划码）")
+
+    return sorted(selected.values(), key=lambda item: (len(item["code"]), item["code"]))
+
+
+def _insert_region_items(db: Session, items: list[dict]) -> bool:
+    """「缺则补」插入区域条目（全国种子抽链路 / DEFAULT_REGIONS 兜底共用）。
+
+    已存在的 code 一律不动；返回 True 表示本次调用实际为部署提供了有效数据源。
+    """
+    existing_codes = set(db.scalars(select(Region.code)).all())
+    pending = [item for item in items if item.get("code") not in existing_codes]
+    if not pending:
+        return True
+
+    code_to_id: dict[str, int] = {
+        code: rid for code, rid in db.execute(select(Region.code, Region.id)).all()
+    }
+    for item in pending:
+        code = (item.get("code") or "").strip()
+        if not code or code in code_to_id:
+            continue
+        parent_code = (item.get("parent_code") or "").strip() or None
+        region = Region(
+            name=item.get("name") or code,
+            code=code,
+            level=item.get("level") or "custom",
+            full_name=item.get("full_name") or item.get("name") or code,
+            parent_id=code_to_id.get(parent_code) if parent_code else None,
+            sort_order=len(code_to_id),
+        )
+        db.add(region)
+        db.flush()
+        code_to_id[code] = region.id
+    db.commit()
+    return True
+
+
+def ensure_map_center(db: Session) -> None:
+    """部署地地图默认中心点：按部署初始化的行政区划码查 centroid 表，
+    首次算出后固化进 system_config（key = map_center / home_region_code），
+    之后不再变化 —— 与 target_srid 同一「首次启动固化」模式。
+
+    配置码来源：.env 的 REGION_SEED_COUNTIES（install.ps1 部署时让部署人填写，
+    支持县/市/省码）。不读 region_seed.json 的 countyCodes —— 那是构建机上的
+    历史产物，dev/存量库没配 env 时若拿它当部署地会把中心点固化到错误位置。
+    未配置、或 centroid 数据缺失时不写，前端地图保持内置兜底中心。
+    """
+    locked = db.execute(text("SELECT value FROM system_config WHERE key = 'map_center'")).fetchone()
+    if locked is not None:
         return
 
-    created_by_code: dict[str, Region] = {}
-    for item in DEFAULT_REGIONS:
-        region = db.scalar(select(Region).where(Region.code == item["code"]))
-        if region is None:
-            parent_id = None
-            if item["parent_code"]:
-                parent = created_by_code.get(item["parent_code"]) or db.scalar(
-                    select(Region).where(Region.code == item["parent_code"])
-                )
-                parent_id = parent.id if parent else None
-            region = Region(
-                name=item["name"],
-                code=item["code"],
-                level=item["level"],
-                full_name=item["full_name"],
-                parent_id=parent_id,
-            )
-            db.add(region)
-            db.flush()
-        created_by_code[item["code"]] = region
+    codes = parse_county_codes(settings.region_seed_counties)
+    if not codes:
+        return
+
+    centroids = load_centroids()
+    if not centroids:
+        print("[seed] 提示：region_centroids.json 缺失，地图默认中心点保持前端兜底")
+        return
+    points = [centroids[code] for code in codes if code in centroids]
+    missing = [code for code in codes if code not in centroids]
+    if missing:
+        print(f"[seed] 警告：这些配置码没有中心点数据，已跳过：{missing}")
+    if not points:
+        return
+    if len(points) == 1:
+        lng, lat = points[0]
+    else:
+        # 多个码（如填了全市/多县）：取各码中心点的包围盒中心
+        lngs = [p[0] for p in points]
+        lats = [p[1] for p in points]
+        lng = round((min(lngs) + max(lngs)) / 2, 6)
+        lat = round((min(lats) + max(lats)) / 2, 6)
+
+    center = f"{lng:.6f},{lat:.6f}"
+    db.execute(
+        text(
+            "INSERT INTO system_config (key, value, remark) VALUES ('map_center', :v, "
+            "'地图默认中心点 lng,lat，部署初始化时按行政区划码固化；改部署地需重建库或直接改本行')"
+            " ON CONFLICT (key) DO NOTHING"
+        ),
+        {"v": center},
+    )
+    db.execute(
+        text(
+            "INSERT INTO system_config (key, value, remark) VALUES ('home_region_code', :v, "
+            "'部署地行政区划码（6 位国标码），部署初始化时固化') ON CONFLICT (key) DO NOTHING"
+        ),
+        {"v": codes[0]},
+    )
     db.commit()
+    print(f"[seed] 地图默认中心点已固化：{center}（配置码：{codes}）")
 
 
 def sync_regions_from_business_codes(db: Session) -> None:
+    """业务数据导入后反推补齐镇/村/组区域（缺则补，幂等）。
+
+    种子只提供省/市/县三级国标链路；镇/村/组的码与名来自发包方编码
+    （fbfbm 前 14 位 = 村组码，fbfmc 里含镇村名）。省/县优先挂到种子初始化
+    出的真实节点，种子缺位（如导入未配置县的数据）才落占位节点。
+    """
+    # ⛔ 兜底回填：源数据没带组码字段时 survey_cbf_result.group_region_code 会整列
+    # 落空，而批次初始化按 group_region_code 前缀过滤 —— NULL 一行都命中不了，
+    # 表现为「该区域暂无可用于初始化的承包方数据」（巨日合数据 2026-10-21/22 两次踩坑）。
+    # 组码 = region_code（14 位村组码），直接回填。
+    db.execute(
+        update(SurveyCbfResult)
+        .where(
+            SurveyCbfResult.group_region_code.is_(None),
+            SurveyCbfResult.region_code.isnot(None),
+        )
+        .values(group_region_code=SurveyCbfResult.region_code)
+    )
+    db.commit()
+
     group_rows = db.execute(
         select(Fbf.fbfbm, func.min(Fbf.fbfmc))
         .where(func.length(Fbf.fbfbm) >= 12)
@@ -854,20 +1044,27 @@ def sync_regions_from_business_codes(db: Session) -> None:
         return
 
     created = False
-    province_code = "auto-province"
-    province = db.scalar(select(Region).where(Region.code == province_code))
-    if province is None:
-        province = Region(
-            name="导入数据省级占位",
-            code=province_code,
-            level="province",
-            full_name="导入数据省级占位",
-            parent_id=None,
-            tenant_code=None,
-        )
-        db.add(province)
-        db.flush()
-        created = True
+    placeholder_province: Region | None = None
+    placeholder_province_checked = False
+
+    def _get_placeholder_province() -> Region:
+        nonlocal placeholder_province, placeholder_province_checked, created
+        if not placeholder_province_checked:
+            placeholder_province_checked = True
+            placeholder_province = db.scalar(select(Region).where(Region.code == "auto-province"))
+            if placeholder_province is None:
+                placeholder_province = Region(
+                    name="导入数据省级占位",
+                    code="auto-province",
+                    level="province",
+                    full_name="导入数据省级占位",
+                    parent_id=None,
+                    tenant_code=None,
+                )
+                db.add(placeholder_province)
+                db.flush()
+                created = True
+        return placeholder_province
 
     for raw_group_code, raw_group_name in group_rows:
         if not raw_group_code:
@@ -876,6 +1073,11 @@ def sync_regions_from_business_codes(db: Session) -> None:
         village_code = raw_group_code[:12]
         county_code = village_code[:6]
         town_code = village_code[:9]
+        # 种子是国标省码（XX0000），业务码前 2 位即省段
+        province_code = f"{county_code[:2]}0000"
+        province = db.scalar(select(Region).where(Region.code == province_code))
+        if province is None:
+            province = _get_placeholder_province()
 
         county = db.scalar(select(Region).where(Region.code == county_code))
         if county is None:
@@ -893,10 +1095,13 @@ def sync_regions_from_business_codes(db: Session) -> None:
 
         town = db.scalar(select(Region).where(Region.code == town_code))
         if town is None:
-            # 从fbf表获取正确的镇名
-            _fbf_town = db.scalar(select(Fbf.fbfmc).where(Fbf.region_code == town_code))
+            # 从fbf表获取正确的镇名：fbf.region_code 存的层级不固定（可能是村组码），
+            # 精确等值匹配会落空 → 改按 fbfbm 前缀匹配（fbfbm 前 9 位即镇码）
+            _fbf_town = db.scalar(select(Fbf.fbfmc).where(Fbf.fbfbm.like(f"{town_code}%")))
             if _fbf_town:
-                _s = re.sub(r'^.*?县', '', _fbf_town)
+                # 发包方名称形如「扎鲁特旗巨日合镇XX村经济合作社」：先剥省市区县旗前缀，
+                # 再截镇/乡/开发区段（旧正则只剥"县"，蒙旗名会带出"扎鲁特旗"前缀）
+                _s = re.sub(r'^.*?(?:[县市区旗])', '', _fbf_town)
                 _m = re.search(r'^(.*?(?:镇|乡|开发区))', _s)
                 town_name = _m.group(1) if _m else f"{town_code} 镇级区域"
             else:
@@ -915,8 +1120,8 @@ def sync_regions_from_business_codes(db: Session) -> None:
 
         village = db.scalar(select(Region).where(Region.code == village_code))
         if village is None:
-            # 从fbf表获取正确的村名
-            _fbf_village = db.scalar(select(Fbf.fbfmc).where(Fbf.region_code == village_code))
+            # 从fbf表获取正确的村名：同上，按 fbfbm 前 12 位前缀匹配
+            _fbf_village = db.scalar(select(Fbf.fbfmc).where(Fbf.fbfbm.like(f"{village_code}%")))
             if _fbf_village:
                 _s2 = re.sub(r'^.*?(?:镇|乡|开发区)', '', _fbf_village)
                 _m2 = re.search(r'^(.*?(?:村|居|社区))', _s2)
@@ -1105,6 +1310,7 @@ def ensure_default_users(db: Session) -> None:
     """
     password_hash = hash_password("Admin123456")
     preferred_regions = _resolve_demo_regions(db)
+    existing_codes = set(db.scalars(select(Region.code)).all())
     changed = False
     for item in DEFAULT_USERS:
         existing = db.scalar(select(User).where(User.username == item["username"]))
@@ -1112,9 +1318,27 @@ def ensure_default_users(db: Session) -> None:
             # 已存在：不覆盖资料、不重置角色/区域、不重灌区域授权。
             continue
         role = db.scalar(select(Role).where(Role.code == item["role_code"]))
-        region_code = item.get("region_code") or preferred_regions.get(item["role_code"])
-        region = db.scalar(select(Region).where(Region.code == region_code))
-        if role is None or region is None:
+        if role is None:
+            continue
+        # 区域码候选：代码里硬编码的历史值（旧部署/演练库仍在用）→ 按部署地区域
+        # 动态解析的值。逐个找第一个真实存在的区域；都不存在才跳过该账号。
+        # ⛔ 不能只认硬编码值：外地全新部署（如通辽）没有 321324，会连 admin
+        # 都创建不出来，系统无法登录（2026-10-21 修复）。
+        region = None
+        for candidate in (
+            item.get("region_code"),
+            preferred_regions.get(item["role_code"]),
+        ):
+            if candidate and candidate in existing_codes:
+                region = db.scalar(select(Region).where(Region.code == candidate))
+                if region is not None:
+                    break
+        if region is None:
+            continue
+        permission_codes = _demo_permission_codes(db, item["username"], region.code, preferred_regions)
+        if not permission_codes:
+            # 授权范围在本地数据里拼不出来（如组级测试码）——宁可不建这个演示号，
+            # 也不能造出指向不存在区域的授权行。
             continue
         user = User(
             username=item["username"],
@@ -1128,7 +1352,6 @@ def ensure_default_users(db: Session) -> None:
         )
         db.add(user)
         db.flush()
-        permission_codes = item.get("permission_codes") or [region.code]
         _seed_user_region_permissions(db, user, permission_codes)
         changed = True
     if changed:
@@ -1136,16 +1359,61 @@ def ensure_default_users(db: Session) -> None:
 
 
 def _resolve_demo_regions(db: Session) -> dict[str, str]:
+    """给演示账号定位部署地的县/镇/村码。
+
+    优先从业务数据（发包方编码）反推——库里有数据时最准；否则从区域表取
+    （REGION_SEED_COUNTIES / region_seed 初始化出来的部署地子树）。
+    ⛔ 不再退回硬编码泗洪码：外地全新部署没有 321324，退回等于全部落空
+    （连 admin 都建不出来，2026-10-21 修复）。取不到就留空，由调用方跳过。
+    """
     business_county = db.scalar(select(func.min(func.substring(Fbf.fbfbm, 1, 6))))
     business_town = db.scalar(select(func.min(func.substring(Fbf.fbfbm, 1, 9))))
     business_village = db.scalar(select(func.min(func.substring(Fbf.fbfbm, 1, 12))))
+    county = business_county
+    town = business_town
+    village = business_village
+    if not county:
+        county_region = db.scalar(select(Region).where(Region.level == "county").order_by(Region.code))
+        if county_region is not None:
+            county = county_region.code
+            town_region = db.scalar(
+                select(Region)
+                .where(Region.level == "town", Region.code.startswith(county))
+                .order_by(Region.code)
+            )
+            if town_region is not None:
+                town = town_region.code
+                village_region = db.scalar(
+                    select(Region)
+                    .where(Region.level == "village", Region.code.startswith(town))
+                    .order_by(Region.code)
+                )
+                if village_region is not None:
+                    village = village_region.code
     return {
-        "platform_admin": business_county or "321324",
-        "county_auditor": business_county or "321324",
-        "town_auditor": business_town or "321324100",
-        "operator": business_town or "321324100",
-        "village_auditor": business_village or "321324100001",
+        "platform_admin": county or "",
+        "county_auditor": county or "",
+        "town_auditor": town or county or "",
+        "operator": town or county or "",
+        "village_auditor": village or town or county or "",
     }
+
+
+def _demo_permission_codes(
+    db: Session, username: str, region_code: str, preferred_regions: dict[str, str]
+) -> list[str]:
+    """给演示账号推导默认区域授权码（只允许指向真实存在的区域，见 _seed_user_region_permissions）。"""
+    if username == "multi_scope_user":
+        codes = []
+        for code in (preferred_regions.get("operator"), preferred_regions.get("village_auditor")):
+            if code and code != region_code and code not in codes:
+                codes.append(code)
+        return codes or [region_code]
+    if username == "group_scope_user":
+        # 14 位组码公开数据里没有，只有业务导入/演练库才有；没有就不建这个演示号。
+        group_code = db.scalar(select(func.min(Region.code)).where(func.length(Region.code) == 14))
+        return [group_code] if group_code else []
+    return [region_code]
 
 
 def _seed_user_region_permissions(db: Session, user: User, region_codes: list[str]) -> None:
@@ -1168,7 +1436,12 @@ def _seed_user_region_permissions(db: Session, user: User, region_codes: list[st
         return
 
     desired_codes = {code for code in (_normalize_region_code(raw_code) for raw_code in region_codes) if code}
-    for code in desired_codes:
+    # ⛔ 防御：只落真实存在的区域（演示码是动态拼的，双重保险），避免造出
+    # 指向不存在区域的授权行——那种行会让鉴权/前端树渲染出幽灵节点。
+    existing_region_codes = set(db.scalars(select(Region.code)).all())
+    for code in sorted(desired_codes):
+        if code not in existing_region_codes:
+            continue
         db.add(
             UserRegionPermission(
                 user_id=user.id,

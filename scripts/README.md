@@ -91,9 +91,19 @@
 
 启动 PostGIS、Redis、GeoServer、FastAPI 后端。前端由后端通过 StaticFiles 托管，无需 Node.js 或 npm。
 
-| Windows | Linux |
-|---------|-------|
-| `.\scripts\start-all.cmd` | `bash ./scripts/start-all.sh` |
+| 场景 | Windows |
+|------|---------|
+| 可见窗口启动（调试用） | `.\scripts\start-all.cmd` |
+| **静默后台启动（推荐日常用）** | 双击 `.\scripts\start-production-silent.pyw` |
+
+**静默模式说明**：全程无任何控制台窗口，后端/GeoServer 在后台运行，不会被误操作关闭控制台。
+启动器为 `pythonw.exe`（Python 自带的无控制台解释器）驱动的 `.pyw` 脚本，复用 `start-production.ps1 -Silent` 完整启动流程，无任何额外依赖。
+- 开发机一般双击 `.pyw` 即可运行（系统已关联 Python）；目标机若双击无反应，右键该文件 → 打开方式 → 选择 `runtime\windows\python\pythonw.exe` 并勾选"始终"
+- 也可创建桌面快捷方式，目标为：`runtime\windows\python\pythonw.exe` + 参数 `scripts\start-production-silent.pyw`
+- 开机自启：把上述快捷方式放入 `shell:startup` 文件夹（Win+R 输入 `shell:startup`）
+- 启动日志：`runtime\logs\startup-silent.log`（仅静默模式的启动过程记录）
+- 后端运行日志：`runtime\logs\backend.log`；GeoServer 日志：`runtime\logs\geoserver.out.log`
+- 停止服务仍用 `.\scripts\stop-all.cmd`（按 PID 文件 + 进程特征 + 端口兜底，静默进程一样能杀干净）
 
 启动后访问：
 - 后端 API：http://127.0.0.1:8000

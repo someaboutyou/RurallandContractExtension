@@ -48,19 +48,29 @@ class SurveyCbfMemberChangeSheet(TenantScopedMixin, TimestampMixin, Base):
     is_second_round_member: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     # ── 二轮承包 1996~2018 增减（一次事件：类型 + 时间） ──
-    #: MEMBER_EVENT_TYPES 之一（add_birth/add_move_in/add_restore/add_other/
-    #: sub_compensated/sub_death/sub_married_out/sub_move_out/sub_other）
+    #: MEMBER_EVENT_TYPES 之一（add_birth/add_married_in/add_move_in/add_other/
+    #: sub_death/sub_married_out/sub_move_out/sub_other；旧码 compensated/
+    #: sub_compensated/withdraw 已由迁移拆到下方复选列并清空）
     sr_event_type: Mapped[str | None] = mapped_column(String(24), nullable=True)
     sr_event_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    #: 该成员在二轮期已补地（独立复选框，与事件正交：新增人口不一定补了地）
+    sr_compensated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: 该成员在二轮期被抽回或放弃承包地（独立复选框）
+    sr_withdraw: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     #: 二轮期满后新增家庭人口（注1 勾稽列 16）
     sr_new_population: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # ── 延包 2018~2026 增减 ──
     ext_event_type: Mapped[str | None] = mapped_column(String(24), nullable=True)
     ext_event_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    #: 该成员在延包期已补地（独立复选框）
+    ext_compensated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: 该成员在延包期被抽回或放弃承包地（独立复选框）
+    ext_withdraw: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     #: 延包或减并新增家庭人口
     ext_new_population: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    #: 延包或减并时间
+    #: ⚠️ 已废弃（2026-10-15）：列 28「成员增减变动时间」改由两期事件时间取
+    #: 最后者推导（build_member_change_context），不再单独录入；列保留兼容历史数据。
     restructure_time: Mapped[date | None] = mapped_column(Date, nullable=True)
     #: 有无增减家庭成员（None=按事件是否填写推导）
     has_change: Mapped[bool | None] = mapped_column(Boolean, nullable=True)

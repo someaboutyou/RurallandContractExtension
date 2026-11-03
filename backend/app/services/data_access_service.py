@@ -51,8 +51,16 @@ class DataAccessService:
         return normalized[:6] if normalized and len(normalized) >= 6 else None
 
     def derive_level(self, code: str | None) -> str:
-        normalized = self.normalize_region_code(code)
-        return LEVEL_BY_LENGTH.get(len(normalized or ""), "custom")
+        normalized = self.normalize_region_code(code) or ""
+        # 6 位码有省/市/县三级歧义，按国标后缀区分：
+        # XX0000 省、XXXX00 市（末两位 00 但前四位非 00）、其余县。
+        if len(normalized) == 6:
+            if normalized.endswith("0000"):
+                return "province"
+            if normalized.endswith("00"):
+                return "city"
+            return "county"
+        return LEVEL_BY_LENGTH.get(len(normalized), "custom")
 
     def get_system_region_code(self) -> str | None:
         return self.normalize_region_code(license_validator.get_authorized_region_code())

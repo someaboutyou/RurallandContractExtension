@@ -1,4 +1,4 @@
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 from app.core.crs import get_target_srid, srid_display_name
@@ -6,6 +6,30 @@ from app.core.crs import get_target_srid, srid_display_name
 #: 本进程的目标坐标系（安装期选定、首次启动固化进 system_config，见 _upgrade_system_config）。
 #: 此后库内空间数据只用这一个坐标系；env 改成别的值会在启动时被校验拦下。
 TARGET_SRID = get_target_srid()
+
+
+def _upgrade_gb_import_trace_columns(engine: Engine) -> None:
+    """国标包导入的回滚追踪列：cbht / survey_jzd_result / survey_jzx_result。
+
+    回滚框架 Part 1 按 ``source_import_batch_id`` 删除本批插入的行（见
+    ``data_import/core.py::rollback_batch``），这三张表原先没有该列，
+    国标包导入的合同/界址点/界址线将无法回滚。
+    """
+    inspector = inspect(engine)
+    with engine.begin() as connection:
+        for table_name in ("cbht", "survey_jzd_result", "survey_jzx_result"):
+            if not inspector.has_table(table_name):
+                continue
+            columns = {column["name"] for column in inspector.get_columns(table_name)}
+            for column_name in ("source_import_batch_id", "last_import_batch_id"):
+                if column_name not in columns:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE {table_name} ADD COLUMN {column_name} INTEGER"
+                    )
+            connection.exec_driver_sql(
+                f"CREATE INDEX IF NOT EXISTS ix_{table_name}_source_import_batch_id"
+                f" ON {table_name}(source_import_batch_id)"
+            )
 
 
 def upgrade_schema(engine: Engine) -> None:
@@ -41,9 +65,12 @@ def upgrade_schema(engine: Engine) -> None:
     _upgrade_survey_parcel_uniqueness(engine)
     _upgrade_survey_boundary_uniqueness(engine)
     _upgrade_cbht_contract_columns(engine)
+    _upgrade_gb_import_trace_columns(engine)
     _upgrade_data_export_progress(engine)
     _upgrade_member_sheet_places(engine)
+    _upgrade_member_sheet_flow_split(engine)
     _seed_survey_org_setting(engine)
+    _seed_app_download_setting(engine)
 
 
 def _upgrade_data_import_operations(engine: Engine) -> None:
@@ -155,6 +182,43 @@ def _upgrade_member_sheet_places(engine: Engine) -> None:
     with engine.begin() as connection:
         _add_column_if_missing(connection, columns, "survey_cbf_member_change_sheets", "hukou_place", "VARCHAR(200)")
         _add_column_if_missing(connection, columns, "survey_cbf_member_change_sheets", "residence_place", "VARCHAR(200)")
+
+
+def _upgrade_member_sheet_flow_split(engine: Engine) -> None:
+    """摸底表把「已补地 / 抽回或放弃承包地」从事件下拉拆成每期独立复选框（2026-10-15）。
+
+    口径：新增人口不一定补了地、减少人口也不一定立即抽回 —— 事件（进出）与
+    补地/抽回正交，可同时成立。落地：
+      ① 加 4 个 BOOLEAN 复选列（sr_/ext_ × compensated/withdraw）；
+      ② 存量行旧事件码拆列：``compensated``/``sub_compensated`` → 补地勾选且
+         事件码清空，``withdraw`` → 抽回勾选且事件码清空（重复执行无副作用）。
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("survey_cbf_member_change_sheets"):
+        return
+    table_name = "survey_cbf_member_change_sheets"
+    columns = {c["name"] for c in inspector.get_columns(table_name)}
+    with engine.begin() as connection:
+        _add_column_if_missing(connection, columns, table_name, "sr_compensated", "BOOLEAN NOT NULL DEFAULT FALSE")
+        _add_column_if_missing(connection, columns, table_name, "sr_withdraw", "BOOLEAN NOT NULL DEFAULT FALSE")
+        _add_column_if_missing(connection, columns, table_name, "ext_compensated", "BOOLEAN NOT NULL DEFAULT FALSE")
+        _add_column_if_missing(connection, columns, table_name, "ext_withdraw", "BOOLEAN NOT NULL DEFAULT FALSE")
+        connection.exec_driver_sql(
+            f"UPDATE {table_name} SET sr_compensated = TRUE, sr_event_type = NULL "
+            "WHERE sr_event_type IN ('compensated', 'sub_compensated')"
+        )
+        connection.exec_driver_sql(
+            f"UPDATE {table_name} SET sr_withdraw = TRUE, sr_event_type = NULL "
+            "WHERE sr_event_type = 'withdraw'"
+        )
+        connection.exec_driver_sql(
+            f"UPDATE {table_name} SET ext_compensated = TRUE, ext_event_type = NULL "
+            "WHERE ext_event_type IN ('compensated', 'sub_compensated')"
+        )
+        connection.exec_driver_sql(
+            f"UPDATE {table_name} SET ext_withdraw = TRUE, ext_event_type = NULL "
+            "WHERE ext_event_type = 'withdraw'"
+        )
 
 
 def _normalize_region_scope_data(engine: Engine) -> None:
@@ -2022,4 +2086,60 @@ def _seed_survey_org_setting(engine: Engine) -> None:
                 SELECT 1 FROM dictionary_items WHERE dict_type = 'survey_org'
             )
             """
+        )
+
+
+def _seed_app_download_setting(engine: Engine) -> None:
+    """预置「手机App下载地址（外网）」字典项（幂等，逐项补缺）。
+
+    PC 端右上角「下载App」二维码指向外网下载服务器，IP / 端口 / 路径
+    全部走字典 ``app_download`` 配置，不在代码里写死。这里只在对应键
+    **完全不存在**时补种一条空值项（item_name 留空 = 未配置），
+    绝不覆盖运维在「字典管理」页填过的值——删掉某一项也会被重新补上，
+    想停用二维码请把该项停用（enabled = FALSE）而不是删除。
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("dictionary_items"):
+        return
+    presets = [
+        ("ip", 0, "外网下载服务器的 IP 或域名。例：221.226.214.70"),
+        ("port", 1, "外网下载端口，留空按默认 80。例：8090"),
+        ("path", 2, "下载路径（URL 中 IP:端口 后面的部分）。安装包放 backend\\storage\\app-downloads\\ 下，填 /downloads/<文件名>，例：/downloads/rural.apk"),
+    ]
+    with engine.begin() as connection:
+        for key, sort_order, remark in presets:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO dictionary_items
+                        (dict_type, dict_name, item_value, item_name, sort_order, enabled, remark)
+                    SELECT
+                        'app_download',
+                        '手机App下载地址（外网）',
+                        CAST(:key AS VARCHAR(100)),
+                        '',
+                        CAST(:sort_order AS INTEGER),
+                        TRUE,
+                        CAST(:remark AS TEXT)
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM dictionary_items
+                        WHERE dict_type = 'app_download'
+                          AND item_value = CAST(:key AS VARCHAR(100))
+                    )
+                    """
+                ),
+                {"key": key, "sort_order": sort_order, "remark": remark},
+            )
+        # 旧版 path 项的 remark 示例指向不存在的 /app/ 路径；只覆写与旧预设
+        # 完全一致的文本，运维改过的 remark 不动。
+        connection.execute(
+            text(
+                """
+                UPDATE dictionary_items
+                SET remark = '下载路径（URL 中 IP:端口 后面的部分）。安装包放 backend\\storage\\app-downloads\\ 下，填 /downloads/<文件名>，例：/downloads/rural.apk'
+                WHERE dict_type = 'app_download'
+                  AND item_value = 'path'
+                  AND remark = '下载路径（URL 中 IP:端口 后面的部分）。例：/app/rural.apk'
+                """
+            )
         )

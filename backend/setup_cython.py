@@ -43,9 +43,27 @@ KEEP_AS_PY_DIRS = [
 ]
 
 # Directories containing non-Python runtime files that must be copied to dist/
+# ⛔ app/templates 是打印模板（地籍调查/合同/申请表等，contract_template_*_service
+#    按 parent.parent/templates 解析）——漏拷会导致目标机打印/出件全部报模板不存在
+#    （2026-10-20 目标机事故）
 COPY_DIRS = [
+    "app/templates",
     "app/workflows",
     "app/storage",
+]
+
+# Non-Python single files that must be copied to dist/ preserving relative path.
+# ⛔ app/db/region_seed.json 是区域初始化种子（scripts/fetch_region_seed.py 生成），
+#    init_db.py 按 Path(__file__).with_name("region_seed.json") 读取 ——
+#    漏拷会导致编译布局下部署后区域只剩江苏省/泗洪县两条。
+COPY_FILES = [
+    "app/db/region_seed.json",
+    # 全国行政区划中心点（fetch_region_centroids.py 生成，~130KB）：
+    # 部署初始化时按 REGION_SEED_COUNTIES 计算 system_config.map_center（地图默认中心点）。
+    "app/db/region_centroids.json",
+    # 全国行政区划数据包（fetch_region_seed.py --full 生成，~12MB）：
+    # 目标机 .env 配 REGION_SEED_COUNTIES 后，首次启动自动初始化对应区域树。
+    "app/db/region_full.zip",
 ]
 
 
@@ -77,6 +95,15 @@ def copy_kept_files(compile_files: list[str], keep_files: list[str]) -> None:
                 shutil.rmtree(str(dst_dir))
             shutil.copytree(str(src_dir), str(dst_dir))
             print(f"  Copied dir: {dir_rel}")
+
+    # Copy non-Python single files
+    for file_rel in COPY_FILES:
+        src = HERE / file_rel
+        if src.is_file():
+            dst = DIST_DIR / file_rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(src), str(dst))
+            print(f"  Copied file: {file_rel}")
 
 
 def main():

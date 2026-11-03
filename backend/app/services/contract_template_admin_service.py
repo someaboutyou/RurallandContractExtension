@@ -240,7 +240,8 @@ def _sample_sheet_context() -> dict:
     """两张摸底表预览样例（键与 ``survey/sheet.py`` 的打印上下文同源）。"""
     return {
         "land_min_rows": 6,
-        "member_min_rows": 8,
+        # 与模板默认一致：代号行下预留 7 行（2026-10-15 用户批注），不含合计行
+        "member_min_rows": 7,
         "totals": {"originalAreaMu": "2.87", "currentAreaMu": "2.87"},
         "sheet": {
             "contractNo": "341321103201010028J",
@@ -281,8 +282,8 @@ def _sample_sheet_context() -> dict:
                 "memberName": "王传德", "idNo": "342221194803064018", "phone": "",
                 "relationText": "户主",
                 "participatedSecondRound": True, "inRegister": True, "is1996Member": True,
-                "srEventType": "", "srEventDate": "",
-                "extEventType": "", "extEventDate": "",
+                "srEventType": "", "srEventDate": "", "srCompensated": False, "srWithdraw": False,
+                "extEventType": "", "extEventDate": "", "extCompensated": False, "extWithdraw": False,
                 "changeTime": "", "inHousehold": True, "economicRelation": "",
                 "isFiscalSupported": False, "isCivilServant": False, "remark": "",
             },
@@ -290,8 +291,8 @@ def _sample_sheet_context() -> dict:
                 "memberName": "王大为", "idNo": "342221199502114017", "phone": "15385766993",
                 "relationText": "之子",
                 "participatedSecondRound": False, "inRegister": True, "is1996Member": False,
-                "srEventType": "add_birth", "srEventDate": "1995-02-11",
-                "extEventType": "", "extEventDate": "",
+                "srEventType": "add_birth", "srEventDate": "1995-02-11", "srCompensated": True, "srWithdraw": False,
+                "extEventType": "", "extEventDate": "", "extCompensated": False, "extWithdraw": False,
                 "changeTime": "1995.02", "inHousehold": True, "economicRelation": "本户成员",
                 "isFiscalSupported": False, "isCivilServant": False, "remark": "",
             },
@@ -299,8 +300,8 @@ def _sample_sheet_context() -> dict:
                 "memberName": "王李氏", "idNo": "", "phone": "",
                 "relationText": "母亲",
                 "participatedSecondRound": True, "inRegister": True, "is1996Member": True,
-                "srEventType": "sub_death", "srEventDate": "2012-06-18",
-                "extEventType": "", "extEventDate": "",
+                "srEventType": "sub_death", "srEventDate": "2012-06-18", "srCompensated": False, "srWithdraw": False,
+                "extEventType": "", "extEventDate": "", "extCompensated": False, "extWithdraw": False,
                 "changeTime": "2012.06", "inHousehold": False, "economicRelation": "",
                 "isFiscalSupported": False, "isCivilServant": False, "remark": "2012 年去世",
             },

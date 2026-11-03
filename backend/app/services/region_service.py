@@ -259,9 +259,9 @@ class RegionService:
     def _validate_payload(self, db: Session, payload: dict, exclude_id: int | None = None) -> None:
         code = payload["code"].strip()
         level = payload["level"]
-        if level not in {"province", "county", "town", "village", "group"}:
+        if level not in {"province", "city", "county", "town", "village", "group"}:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="区域级别不合法")
-        expected_lengths = {"county": 6, "town": 9, "village": 12, "group": 14}
+        expected_lengths = {"city": 6, "county": 6, "town": 9, "village": 12, "group": 14}
         if level in expected_lengths and len(code) != expected_lengths[level]:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{self._level_label(level)}代码必须为 {expected_lengths[level]} 位")
         existed = db.scalar(select(Region).where(Region.code == code))
@@ -270,10 +270,31 @@ class RegionService:
         parent = db.get(Region, payload.get("parentId")) if payload.get("parentId") else None
         if level == "province" and parent is not None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="省级区域不能选择父级")
-        expected_parent = {"county": "province", "town": "county", "village": "town", "group": "village"}.get(level)
-        if expected_parent and (parent is None or parent.level != expected_parent):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{self._level_label(level)}必须选择{self._level_label(expected_parent)}父级")
-        if parent and level in {"county", "town", "village", "group"} and not code.startswith(parent.code):
+        # 县允许挂市或省：兼容存量「省→县直挂」与业务导入的 auto-province 占位；
+        # 其余层级固定单一父级。
+        expected_parents = {
+            "city": {"province"},
+            "county": {"province", "city"},
+            "town": {"county"},
+            "village": {"town"},
+            "group": {"village"},
+        }.get(level)
+        if expected_parents and (parent is None or parent.level not in expected_parents):
+            labels = "或".join(self._level_label(item) for item in sorted(expected_parents))
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{self._level_label(level)}必须选择{labels}父级")
+        # 国标 6 位码结构是「省2位 + 市2位 + 县2位」：县码不是市码的前缀扩展
+        # （"321324" 不以 "321300" 开头！），省码也不是市/县码的前缀。真前缀链
+        # 只从县开始（县→镇→村→组）。所以省→市、省→县、市→县三跳都不做
+        # startswith，改按「段归属」校验：市/县码前两位=省码前两位，
+        # 县码前四位=市码前四位。
+        if parent and level == "city" and code[:2] != parent.code[:2]:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="市级区域代码前两位必须与所属省级代码一致")
+        if parent and level == "county":
+            if parent.level == "city" and code[:4] != parent.code[:4]:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="县级区域代码前四位必须与所属市级代码一致")
+            if parent.level == "province" and code[:2] != parent.code[:2]:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="县级区域代码前两位必须与所属省级代码一致")
+        if parent and level in {"town", "village", "group"} and not code.startswith(parent.code):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="区域代码必须以前级区域代码开头")
 
     def _derive_tenant_code(self, code: str, level: str) -> str | None:
@@ -299,13 +320,13 @@ class RegionService:
         return False
 
     def _levels_until(self, level: str) -> set[str]:
-        order = ["province", "county", "town", "village", "group"]
+        order = ["province", "city", "county", "town", "village", "group"]
         if level not in order:
             return set(order)
         return set(order[: order.index(level) + 1])
 
     def _level_label(self, level: str) -> str:
-        return {"province": "省级", "county": "县级", "town": "镇级", "village": "村级"}.get(level, level)
+        return {"province": "省级", "city": "市级", "county": "县级", "town": "镇级", "village": "村级"}.get(level, level)
 
     def _is_leaf_for_lazy(self, db: Session, item: Region, tenant_code: str | None, include_groups: bool) -> bool:
         if item.level == "group":

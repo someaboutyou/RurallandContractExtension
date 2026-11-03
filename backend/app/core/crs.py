@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+import re
+
 from app.core.config import settings
 
 #: 默认目标坐标系：CGCS2000 / 3° 带 39 带（中央子午线 117°E），现网兼容默认值
@@ -68,12 +70,27 @@ def get_target_srid() -> int:
     return settings.target_srid
 
 
+def _epsg_from_proj_name(name: str) -> int | None:
+    """从投影名兜底解析 3° 带号（ESRI 风格 WKT 无权威 EPSG 映射时的退路）。
+
+    生产数据常见 ``CGCS2000 / 3-degree Gauss-Kruger zone 40``（pyproj 能解析
+    投影参数、``to_epsg()`` 却返回 None）。带号直接写在名字里，且带号唯一
+    决定中央子午线，按名字提号是确定性的，不属"盲收"。
+    """
+    match = re.search(r"3[\s-]*degree[\s-]*Gauss[-\s]*Kruger[\s-]*(?:CGCS2000[\s-]*)?zone\s*(\d{1,2})", name, re.IGNORECASE)
+    if not match:
+        return None
+    epsg = _EPSG_BASE + int(match.group(1))
+    return epsg if is_supported_srid(epsg) else None
+
+
 def crs_to_epsg(crs: object) -> int | None:
     """把 fiona/GDAL 的 CRS 对象或 dict 尽力解析成 EPSG 代码，失败返回 None。
 
     依次尝试：fiona CRS 自带的 ``to_epsg()`` → ``{'wkt': ...}`` 字典 → pyproj
-    通用 ``from_user_input``。解析不出（元数据缺失/不规范）返回 None，由调用方
-    （导入闸门）按"无法识别"拒绝导入 —— 宁可拒收，不可盲收错带数据。
+    通用 ``from_user_input`` → 投影名兜底（``_epsg_from_proj_name``）。解析不出
+    （元数据缺失/不规范）返回 None，由调用方（导入闸门）按"无法识别"拒绝
+    导入 —— 宁可拒收，不可盲收错带数据。
 
     注意：EPSG 4527 等"带号版"3°带的假东坐标是 ``带号*1e6 + 500000``（39 带 =
     39500000，即东坐标天然带 39 前缀）；proj4 串里 ``ellps=CGCS2000`` 这种写法
@@ -97,7 +114,15 @@ def crs_to_epsg(crs: object) -> int | None:
             parsed = CRS.from_wkt(crs["wkt"])
         else:
             parsed = CRS.from_user_input(crs)
-        return parsed.to_epsg()
+        epsg = parsed.to_epsg()
+        if isinstance(epsg, int):
+            return epsg
+        # ESRI 风格 WKT：投影参数能解析但没有权威 EPSG 编号 → 按投影名提带号
+        for candidate_name in (parsed.name, getattr(parsed.datum, "name", "") or ""):
+            matched = _epsg_from_proj_name(candidate_name)
+            if matched is not None and "cgcs2000" in (parsed.name or "").lower():
+                return matched
+        return None
     except Exception:  # noqa: BLE001 —— 元数据残缺/自定义坐标系，统一按"解析不出"处理
         return None
 

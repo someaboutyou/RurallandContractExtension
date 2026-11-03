@@ -113,7 +113,10 @@ if (-not (Test-Path $frontendDist)) {
 }
 
 # $env:BACKEND_DIST = "1"  # Disabled: use dev mode since dist is not built
-$backendProcess = Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "`"$backendScript`"" -WorkingDirectory $projectRoot -PassThru
+# 静默后台运行：不加 -NoExit（start-backend.ps1 内部会阻塞在 uvicorn 上），
+# 窗口隐藏后用户无法误关控制台；日志仍在 runtime\logs\backend.log。
+$backendArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$backendScript`"")
+$backendProcess = Start-Process powershell -ArgumentList $backendArgs -WorkingDirectory $projectRoot -PassThru -WindowStyle Hidden
 Set-Content -Path (Join-Path $stateDir "backend.pid") -Value $backendProcess.Id -Encoding ASCII
 
 Write-Host ""

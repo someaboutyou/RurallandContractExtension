@@ -86,8 +86,11 @@ def part_a() -> None:
 
     panel_src = (ROOT / "frontend" / "src" / "components" / "survey" / "ContractorMemberPanel.vue").read_text(encoding="utf-8")
     check(
-        "A6 弹窗有列31/列32 录入控件",
-        "列31 现户口所在地" in panel_src and "列32 现居住地" in panel_src and "hukouPlace" in panel_src,
+        # 2026-10-15 界面重构：标签去「列 N」术语，改按字段键 + 新文案断言
+        "A6 弹窗有现户口所在地/现居住地录入控件",
+        "现户口所在地" in panel_src and "现居住地" in panel_src
+        and 'v-model="sheetEditRow.sheet.hukouPlace"' in panel_src
+        and 'v-model="sheetEditRow.sheet.residencePlace"' in panel_src,
     )
 
     tpl_src = (ROOT / "backend" / "app" / "templates" / "member_change_sheet.html").read_text(encoding="utf-8")
@@ -133,12 +136,18 @@ def part_c(engine) -> None:
                 db, member_entries=[(
                     "verify-member-uid",
                     {
-                        "isSecondRoundMember": True,
+                        # 2026-10-15 起有「在户状态机」闸门 + 已补地/抽回复选框：
+                        # 夹具必须合法 —— 列7=否 + 二轮期婚入（非 1996 成员婚入，
+                        # 最常见的合法进）+ 延包期已补地（复选框，与事件正交）
+                        "isSecondRoundMember": False,
                         "srEventType": "add_married_in",
                         "srEventDate": "2003-06-15",
-                        "extEventType": "compensated",
+                        "srCompensated": False,
+                        "srWithdraw": False,
+                        "extEventType": "",
                         "extEventDate": "2024-11-02",
-                        "restructureTime": "2024-11-02",
+                        "extCompensated": True,
+                        "extWithdraw": False,
                         "economicRelation": "1",
                         "hukouPlace": "泗阳县众兴镇某某村",
                         "residencePlace": "泗阳县众兴镇某某村三组",
@@ -200,7 +209,7 @@ def part_d() -> None:
     )
     check("D1 模板渲染无异常", "承 包 农 户 家 庭 成 员 变 化 情 况" in html)
     check("D2 列31/32 值落格", "泗阳县众兴镇某某村三组" in html)
-    check("D3 列7 直填点亮（☑ 而非 □）", html.count("☑") >= 1)
+    check("D3 列7 直填点亮（统一 √ 符号）", html.count("√") >= 1)
     check("D4 列6 表头按原件（无「发证」字样）", "土地确权登记发证家庭成员" not in html and "土地确权登记家庭成员" in html)
 
 

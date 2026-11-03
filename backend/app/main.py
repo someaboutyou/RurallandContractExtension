@@ -15,8 +15,10 @@ from app.core.license.middleware import LicenseCheckMiddleware
 
 
 def setup_logging() -> None:
-    project_root = Path(__file__).resolve().parents[2]
-    log_dir = project_root / "runtime" / "logs"
+    # ⛔ 走 app.paths（编译布局下裸 parents[N] 会把日志写进 backend/dist/runtime/logs）
+    from app.paths import RUNTIME_DIR
+
+    log_dir = RUNTIME_DIR / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "backend-app.log"
 
@@ -146,6 +148,23 @@ def create_app() -> FastAPI:
 
     # ---- API 路由 -------------------------------------------------------
     app.include_router(api_router, prefix=settings.api_prefix)
+
+    # ---- 手机 App 安装包下载（免登录静态目录） ---------------------------
+    # APK 放 backend/storage/app-downloads/，字典 app_download.path 填
+    # /downloads/<文件名>（右上角二维码 = http://{外网ip}:{port}{path}）。
+    # 放在 SPA catch-all 之前注册才能被命中；license 中间件只拦 /api/*，
+    # 手机浏览器扫码下载发生在登录之前，走这里天然放行。
+    from app.paths import STORAGE_DIR
+
+    # Windows 注册表可能没有 .apk 映射，StaticFiles 会退回 text/plain，
+    # 部分浏览器会当成网页渲染而不是触发下载；这里显式补上标准类型。
+    import mimetypes
+
+    mimetypes.add_type("application/vnd.android.package-archive", ".apk")
+
+    app_downloads_dir = STORAGE_DIR / "app-downloads"
+    app_downloads_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/downloads", StaticFiles(directory=str(app_downloads_dir)), name="app-downloads")
 
     # ---- GeoServer 反向代理 --------------------------------------------
     if _HAS_HTTPX:

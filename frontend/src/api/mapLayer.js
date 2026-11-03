@@ -39,3 +39,7 @@ export function seedMapLayerCache(id, payload) {
 export function seedMapLayerServiceCache(payload) {
   return http.post("/map-layers/geoserver/seed-cache", payload);
 }
+
+export function getMapLayerCacheStatus(layerName) {
+  return http.get("/map-layers/geoserver/seed-cache/status", { params: { layerName } });
+}

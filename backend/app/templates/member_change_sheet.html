@@ -21,13 +21,24 @@
     31 现户口所在地｜32 现居住地（2026-10-14 起由摸底弹窗录入落库，打印带出）｜
     33 为财政供养人员、国企正式编制人员、部队军官的人口｜34 其中：为国家公务员的｜35 备注
 
-  ⚠️ 35 列宽表，A4 横向（267mm）装不下 ⇒ 用 **A3 横向**（420×297，正文区 390mm）。
-     html_docx.build_docx 按 .page 的 CSS width/height 生成分节页面尺寸，A3 无需特殊处理。
+  2026-10-15 口径修订：
+    ①「已补地人口」（12/22）与「抽回或放弃承包地人口」（17/27）不是事件，是每期
+      两个独立复选框（sr_/ext_ × compensated/withdraw），与事件正交可同时成立，
+      点亮印 √；
+    ② 列 28 不再单独录入，由两期事件时间取最后者（build_member_change_context）。
+  2026-10-15 打印批注修订（用户红笔标注）：
+    ① 事件格**只打勾不填时间**（原先印 YYYY.MM.DD 挤在 9mm 窄列里截行）；
+    ② 全表勾选符号统一为一种 **√**：布尔列命中 √、未勾**空白**（不印空框），
+       事件格命中 √ —— 废除双符号（旧版选中印实框勾、未选中印空框）与 MS Gothic 特殊字体；
+    ③ 时间统一落列 28（两期事件时间取最后者），列宽 11mm→17mm 防 YYYY-MM-DD 截断。
   数据拼装：app/services/survey/sheet.py::build_member_change_context
   （成员行缺则补；事件格命中印 YYYY.MM 短日期、无日期印 √）。
+
+  ⚠️ 35 列宽表，A4 横向（267mm）装不下 ⇒ 用 **A3 横向**（420×297，正文区 390mm）。
+     html_docx.build_docx 按 .page 的 CSS width/height 生成分节页面尺寸，A3 无需特殊处理。
 -->
 <style>
-  @page { size: 420mm 297mm; margin: 0; }
+  @page { size: 297mm 210mm; margin: 0; }
 
   * { box-sizing: border-box; }
 
@@ -56,10 +67,10 @@
 
   .page {
     position: relative;
-    width: 420mm;
-    height: 297mm;
+    width: 297mm;
+    height: 210mm;
     margin: 0 auto 14px;
-    padding: 10mm 15mm 8mm;
+    padding: 6mm 6mm 4mm;
     background: #fff;
     overflow: hidden;
     page-break-after: always;
@@ -72,7 +83,7 @@
   }
 
   .doc-title {
-    margin: 0 0 2mm;
+    margin: 0 0 1mm;
     text-align: center;
     font-family: "SimHei", "黑体", "SimSun", serif;
     font-size: 18pt;
@@ -81,19 +92,19 @@
   }
 
   .form-title {
-    margin: 0 0 3mm;
+    margin: 0 0 2mm;
     text-align: center;
     font-family: "SimHei", "黑体", "SimSun", serif;
-    font-size: 15pt;
+    font-size: 13pt;
     font-weight: 700;
     line-height: 1.3;
   }
 
   .head-line {
-    width: 390mm;
-    margin: 0 0 1.5mm;
-    font-size: 10pt;
-    line-height: 2;
+    width: 285mm;
+    margin: 0 0 1.2mm;
+    font-size: 9pt;
+    line-height: 1.7;
   }
 
   /* 横线填值：值落在下划线上，两侧垫全角空格使横线超出字长（模拟手写填在横线上，
@@ -101,7 +112,7 @@
   .fill { text-decoration: underline; text-underline-offset: 2px; }
 
   .tbl {
-    width: 390mm;
+    width: 285mm;
     margin: 0 auto;
     border-collapse: collapse;
     table-layout: fixed;
@@ -122,25 +133,28 @@
     font-weight: 700;
   }
 
-  .tbl .inner-title th { font-size: 11pt; padding: 1.2mm 0; }
+  .tbl .inner-title th { font-size: 10pt; padding: 0.8mm 0; }
 
   /* 竖排长表头的分段列（每段一列字，自左向右读） */
   .vcol { display: inline-block; margin: 0 0.4mm; }
+  /* v2 两竖排的外层容器：inline-flex 强制两条 .vcol 同行（窄列里 inline-block 会被折行堆叠） */
+  .vcols { display: inline-flex; align-items: flex-start; }
 
   /* 表内记事 / 签字 / 审核行（调查记事+调查员、审核意见+审核人 已合并为同一单元格） */
-  .tbl td.note-cell { text-align: left; padding: 1.5mm 2.5mm; font-size: 9.5pt; line-height: 1.7; }
-
-  /* ☑/□ 两个符号必须同字体（MS Gothic / Segoe UI Symbol），标签文字走宋体 */
-  .box, .cb { font-family: "MS Gothic", "Segoe UI Symbol", "SimSun", "宋体", serif; }
+  .tbl td.note-cell { text-align: left; padding: 1mm 2mm; font-size: 8.5pt; line-height: 1.5; }
 
   .tbl td.date-cell { font-size: 6.8pt; }
   .tbl td.left { text-align: left; }
+  /* √ 勾选符号统一小一号（7pt）：避免勾选列视觉变宽（2026-10-15 用户批注） */
+  .tbl .mk { font-size: 7pt; }
+  /* 竖排表头小一号（6.5pt）：对号列收窄到 5.5mm 后长表头（如"为财政供养人员…"24 字）折段仍可容纳 */
+  .tbl .vcol { font-size: 6.5pt; }
 
   .foot-note {
-    width: 390mm;
-    margin: 1mm auto 0;
-    font-size: 8pt;
-    line-height: 1.5;
+    width: 285mm;
+    margin: 0.8mm auto 0;
+    font-size: 7pt;
+    line-height: 1.4;
   }
 
   @media print {
@@ -158,13 +172,14 @@
 
 <button class="print-btn" onclick="window.print()">打印</button>
 
-{% macro box(checked, off='□') -%}
-{%- if checked -%}<span class="box">☑</span>{%- elif off -%}<span class="box">{{ off }}</span>{%- endif -%}
+{# 事件格：命中印 √（2026-10-15 用户批注：只打勾不填时间，时间统一落列 28） #}
+{% macro event_cell(event_type, target_type) -%}
+{%- if event_type == target_type -%}<td><span class="mk">√</span></td>{%- else -%}<td></td>{%- endif -%}
 {%- endmacro %}
 
-{# 事件格：命中列印事件时间（短格式 YYYY.MM，无日期则 √），未命中留空 #}
-{% macro event_cell(event_type, target_type, event_date) -%}
-{%- if event_type == target_type -%}<td class="date-cell">{{ (event_date | replace('-', '.') | truncate(7, true, '')) if event_date else '√' }}</td>{%- else -%}<td></td>{%- endif -%}
+{# 勾选格：布尔列命中印 √，未勾空白（不印空 □）；全表统一 √ 一种符号 #}
+{% macro check_cell(flag) -%}
+{%- if flag -%}<td><span class="mk">√</span></td>{%- else -%}<td></td>{%- endif -%}
 {%- endmacro %}
 
 {# 竖排文字：逐字堆叠；超过 8 字按 8 字/列分段并排（.vcol），与原件的多列竖排一致 #}
@@ -177,18 +192,36 @@
 {%- endif -%}
 {%- endmacro %}
 
+{# 两竖排：整段文字对半分为两列（原模板口径，代号 7 / 33 / 34 长表头专用，整体高度更低）。
+   外层 .vcols 用 inline-flex 锁死两列同行：窄列（9mm）里 inline-block 条带会被浏览器折行堆叠成单列
+   （2026-10-15 实测代号 7 两条 8 字条带上下堆叠），flex 布局不可能换行，从根上规避。 #}
+{% macro v2(text) -%}
+{%- set chars = text | list -%}
+{%- set n = (chars | length + 1) // 2 -%}
+<span class="vcols"><span class="vcol">{{ chars[:n] | join('<br>') | safe }}</span><span class="vcol">{{ chars[n:] | join('<br>') | safe }}</span></span>
+{%- endmacro %}
+
 {# 横线填值：两侧各垫 2 个全角空格，横线超出字长；值为空时保底 8 格长的空线 #}
 {% macro fillline(value, min_blank=8) -%}
 <span class="fill">　　{{ value }}{% if not value %}{{ '　' * min_blank }}{% endif %}　　</span>
 {%- endmacro %}
 
-{# 列 5 参与二轮承包：1996 成员且未曾已补地/抽回（注 1 公式的行级口径） #}
-{% macro mark_round_participate(row) -%}
-{%- set has_left = row.srEventType in ('compensated', 'withdraw') or row.extEventType in ('compensated', 'withdraw') -%}
-{{ box(row.is1996Member and not has_left) }}
+{# 落款年月日：value="2024-11-05" → 数字填进预印的 年/月/日 槽；空值保持空白（原件式样） #}
+{% macro ymd_parts(value) -%}
+{%- set p = value.split('-') if value else [] -%}
+{{ p[0] if p | length > 0 else '　　' }}　年　{{ p[1] if p | length > 1 else '　　' }}　月　{{ (p[2] | int) if p | length > 2 else '　　' }}　日
 {%- endmacro %}
 
-{% set member_min_rows = member_min_rows or 8 %}
+{# 列 5 参与二轮承包：1996 成员且未曾已补地/抽回（注 1 公式的行级口径） #}
+{% macro mark_round_participate(row) -%}
+{%- set has_left = row.srCompensated or row.srWithdraw or row.extCompensated or row.extWithdraw -%}
+{%- if row.is1996Member and not has_left -%}<span class="mk">√</span>{%- endif -%}
+{%- endmacro %}
+
+{# 数据行保底 7 行（纸质原件在代号行下预留 7 行，不含合计行）；成员多于 7 行时按实际行数伸展 #}
+{% set member_min_rows = member_min_rows or 7 %}
+{# 落款四项兜底：离线渲染/旧调用方未传 signatures 时不报错、按空白处理 #}
+{% set signatures = signatures or {"investigatorName": "", "investigatedAt": "", "reviewerName": "", "reviewedAt": ""} %}
 
 <div class="page">
   <div class="doc-title">第二轮土地到期后再延长30年试点工作模板</div>
@@ -200,15 +233,15 @@
 
   <table class="tbl">
     <colgroup>
-      <col style="width:8mm"><col style="width:14mm"><col style="width:14mm"><col style="width:24mm">
-      <col style="width:14mm"><col style="width:10mm"><col style="width:10mm"><col style="width:10mm">
-      <col style="width:9mm"><col style="width:9mm"><col style="width:9mm"><col style="width:9mm">
-      <col style="width:9mm"><col style="width:9mm"><col style="width:9mm"><col style="width:9mm"><col style="width:9mm">
-      <col style="width:9mm"><col style="width:9mm"><col style="width:9mm"><col style="width:9mm">
-      <col style="width:9mm"><col style="width:9mm"><col style="width:9mm"><col style="width:9mm"><col style="width:9mm">
-      <col style="width:11mm"><col style="width:10mm"><col style="width:13mm">
-      <col style="width:16mm"><col style="width:16mm">
-      <col style="width:16mm"><col style="width:11mm"><col style="width:13mm">
+      <col style="width:13.78mm"><col style="width:13.78mm"><col style="width:13.78mm"><col style="width:13.78mm"><col style="width:13.78mm">
+      <col style="width:5.5mm"><col style="width:5.5mm"><col style="width:9mm"><col style="width:5.5mm"><col style="width:5.5mm">
+      <col style="width:5.5mm"><col style="width:5.5mm"><col style="width:5.5mm"><col style="width:5.5mm"><col style="width:5.5mm">
+      <col style="width:5.5mm"><col style="width:5.5mm"><col style="width:5.5mm"><col style="width:5.5mm"><col style="width:5.5mm">
+      <col style="width:5.5mm"><col style="width:5.5mm"><col style="width:5.5mm"><col style="width:5.5mm"><col style="width:5.5mm">
+      <col style="width:5.5mm"><col style="width:5.5mm"><col style="width:5.5mm">
+      <col style="width:13.78mm"><col style="width:5.5mm"><col style="width:5.5mm">
+      <col style="width:13.78mm"><col style="width:13.78mm">
+      <col style="width:11mm"><col style="width:9mm"><col style="width:13.78mm">
     </colgroup>
     <tr class="inner-title"><th colspan="36">承 包 农 户 家 庭 成 员 变 化 情 况</th></tr>
     <tr class="group">
@@ -219,7 +252,7 @@
       <th rowspan="3">{{ v('联系电话') }}</th>
       <th rowspan="3">{{ v('参与二轮承包人口') }}</th>
       <th rowspan="3">{{ v('土地确权登记家庭成员') }}</th>
-      <th rowspan="3">其中：1996<br>{{ v('年二轮承包家庭成员') }}</th>
+      <th rowspan="3">{{ v2('其中：1996年二轮承包家庭成员') }}</th>
       <th colspan="10">二轮承包 1996 年-2018 年</th>
       <th colspan="10">确权颁证后到调查节点新增人员<br>2018 年-2026 年</th>
       <th rowspan="3">{{ v('成员增减变动时间') }}</th>
@@ -227,8 +260,8 @@
       <th rowspan="3">{{ v('为本集体经济组织成员人口') }}</th>
       <th rowspan="3">{{ v('现户口所在地') }}</th>
       <th rowspan="3">{{ v('现居住地') }}</th>
-      <th rowspan="3">{{ v('为财政供养人员、国企正式编制人员、部队军官的人口') }}</th>
-      <th rowspan="3">其中：<br>{{ v('为国家公务员的') }}</th>
+      <th rowspan="3">{{ v2('为财政供养人员、国企正式编制人员、部队军官的人口') }}</th>
+      <th rowspan="3">其中：<br>{{ v2('为国家公务员的') }}</th>
       <th rowspan="3">{{ v('备注') }}</th>
     </tr>
     <tr class="group">
@@ -259,35 +292,35 @@
       <td>{{ row.idNo }}</td>
       <td>{{ row.phone }}</td>
       <td>{{ mark_round_participate(row) }}</td>
-      <td>{{ box(row.inRegister) }}</td>
-      <td>{{ box(row.is1996Member) }}</td>
-      {{ event_cell(row.srEventType, 'add_birth', row.srEventDate) }}
-      {{ event_cell(row.srEventType, 'add_married_in', row.srEventDate) }}
-      {{ event_cell(row.srEventType, 'add_move_in', row.srEventDate) }}
-      {{ event_cell(row.srEventType, 'add_other', row.srEventDate) }}
-      {{ event_cell(row.srEventType, 'compensated', row.srEventDate) }}
-      {{ event_cell(row.srEventType, 'sub_death', row.srEventDate) }}
-      {{ event_cell(row.srEventType, 'sub_married_out', row.srEventDate) }}
-      {{ event_cell(row.srEventType, 'sub_move_out', row.srEventDate) }}
-      {{ event_cell(row.srEventType, 'sub_other', row.srEventDate) }}
-      {{ event_cell(row.srEventType, 'withdraw', row.srEventDate) }}
-      {{ event_cell(row.extEventType, 'add_birth', row.extEventDate) }}
-      {{ event_cell(row.extEventType, 'add_married_in', row.extEventDate) }}
-      {{ event_cell(row.extEventType, 'add_move_in', row.extEventDate) }}
-      {{ event_cell(row.extEventType, 'add_other', row.extEventDate) }}
-      {{ event_cell(row.extEventType, 'compensated', row.extEventDate) }}
-      {{ event_cell(row.extEventType, 'sub_death', row.extEventDate) }}
-      {{ event_cell(row.extEventType, 'sub_married_out', row.extEventDate) }}
-      {{ event_cell(row.extEventType, 'sub_move_out', row.extEventDate) }}
-      {{ event_cell(row.extEventType, 'sub_other', row.extEventDate) }}
-      {{ event_cell(row.extEventType, 'withdraw', row.extEventDate) }}
+      {{ check_cell(row.inRegister) }}
+      {{ check_cell(row.is1996Member) }}
+      {{ event_cell(row.srEventType, 'add_birth') }}
+      {{ event_cell(row.srEventType, 'add_married_in') }}
+      {{ event_cell(row.srEventType, 'add_move_in') }}
+      {{ event_cell(row.srEventType, 'add_other') }}
+      {{ check_cell(row.srCompensated) }}
+      {{ event_cell(row.srEventType, 'sub_death') }}
+      {{ event_cell(row.srEventType, 'sub_married_out') }}
+      {{ event_cell(row.srEventType, 'sub_move_out') }}
+      {{ event_cell(row.srEventType, 'sub_other') }}
+      {{ check_cell(row.srWithdraw) }}
+      {{ event_cell(row.extEventType, 'add_birth') }}
+      {{ event_cell(row.extEventType, 'add_married_in') }}
+      {{ event_cell(row.extEventType, 'add_move_in') }}
+      {{ event_cell(row.extEventType, 'add_other') }}
+      {{ check_cell(row.extCompensated) }}
+      {{ event_cell(row.extEventType, 'sub_death') }}
+      {{ event_cell(row.extEventType, 'sub_married_out') }}
+      {{ event_cell(row.extEventType, 'sub_move_out') }}
+      {{ event_cell(row.extEventType, 'sub_other') }}
+      {{ check_cell(row.extWithdraw) }}
       <td class="date-cell">{{ row.changeTime }}</td>
-      <td>{{ box(row.inHousehold) }}</td>
-      <td>{{ box(row.economicRelation) }}</td>
+      {{ check_cell(row.inHousehold) }}
+      {{ check_cell(row.economicRelation) }}
       <td class="left">{{ row.hukouPlace }}</td>
       <td class="left">{{ row.residencePlace }}</td>
-      <td>{{ box(row.isFiscalSupported) }}</td>
-      <td>{{ box(row.isCivilServant) }}</td>
+      {{ check_cell(row.isFiscalSupported) }}
+      {{ check_cell(row.isCivilServant) }}
       <td class="left">{{ row.remark }}</td>
     </tr>
     {% endfor %}
@@ -301,14 +334,14 @@
         round_participate=0, register=0, m1996=0, comp_sr=0, wd_sr=0,
         comp_ext=0, wd_ext=0, household=0, collective=0, fiscal=0, civil=0) %}
     {% for row in rows %}
-      {% set has_left = row.srEventType in ('compensated', 'withdraw') or row.extEventType in ('compensated', 'withdraw') %}
+      {% set has_left = row.srCompensated or row.srWithdraw or row.extCompensated or row.extWithdraw %}
       {% if row.is1996Member and not has_left %}{% set ns.round_participate = ns.round_participate + 1 %}{% endif %}
       {% if row.inRegister %}{% set ns.register = ns.register + 1 %}{% endif %}
       {% if row.is1996Member %}{% set ns.m1996 = ns.m1996 + 1 %}{% endif %}
-      {% if row.srEventType == 'compensated' %}{% set ns.comp_sr = ns.comp_sr + 1 %}{% endif %}
-      {% if row.srEventType == 'withdraw' %}{% set ns.wd_sr = ns.wd_sr + 1 %}{% endif %}
-      {% if row.extEventType == 'compensated' %}{% set ns.comp_ext = ns.comp_ext + 1 %}{% endif %}
-      {% if row.extEventType == 'withdraw' %}{% set ns.wd_ext = ns.wd_ext + 1 %}{% endif %}
+      {% if row.srCompensated %}{% set ns.comp_sr = ns.comp_sr + 1 %}{% endif %}
+      {% if row.srWithdraw %}{% set ns.wd_sr = ns.wd_sr + 1 %}{% endif %}
+      {% if row.extCompensated %}{% set ns.comp_ext = ns.comp_ext + 1 %}{% endif %}
+      {% if row.extWithdraw %}{% set ns.wd_ext = ns.wd_ext + 1 %}{% endif %}
       {% if row.inHousehold %}{% set ns.household = ns.household + 1 %}{% endif %}
       {% if row.economicRelation %}{% set ns.collective = ns.collective + 1 %}{% endif %}
       {% if row.isFiscalSupported %}{% set ns.fiscal = ns.fiscal + 1 %}{% endif %}
@@ -347,13 +380,13 @@
         {{ noteStats.civilCount }} 人。在现有新增人口中，已补地 {{ noteStats.compensatedCount }} 人，属抽回或放弃承包地
         {{ noteStats.withdrawCount }} 人。<br>
         <br>
-        调查员：　　　　　　　　　　承包方（代表）：{{ fillline(contractor.name) }}　　　　　　　　　　调查日期：　　　　年　　月　　日</td>
+        调查员：{{ fillline(signatures.investigatorName, 6) }}　　承包方（代表）：{{ fillline(contractor.name) }}　　　　　　　　　　调查日期：{{ ymd_parts(signatures.investigatedAt) }}</td>
     </tr>
     {# 审核意见 + 审核人：原件同为合并在一个单元格（意见留白在上、审核人行落底） #}
-    <tr style="height:16mm">
+    <tr style="height:10mm">
       <td colspan="36" class="note-cell" style="vertical-align:bottom; padding-bottom:1.2mm;">审核意见：<br>
         <br>
-        审核人：　　　　　　　　　　审核日期：　　　　年　　月　　日</td>
+        审核人：{{ fillline(signatures.reviewerName, 6) }}　　　　　　　　　　审核日期：{{ ymd_parts(signatures.reviewedAt) }}</td>
     </tr>
   </table>
 

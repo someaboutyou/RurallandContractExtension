@@ -31,8 +31,11 @@ WF0Qp3UPd0FsO9OjVYSu8ILfr/E3y09e/FjUIQjjHYCrAEVW5IG+KYVxlp0plFjx
 LQIDAQAB
 -----END PUBLIC KEY-----"""
 
-# 授权文件路径
-LICENSE_FILE_PATH = Path(__file__).resolve().parents[3] / "storage" / "license.dat"
+# 授权文件路径：一律走 app.paths（源码/编译布局双兼容），
+# ⛔ 不要写裸 parents[N]——编译布局下会解析到 backend/dist/storage（2026-10-20 目标机事故）
+from app.paths import STORAGE_DIR
+
+LICENSE_FILE_PATH = STORAGE_DIR / "license.dat"
 
 
 class LicenseValidator:

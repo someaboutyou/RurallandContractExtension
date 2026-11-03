@@ -24,6 +24,14 @@ DB_USER="${DATABASE_USER:-RurallandContractExtension}"
 DB_PASSWORD="${DATABASE_PASSWORD:-RurallandContractExtension}"
 DB_SCHEMA="${DATABASE_SCHEMA:-public}"
 LAYER_SRS="${GEOSERVER_LAYER_SRS:-EPSG:4527}"
+# 目标投影坐标系解析：显式 GEOSERVER_LAYER_SRS > runtime.env 的 TARGET_SRID > 默认 4527。
+# 图层定义里硬编码的 "EPSG:4527" 是占位值，发布时替换为实际带号（2026-10-21 事故修复）。
+TARGET_SRS="$LAYER_SRS"
+RUNTIME_ENV_FILE="$RUNTIME_ROOT/.state/runtime.env"
+if [[ "$TARGET_SRS" == "EPSG:4527" && -f "$RUNTIME_ENV_FILE" ]]; then
+  _srid="$(grep '^TARGET_SRID=' "$RUNTIME_ENV_FILE" | head -1 | cut -d= -f2 | tr -d '[:space:]')"
+  [[ -n "$_srid" ]] && TARGET_SRS="EPSG:$_srid"
+fi
 ADMIN_USER="${GEOSERVER_ADMIN_USER:-admin}"
 ADMIN_PASSWORD="${GEOSERVER_ADMIN_PASSWORD:-geoserver}"
 
@@ -130,6 +138,10 @@ if command -v curl >/dev/null 2>&1; then
   # ── Publish a single feature type ──
   publish_feature() {
     local layer="$1" table="$2" title="$3" srs="$4" style="$5"
+    # 4527 占位值 → 实际目标带号（见文件头 TARGET_SRS 解析）
+    if [[ "$srs" == "EPSG:4527" && "$TARGET_SRS" != "EPSG:4527" ]]; then
+      srs="$TARGET_SRS"
+    fi
     local ft_url="$REST_URL/workspaces/$WORKSPACE/datastores/$STORE_NAME/featuretypes/$layer.json"
     local layer_url="$REST_URL/layers/$WORKSPACE:$layer.json"
 

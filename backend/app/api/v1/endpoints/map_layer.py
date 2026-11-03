@@ -188,6 +188,21 @@ def seed_geoserver_tile_cache_by_url(
     return {"data": result}
 
 
+@router.get("/geoserver/seed-cache/status", response_model=ApiResponse[dict])
+def get_geoserver_tile_cache_status(
+    layerName: str = Query(..., description="GeoServer 图层名，如 erlunyanbao:survey_dk_result"),
+    _: User = Depends(require_permission("layers.manage")),
+):
+    try:
+        result = geoserver_service.get_seed_task_status(layerName)
+    except HTTPError as exc:
+        detail = _read_http_error_detail(exc)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"GeoServer 缓存状态查询失败，状态码 {exc.code}。{detail}") from exc
+    except URLError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"无法连接 GeoServer：{exc.reason}") from exc
+    return {"data": result}
+
+
 @router.post("/{layer_id}/geoserver/recalculate-bbox", response_model=ApiResponse[dict])
 def recalculate_geoserver_bbox(
     layer_id: int,

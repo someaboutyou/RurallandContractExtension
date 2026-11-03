@@ -1,6 +1,6 @@
 <template>
   <div class="bigscreen">
-    <div class="screen-stage" :style="stageStyle">
+    <div class="screen-stage">
       <header class="screen-head">
         <div class="head-title">
           <span class="head-badge">二轮延包</span>
@@ -241,10 +241,8 @@ echarts.use([
   CanvasRenderer,
 ]);
 
-// 大屏按 1920×1080 设计，用 CSS transform 等比缩放铺满任意分辨率，
-// 从而避免"换个屏幕就错位"。transform 不改变布局尺寸，ECharts 读 clientWidth 仍然正确。
-const BASE_WIDTH = 1920;
-const BASE_HEIGHT = 1080;
+// 自适应布局：不锁 1920×1080 再整体缩放，而是三列按比例伸缩、字号用 clamp() 跟随视口，
+// 低分屏笔记本也不会裁边；ECharts 在真实布局尺寸上初始化，窗口变化时统一 resize。
 const REFRESH_INTERVAL = 60 * 1000;
 
 const router = useRouter();
@@ -256,7 +254,6 @@ const selectedBatchId = ref(null);
 const regionLevel = ref("town");
 const trendDays = ref(15);
 const autoRefresh = ref(true);
-const scale = ref(1);
 
 const levelOptions = [
   { value: "town", label: "镇级" },
@@ -335,12 +332,6 @@ const stripItems = computed(() => [
   { label: "已生成申请", value: formatNumber(overview.value.requestGeneratedCount || 0), unit: "件" },
   { label: "采集材料", value: formatNumber(overview.value.attachmentCount || 0), unit: "份" },
 ]);
-
-const stageStyle = computed(() => ({
-  width: `${BASE_WIDTH}px`,
-  height: `${BASE_HEIGHT}px`,
-  transform: `scale(${scale.value})`,
-}));
 
 const generatedAtText = computed(() => {
   const value = payload.value?.generatedAt;
@@ -635,12 +626,7 @@ function switchLevel(value) {
   load();
 }
 
-function updateScale() {
-  scale.value = Math.min(window.innerWidth / BASE_WIDTH, window.innerHeight / BASE_HEIGHT);
-}
-
 function handleResize() {
-  updateScale();
   Object.values(charts.value).forEach((chart) => chart && chart.resize());
 }
 
@@ -698,7 +684,6 @@ function scheduleRefresh() {
 }
 
 onMounted(() => {
-  updateScale();
   window.addEventListener("resize", handleResize);
   document.addEventListener("fullscreenchange", syncFullscreenState);
   syncFullscreenState();
@@ -733,13 +718,12 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-/* 大屏外层：占满视口，舞台按 1920×1080 固定布局后整体缩放。 */
+/* 大屏外层：占满视口；内容高于视口时在容器内纵向滚动，横向不出现滚动条。 */
 .bigscreen {
-  width: 100vw;
+  width: 100%;
   height: 100vh;
-  display: grid;
-  place-items: center;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   background:
     radial-gradient(1200px 620px at 12% -8%, rgba(47, 107, 191, 0.16), transparent 62%),
     radial-gradient(900px 520px at 92% 6%, rgba(42, 165, 165, 0.14), transparent 58%),
@@ -747,10 +731,11 @@ onBeforeUnmount(() => {
 }
 
 .screen-stage {
-  transform-origin: center center;
   display: flex;
   flex-direction: column;
-  padding: 14px 18px 10px;
+  min-height: 100%;
+  box-sizing: border-box;
+  padding: clamp(8px, 1.2vh, 14px) clamp(10px, 1.4vw, 18px) 8px;
   color: var(--text);
 }
 
@@ -788,7 +773,7 @@ onBeforeUnmount(() => {
 
 .head-title h1 {
   margin: 0 0 4px;
-  font-size: 25px;
+  font-size: clamp(18px, 1.45vw, 25px);
   line-height: 1.15;
   letter-spacing: 1px;
 }
@@ -823,7 +808,7 @@ onBeforeUnmount(() => {
 }
 
 .head-select {
-  width: 300px;
+  width: min(300px, 22vw);
 }
 
 .seg {
@@ -866,7 +851,7 @@ onBeforeUnmount(() => {
 }
 
 .clock strong {
-  font-size: 26px;
+  font-size: clamp(18px, 1.5vw, 26px);
   font-variant-numeric: tabular-nums;
   color: #1d3f6b;
 }
@@ -953,13 +938,14 @@ onBeforeUnmount(() => {
 }
 
 /* ---------------------------------------------------------------- 主体三列 */
+/* 三列按比例伸缩：左右列约 27%、中列约 46%，任何宽度下都不会把右列挤出视口。 */
 .screen-body {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 400px minmax(0, 1fr) 400px;
-  gap: 14px;
-  margin-top: 14px;
+  grid-template-columns: minmax(0, 27fr) minmax(0, 46fr) minmax(0, 27fr);
+  gap: clamp(10px, 1vw, 14px);
+  margin-top: clamp(10px, 1.2vh, 14px);
 }
 
 .col {
@@ -994,7 +980,7 @@ onBeforeUnmount(() => {
 
 .panel-head h2 {
   margin: 0;
-  font-size: 17px;
+  font-size: clamp(14px, 1vw, 17px);
   letter-spacing: 0.5px;
 }
 
@@ -1071,7 +1057,7 @@ onBeforeUnmount(() => {
 }
 
 .metric-card strong {
-  font-size: 30px;
+  font-size: clamp(21px, 1.75vw, 30px);
   line-height: 1.05;
   font-variant-numeric: tabular-nums;
 }
@@ -1371,5 +1357,57 @@ onBeforeUnmount(() => {
   padding: 8px 4px 0;
   color: var(--muted);
   font-size: 12px;
+}
+
+/* ------------------------------------------------ 自适应降级断点 */
+/* 中低分屏（笔记本）：压缩控件尺寸，保证三列都放得下 */
+@media (max-width: 1500px) {
+  .head-select {
+    width: min(240px, 20vw);
+  }
+
+  .seg-btn {
+    min-width: 52px;
+    padding: 7px 10px;
+  }
+
+  .icon-btn {
+    padding: 8px 10px;
+  }
+
+  .metric-card strong {
+    font-size: clamp(20px, 1.8vw, 26px);
+  }
+}
+
+/* 窄屏（半屏窗口 / 竖屏）：三列并排放不下，退化为单列纵向排布，容器内滚动 */
+@media (max-width: 1100px) {
+  .screen-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .funnel-wrap {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chart-funnel {
+    height: 180px;
+  }
+}
+
+/* 矮屏（笔记本小窗口）：压图表固定高度，减少纵向溢出 */
+@media (max-height: 860px) {
+  .chart-funnel,
+  .chart-trend {
+    height: 175px;
+  }
+
+  .chart-status {
+    height: 185px;
+  }
+
+  .chart-change {
+    height: 160px;
+  }
 }
 </style>

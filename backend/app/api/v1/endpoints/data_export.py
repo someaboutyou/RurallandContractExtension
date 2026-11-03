@@ -18,8 +18,10 @@ router = APIRouter()
 # 与 data_imports 同组，使用 contractors.view 作为准入判据
 _EXPORT_PERM = "contractors.view"
 
-# backend/storage/ 根目录
-_STORAGE_ROOT = Path(__file__).resolve().parents[4] / "storage"
+# backend/storage/ 根目录（⛔ 走 app.paths，编译布局双兼容）
+from app.paths import STORAGE_DIR
+
+_STORAGE_ROOT = STORAGE_DIR
 
 ZIP_MEDIA_TYPE = "application/zip"
 

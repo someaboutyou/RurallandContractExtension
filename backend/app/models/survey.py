@@ -588,6 +588,8 @@ class SurveyJzdResult(TenantScopedMixin, TimestampMixin, Base):
     bz: Mapped[str | None] = mapped_column(String(200), nullable=True)
     #: 首次生成该界址点的地块编码；仅用于追溯与区域归属推导，不参与判重
     source_dkbm: Mapped[str | None] = mapped_column(String(19), nullable=True, index=True)
+    source_import_batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_import_batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
@@ -618,6 +620,8 @@ class SurveyJzxResult(TenantScopedMixin, TimestampMixin, Base):
     jzxsm: Mapped[str | None] = mapped_column(String(200), nullable=True)
     #: 首次生成该界址线的地块编码；仅用于追溯与区域归属推导，不参与判重
     source_dkbm: Mapped[str | None] = mapped_column(String(19), nullable=True, index=True)
+    source_import_batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_import_batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 

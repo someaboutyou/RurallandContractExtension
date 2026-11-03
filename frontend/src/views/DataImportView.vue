@@ -89,13 +89,35 @@
 
   <el-dialog v-model="uploadVisible" :title="`上传数据 - ${activeBatch?.importName || ''}`" width="640px">
     <el-form label-position="top">
+      <el-form-item label="数据格式">
+        <el-radio-group v-model="uploadKind" :disabled="uploading">
+          <el-radio value="gdb">GDB 数据包</el-radio>
+          <el-radio value="gb_package">国标数据包</el-radio>
+        </el-radio-group>
+      </el-form-item>
       <el-alert
+        v-if="uploadKind === 'gdb'"
         class="upload-tip"
         type="info"
         show-icon
         :closable="false"
         title="请上传包含 FileGDB（.gdb 目录）的 ZIP 压缩包，系统会自动导入 FBF、CBF、CBF_JTCY、CBDKXX、DK 图层。"
       />
+      <el-alert
+        v-else
+        class="upload-tip"
+        type="info"
+        show-icon
+        :closable="false"
+      >
+        <template #title>
+          <div style="line-height:1.6;font-weight:normal;">
+            请上传国标格式数据包的 ZIP 压缩包（权属数据 .mdb + 矢量数据 .shp，子目录内散放或打包均可，内嵌 zip 会忽略）。<br/>
+            权属侧导入 FBF、CBF、CBF_JTCY、CBHT、CBDKXX 表；矢量侧导入 DK 地块，并按地块图形自动生成界址点/界址线，
+            再用 JZD、JZX 图层回填界标类型与界址线属性。
+          </div>
+        </template>
+      </el-alert>
       <el-alert
         class="upload-tip"
         type="warning"
@@ -111,7 +133,7 @@
           </div>
         </template>
       </el-alert>
-      <el-form-item label="GDB ZIP 文件">
+      <el-form-item :label="uploadKind === 'gdb' ? 'GDB ZIP 文件' : '国标包 ZIP 文件'">
         <input type="file" :accept="uploadAccept" :disabled="uploading" @change="handleFileChange" />
       </el-form-item>
       <div v-if="importProgress" class="import-progress">
@@ -167,6 +189,7 @@ import {
   fetchImportProgress,
   fetchImportRows,
   rollbackImport,
+  uploadImportGbPackage,
   uploadImportGdb,
 } from "../api/dataImport";
 import { fetchRegionChildren, searchRegions } from "../api/region";
@@ -188,6 +211,7 @@ const uploadVisible = ref(false);
 const rowsVisible = ref(false);
 const activeBatch = ref(null);
 const selectedFile = ref(null);
+const uploadKind = ref("gdb");
 const importProgress = ref(null);
 const detailRows = ref([]);
 const rowStatusFilter = ref("");
@@ -333,6 +357,7 @@ async function openUploadDialog(row) {
   stopProgressPolling();
   activeBatch.value = row;
   selectedFile.value = null;
+  uploadKind.value = "gdb";
   importProgress.value = null;
   uploading.value = false;
 
@@ -383,14 +408,15 @@ function handleFileChange(event) {
 
 async function handleUpload() {
   if (!activeBatch.value || !selectedFile.value) {
-    ElMessage.warning("请先选择 GDB ZIP 文件");
+    ElMessage.warning(uploadKind.value === "gdb" ? "请先选择 GDB ZIP 文件" : "请先选择国标包 ZIP 文件");
     return;
   }
   const formData = new FormData();
   formData.append("file", selectedFile.value);
   uploading.value = true;
   try {
-    const { data } = await uploadImportGdb(activeBatch.value.id, formData);
+    const uploader = uploadKind.value === "gdb" ? uploadImportGdb : uploadImportGbPackage;
+    const { data } = await uploader(activeBatch.value.id, formData);
     importProgress.value = {
       batchId: activeBatch.value.id,
       jobId: data.data.jobId,

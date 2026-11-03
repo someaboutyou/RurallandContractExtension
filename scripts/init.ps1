@@ -1,4 +1,4 @@
-param(
+﻿param(
     [int]$DbPort = 15432,
     [string]$DbName = "erlunyanbao",
     [string]$DbUser = "RurallandContractExtension",
@@ -211,10 +211,11 @@ function Write-RuntimeEnv(
     [string]$RedisKeyPrefix,
     [string]$GeoServerUrl,
     [string]$BackendUrl,
-    [string]$FrontendUrl
+    [string]$FrontendUrl,
+    [string]$TargetSrid = ""
 ) {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
-    @(
+    $lines = @(
         "DATABASE_HOST=$DatabaseHost",
         "DATABASE_PORT=$DatabasePort",
         "DATABASE_NAME=$DatabaseName",
@@ -233,7 +234,10 @@ function Write-RuntimeEnv(
         "FRONTEND_HOST=127.0.0.1",
         "FRONTEND_PORT=5173",
         "FRONTEND_URL=$FrontendUrl"
-    ) | Set-Content -Path $Path -Encoding UTF8
+    )
+    # TARGET_SRID 供 start-geoserver.ps1 等消费者读取图层发布带号（缺省 4527）
+    if ($TargetSrid) { $lines += "TARGET_SRID=$TargetSrid" }
+    $lines | Set-Content -Path $Path -Encoding UTF8
 }
 
 if (-not (Test-Path $installMarker)) {
@@ -293,7 +297,9 @@ $effectiveDbPassword = if ($env:DATABASE_PASSWORD) { $env:DATABASE_PASSWORD } el
 if ($needsPasswordRotation) {
     Write-Host "Database password is still the default value. Rotating to a random password (data preserved)..."
 
-    $chars = "ABCDEFGHKMNPQRSTUVWXYZabcdefghkmnpqrstuvwxyz23456789!#$%&*"
+    # ⛔ 只用字母数字（同 start-postgres.ps1::New-RandomPassword 的口径）：
+    # 特殊字符会被连接 URI 等字面量拼接方打碎。
+    $chars = "ABCDEFGHKMNPQRSTUVWXYZabcdefghkmnpqrstuvwxyz23456789"
     $random = [System.Security.Cryptography.RandomNumberGenerator]::Create()
     $bytes = New-Object byte[] 24
     $random.GetBytes($bytes)
@@ -365,12 +371,21 @@ try {
     $env:DATABASE_PASSWORD = $previousDbPassword
 }
 
+# 图层发布坐标系跟随安装时选择的目标坐标系（install.ps1 写入 backend\.env 的
+# TARGET_SRID）。⛔ 不可硬编码 4527：现场选 4528 等其它 3 度带时，按 4527 发布
+# 会让整层重投影偏移、地图空白、点选为空（2026-10-21 本机还原现场数据踩过）。
+$layerSrs = "EPSG:4527"
+$backendEnvFile = Join-Path $backendPath ".env"
+$sridMatch = Select-String -Path $backendEnvFile -Pattern '^\s*TARGET_SRID\s*=\s*(\d+)' -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($sridMatch) { $layerSrs = "EPSG:$($sridMatch.Matches[0].Groups[1].Value)" }
+
 & (Join-Path $PSScriptRoot "start-geoserver.ps1") `
     -DbPort $effectiveDbPort `
     -DbName $effectiveDbName `
     -DbUser $effectiveDbUser `
     -DbPassword $effectiveDbPassword `
-    -LayerSrs "EPSG:4527" `
+    -LayerSrs $layerSrs `
+    -RequireDefaultLayer `
     -NonInteractive
 
 New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
@@ -387,7 +402,8 @@ Write-RuntimeEnv `
     -RedisKeyPrefix "rlce" `
     -GeoServerUrl "http://127.0.0.1:8080/geoserver" `
     -BackendUrl "http://127.0.0.1:8000" `
-    -FrontendUrl "http://127.0.0.1:5173"
+    -FrontendUrl "http://127.0.0.1:5173" `
+    -TargetSrid $($layerSrs -replace '^EPSG:', '')
 
 $marker = [ordered]@{
     platform = "windows"

@@ -1,7 +1,16 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
+# ⛔ 启动目录必须自动探测：目标机上 backend\app 源码不存在（打包时排除），
+# 只有 backend\dist。只认 BACKEND_DIST 环境变量的话，没人设它就指向 backend
+# → "No module named 'app'"（2026-10-18 目标机实炸）。
+# 优先级：BACKEND_DIST=1 显式指定 > backend\app 源码（开发机）> backend\dist（部署机）。
 $backendPath = if ($env:BACKEND_DIST -eq "1") {
+    Join-Path $projectRoot "backend\dist"
+} elseif (Test-Path (Join-Path $projectRoot "backend\app")) {
+    Join-Path $projectRoot "backend"
+} elseif (Test-Path (Join-Path $projectRoot "backend\dist\app")) {
+    Write-Host "backend\app source not found - running compiled backend from backend\dist"
     Join-Path $projectRoot "backend\dist"
 } else {
     Join-Path $projectRoot "backend"

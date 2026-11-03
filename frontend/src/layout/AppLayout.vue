@@ -31,6 +31,26 @@
         </nav>
 
         <div class="user-panel">
+          <el-popover
+            v-if="downloadUrl"
+            placement="bottom-end"
+            trigger="click"
+            :width="232"
+            popper-class="app-download-popover"
+            @show="refreshDownloadUrl"
+          >
+            <template #reference>
+              <button type="button" class="topbar-icon-button" aria-label="下载手机App">
+                <el-icon aria-hidden="true"><Iphone /></el-icon>
+              </button>
+            </template>
+            <div class="app-download-panel">
+              <img v-if="downloadQrUrl" :src="downloadQrUrl" alt="下载App二维码" class="app-download-qr" />
+              <div class="app-download-url" :title="downloadUrl">{{ downloadUrl }}</div>
+              <div class="app-download-tip">手机扫码下载 App</div>
+            </div>
+          </el-popover>
+
           <el-dropdown trigger="click" popper-class="topbar-dropdown" @command="handleSettingsCommand">
             <button type="button" class="topbar-icon-button" aria-label="系统设置">
               <el-icon aria-hidden="true"><Setting /></el-icon>
@@ -94,9 +114,11 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { Setting } from "@element-plus/icons-vue";
+import { Iphone, Setting } from "@element-plus/icons-vue";
 import { useRoute, useRouter } from "vue-router";
+import qrcode from "qrcode-generator";
 
+import { fetchAppDownloadUrl } from "../api/system";
 import { useAuthStore } from "../stores/auth";
 
 const REQUEST_MODULE_PERMISSIONS = [
@@ -126,6 +148,33 @@ const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 const contentTheme = ref(null);
+
+// 右上角「下载App」二维码：地址来自字典 app_download（外网 ip/port/path）。
+// ip 未配置时 url 为 null，整个入口隐藏（v-if），不占顶栏位置。
+const downloadUrl = ref(null);
+const downloadQrUrl = ref("");
+
+function buildDownloadQr(url) {
+  // qrcode-generator：typeNumber 0 = 按内容长度自动选版本；"M" 容错 15%，
+  // 车间/野外打印或屏幕反光场景下仍可扫出。
+  const qr = qrcode(0, "M");
+  qr.addData(url);
+  qr.make();
+  downloadQrUrl.value = qr.createDataURL(8, 4);
+}
+
+async function refreshDownloadUrl() {
+  try {
+    const { data } = await fetchAppDownloadUrl();
+    const url = data?.data?.url || null;
+    if (url && url !== downloadUrl.value) {
+      buildDownloadQr(url);
+    }
+    downloadUrl.value = url;
+  } catch {
+    // 接口失败不打断页面，入口保持当前状态（首次失败 = 隐藏）
+  }
+}
 
 const navItems = [
   {
@@ -274,6 +323,7 @@ function handleUserCommand(command) {
 
 onMounted(() => {
   window.addEventListener("app-theme-change", handleThemeChange);
+  refreshDownloadUrl();
 });
 
 onBeforeUnmount(() => {

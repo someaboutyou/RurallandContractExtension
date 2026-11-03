@@ -176,8 +176,105 @@ def _get_disk_serial() -> str:
             return ""
 
 
+# 排除规则：蓝牙 PAN、USB 外接网卡（扩展坞/USB 转接）、虚拟网卡。
+# 这些设备的插拔/枚举顺序会变化，若被选中会导致机器码漂移（2026-10-09、2026-10-16 两次事故）。
+_MAC_EXCLUDE_PATTERN = (
+    r"Bluetooth|USB|Virtual|VMware|Hyper-V|VBox|Loopback|TAP|TUN|VPN|WAN Miniport"
+)
+
+
+def _normalize_mac(raw: str) -> str:
+    """把任意分隔符的 MAC 归一化为 12 位大写十六进制（无分隔符）。非法返回空串。"""
+    hex_part = "".join(c for c in raw if c.isalnum())
+    if len(hex_part) != 12 or not all(c in "0123456789abcdefABCDEF" for c in hex_part):
+        return ""
+    return hex_part.upper()
+
+
+def _list_candidate_macs() -> list[str]:
+    """
+    枚举"稳定"物理网卡的 MAC（归一化 12 位大写十六进制）。
+
+    确定性选择规则：物理网卡、排除蓝牙/USB/虚拟，剩余候选按 MAC 排序取最小。
+    主板内置网卡与 Wi-Fi 始终在列，不受扩展坞插拔影响。
+    """
+    macs: list[str] = []
+
+    if IS_WINDOWS:
+        # 首选 PowerShell Get-NetAdapter -Physical（Win8+/Server2012+）
+        ps_cmd = (
+            "$ErrorActionPreference='SilentlyContinue';"
+            "Get-NetAdapter -Physical | "
+            f"Where-Object {{ $_.Status -ne 'Disabled' -and $_.InterfaceDescription -notmatch '{_MAC_EXCLUDE_PATTERN}' }} | "
+            "Select-Object -ExpandProperty MacAddress"
+        )
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                capture_output=True, text=True, timeout=15,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    mac = _normalize_mac(line.strip())
+                    if mac:
+                        macs.append(mac)
+        except Exception as e:
+            logger.debug("Get-NetAdapter failed: %s", e)
+
+        # 回退 wmic（老系统）
+        if not macs:
+            try:
+                result = subprocess.run(
+                    ["wmic", "path", "Win32_NetworkAdapter", "where",
+                     "PhysicalAdapter=True AND NetConnectionID IS NOT NULL"
+                     " AND Description NOT LIKE '%Bluetooth%'"
+                     " AND Description NOT LIKE '%USB%'"
+                     " AND Description NOT LIKE '%Virtual%'"
+                     " get MACAddress"],
+                    capture_output=True, text=True, timeout=10,
+                    creationflags=CREATE_NO_WINDOW,
+                )
+                if result.returncode == 0:
+                    for line in result.stdout.strip().splitlines()[1:]:
+                        mac = _normalize_mac(line.strip())
+                        if mac:
+                            macs.append(mac)
+            except Exception as e:
+                logger.debug("wmic nic failed: %s", e)
+    else:
+        # Linux/macOS：读 /sys/class/net，排除虚拟接口
+        try:
+            net_dir = Path("/sys/class/net")
+            if net_dir.is_dir():
+                virtual_prefixes = ("lo", "docker", "veth", "br-", "vmnet", "tun", "tap", "virbr")
+                for iface in net_dir.iterdir():
+                    if iface.name.startswith(virtual_prefixes):
+                        continue
+                    mac = _normalize_mac((iface / "address").read_text().strip())
+                    # 全 0 或组播位（第二位 hex 是奇数）的不算单播物理地址
+                    if mac and mac != "000000000000" and int(mac[1], 16) % 2 == 0:
+                        macs.append(mac)
+        except Exception as e:
+            logger.debug("list /sys/class/net failed: %s", e)
+
+    return sorted(set(macs))
+
+
 def _get_mac_address() -> str:
-    """获取MAC地址"""
+    """
+    获取 MAC 地址（确定性）。
+
+    旧实现用 uuid.getnode()，它从系统枚举的网卡里不确定地返回一个，
+    扩展坞插拔/蓝牙 PAN/虚拟网卡都会让结果漂移（已两次造成 machine_mismatch）。
+    现改为：物理网卡排除蓝牙/USB/虚拟后按 MAC 取最小；全部失败才退回 uuid.getnode()。
+    """
+    macs = _list_candidate_macs()
+    if macs:
+        chosen = macs[0]
+        return "-".join(chosen[i:i + 2] for i in range(0, 12, 2))
+    # 兜底：探测不到物理网卡时退回旧行为（不保证稳定）
+    logger.warning("no stable physical NIC found, falling back to uuid.getnode()")
     mac = uuid.getnode()
     return ':'.join(f'{(mac >> i) & 0xff:02x}' for i in range(0, 48, 8)).upper()
 

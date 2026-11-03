@@ -48,27 +48,28 @@ LAND_CHANGE_REASONS: list[tuple[str, str]] = [
 ]
 LAND_CHANGE_REASON_LABELS = dict(LAND_CHANGE_REASONS)
 
-#: 表2 增减事件类型（与纸质摸底表列一一对应，2026-10-11 按原件核对）：
-#: 每个时段 = 增加 4 列（新生/婚入/迁入/其他）+ 已补地人口 + 减少 4 列（去世/婚出/迁出/其他），
-#: 时段外另有"抽回或放弃承包地人口"列。
+#: 增减事件类型（与纸质摸底表列一一对应，2026-10-15 按用户口径再修）：
+#: 每个时段 = 增加 4 列（新生/婚入/迁入/其他）+ 减少 4 列（去世/婚出/迁出/其他）。
+#: ⛔「已补地人口」「抽回或放弃承包地」**不是事件**，是每期两个独立复选框
+#: （新增人口不一定补了地、减少人口不一定立即抽回），见模型 sr_/ext_ ×
+#: compensated/withdraw 四列；旧码 compensated/sub_compensated/withdraw 已由
+#: 迁移 _upgrade_member_sheet_flow_split 拆到复选列。
 MEMBER_EVENT_TYPES: list[tuple[str, str]] = [
     ("add_birth", "新生"),
     ("add_married_in", "婚入"),
     ("add_move_in", "迁入"),
     ("add_other", "其他"),
-    ("compensated", "已补地人口"),
     ("sub_death", "去世"),
     ("sub_married_out", "婚出"),
     ("sub_move_out", "迁出"),
     ("sub_other", "其他"),
-    ("withdraw", "抽回或放弃承包地"),
 ]
 MEMBER_EVENT_LABELS = dict(MEMBER_EVENT_TYPES)
 
-#: 旧版事件类型 → 新口径（打印/展示时归一，库里原值不动）
+#: 旧版事件类型 → 新口径（打印/展示时归一，库里原值不动）。
+#: sub_compensated/withdraw 已由迁移清空事件码、拆进复选列，无需映射。
 LEGACY_EVENT_MAP: dict[str, str] = {
     "add_restore": "add_other",      # 恢复 → 其他
-    "sub_compensated": "compensated",  # 旧"减少侧已补地" → 独立"已补地人口"列
 }
 
 #: 系统变更类型（survey_change_records.change_type，与地块关联行 change_type 同口径）
@@ -150,6 +151,78 @@ def _fmt_date(val) -> str:
     if isinstance(val, date):
         return val.strftime("%Y-%m-%d")
     return str(val or "")
+
+
+#: 增加类 / 减少类事件码（在户状态机"进/出"判定用；与前端 config/surveySheets.js
+#: 的 ADD_EVENT_VALUES / SUB_EVENT_VALUES 同源）。已补地、抽回或放弃涉地不涉成员
+#: 进出，不参与判定。
+_SHEET_ADD_EVENTS = {"add_birth", "add_married_in", "add_move_in", "add_other"}
+_SHEET_SUB_EVENTS = {"sub_death", "sub_married_out", "sub_move_out", "sub_other"}
+
+
+def _sheet_presence_p1_start(sheet: dict) -> str | None:
+    """二轮期期初（1996 年）在户状态："in"/"out"/None（列7 未填，不可判定不限制）。
+
+    ⛔ 期初只看列 7：列 7=否时即便二轮期填了增加类，1996 时点也是"不在户"
+    （人是在期内才进的）——否则会误杀"非 1996 成员婚入/迁入"这一最常见的
+    合法场景。增加事件对状态的影响只体现在 _sheet_presence_p2_start。
+    """
+    if sheet.get("isSecondRoundMember") is True:
+        return "in"
+    if sheet.get("isSecondRoundMember") is False:
+        return "out"
+    return None
+
+
+def _sheet_presence_p2_start(sheet: dict) -> str | None:
+    """延包期期初（2018 年）在户状态：二轮期事件决定进/出，否则顺延 1996 状态。"""
+    ev = sheet.get("srEventType") or ""
+    if ev in _SHEET_ADD_EVENTS:
+        return "in"
+    if ev in _SHEET_SUB_EVENTS:
+        return "out"
+    return _sheet_presence_p1_start(sheet)
+
+
+def validate_member_sheet_flow(
+    entries: list[tuple[str, dict]], name_map: dict[str, str] | None = None
+) -> list[str]:
+    """成员摸底「在户状态机」校验（2026-10-15 用户口径）：
+
+    可以为空，但**必须有进才有出，出了还可以再进**——
+      ① 期初（1996）不在户 ⇒ 二轮期不能填减少类；
+      ② 期初在户 ⇒ 二轮期不能填增加类；
+      ③ 截至 2018 仍在户 ⇒ 延包期不能填增加类（先出后进的回迁除外）；
+      ④ 截至 2018 已不在户 ⇒ 延包期不能填减少类（要回迁请填增加类）；
+      ⑤ 事件时间边界：二轮期 ≤ 2018-12-31，延包期 ≥ 2019-01-01（ISO 字符串
+         字典序 = 时间序）。
+    返回违规文案列表（逐条点名成员），空列表 = 通过。
+    """
+    problems: list[str] = []
+    for uid, sheet in entries:
+        if not isinstance(sheet, dict):
+            continue
+        name = (name_map or {}).get(uid) or uid[:8] or "未命名成员"
+        sr = sheet.get("srEventType") or ""
+        ext = sheet.get("extEventType") or ""
+        p1 = _sheet_presence_p1_start(sheet)
+        p2 = _sheet_presence_p2_start(sheet)
+        if p1 == "out" and sr in _SHEET_SUB_EVENTS:
+            problems.append(f"{name}：1996 年不是家庭成员，二轮期（1996—2018）不能填减少类事件（必须有进才有出）")
+        if p1 == "in" and sr in _SHEET_ADD_EVENTS:
+            problems.append(f"{name}：1996 年已是家庭成员，二轮期（1996—2018）不能再填增加类事件")
+        if p2 == "in" and ext in _SHEET_ADD_EVENTS:
+            problems.append(f"{name}：截至 2018 年仍在户，延包期（2018—2026）不能填增加类事件；如系先迁出再回迁，请先在二轮期填减少类事件")
+        if p2 == "out" and ext in _SHEET_SUB_EVENTS:
+            problems.append(f"{name}：截至 2018 年已不在户，延包期（2018—2026）不能填减少类事件；如需回迁请填增加类事件")
+        # ⑤ 事件时间边界（与前端 SR_EVENT_DATE_MAX / EXT_EVENT_DATE_MIN 同源）
+        sr_date = str(sheet.get("srEventDate") or "")[:10]
+        ext_date = str(sheet.get("extEventDate") or "")[:10]
+        if sr_date and sr_date > "2018-12-31":
+            problems.append(f"{name}：二轮承包期事件时间不能晚于 2018 年 12 月 31 日")
+        if ext_date and ext_date < "2019-01-01":
+            problems.append(f"{name}：延包期事件时间不能早于 2019 年 1 月 1 日")
+    return problems
 
 
 class SurveySheetService:
@@ -372,11 +445,12 @@ class SurveySheetService:
         "isSecondRoundMember": None,
         "srEventType": "",
         "srEventDate": None,
-        "srNewPopulation": None,
+        "srCompensated": False,
+        "srWithdraw": False,
         "extEventType": "",
         "extEventDate": None,
-        "extNewPopulation": None,
-        "restructureTime": None,
+        "extCompensated": False,
+        "extWithdraw": False,
         "hasChange": None,
         "economicRelation": "",
         "hukouPlace": "",
@@ -399,11 +473,12 @@ class SurveySheetService:
             "isSecondRoundMember": row.is_second_round_member,
             "srEventType": row.sr_event_type or "",
             "srEventDate": _fmt_date(row.sr_event_date) or None,
-            "srNewPopulation": row.sr_new_population,
+            "srCompensated": bool(row.sr_compensated),
+            "srWithdraw": bool(row.sr_withdraw),
             "extEventType": row.ext_event_type or "",
             "extEventDate": _fmt_date(row.ext_event_date) or None,
-            "extNewPopulation": row.ext_new_population,
-            "restructureTime": _fmt_date(row.restructure_time) or None,
+            "extCompensated": bool(row.ext_compensated),
+            "extWithdraw": bool(row.ext_withdraw),
             "hasChange": row.has_change,
             "economicRelation": row.economic_relation or "",
             "hukouPlace": row.hukou_place or "",
@@ -463,6 +538,23 @@ class SurveySheetService:
         entries = [(uid, sheet) for uid, sheet in member_entries if isinstance(sheet, dict)]
         if not entries:
             return
+        # 在户状态机闸门（与前端 validateMemberSheetFlow 同判据）：
+        # 违规整单 400（含逐条点名），与这次保存一并回滚 —— 不许半截落库。
+        uid_list = [uid for uid, _ in entries if uid]
+        name_map: dict[str, str] = {}
+        if uid_list:
+            from fastapi import HTTPException
+
+            name_map = dict(
+                db.execute(
+                    select(
+                        SurveyCbfJtcyResult.member_uid, SurveyCbfJtcyResult.cyxm
+                    ).where(SurveyCbfJtcyResult.member_uid.in_(uid_list))
+                ).all()
+            )
+            problems = validate_member_sheet_flow(entries, name_map)
+            if problems:
+                raise HTTPException(status_code=400, detail="；".join(problems))
         existing = {
             row.member_uid: row
             for row in db.scalars(
@@ -487,20 +579,26 @@ class SurveySheetService:
                     member_uid=uid,
                 )
                 db.add(row)
-            # 以下 8 项是现行摸底弹窗（2026-10-12 贴合纸质原件精简后）提交的字段，
-            # 每次保存全量覆盖（未填 → None/空）。
+            # 以下各项是现行摸底弹窗（2026-10-15：事件下拉只含进出 8 类，已补地/
+            # 抽回拆为每期独立复选框，列 28 变动时间改推导）提交的字段，每次保存
+            # 全量覆盖（未填 → None/空/False）。
             row.is_second_round_member = sheet.get("isSecondRoundMember")
             row.sr_event_type = sheet.get("srEventType") or None
             row.sr_event_date = self._parse_date(sheet.get("srEventDate"))
+            row.sr_compensated = bool(sheet.get("srCompensated"))
+            row.sr_withdraw = bool(sheet.get("srWithdraw"))
             row.ext_event_type = sheet.get("extEventType") or None
             row.ext_event_date = self._parse_date(sheet.get("extEventDate"))
-            row.restructure_time = self._parse_date(sheet.get("restructureTime"))
+            row.ext_compensated = bool(sheet.get("extCompensated"))
+            row.ext_withdraw = bool(sheet.get("extWithdraw"))
             row.economic_relation = sheet.get("economicRelation") or None  # 列30："1"/"0"/""
             row.hukou_place = (sheet.get("hukouPlace") or "").strip() or None      # 列31 现户口所在地
             row.residence_place = (sheet.get("residencePlace") or "").strip() or None  # 列32 现居住地
             row.is_civil_servant = sheet.get("isCivilServant")             # 列34
             row.is_institution_staff = sheet.get("isInstitutionStaff")     # 列33
             row.remark = sheet.get("remark") or None
+            # ⛔ restructure_time 不再写入（列 28 由两期事件时间取最后者推导），
+            # 历史值保留在列里不动。
             # ⚠️ 以下字段已从弹窗移除（纸质原件无对应录入列）：只在客户端显式
             # 携带时才写，避免精简后的保存把历史值抹成 None。
             if "srNewPopulation" in sheet:
@@ -746,12 +844,17 @@ class SurveySheetService:
                 "is1996Member": bool(row.is_second_round_member),
                 "srEventType": sr_type,
                 "srEventDate": _fmt_date(row.sr_event_date),
+                "srCompensated": bool(row.sr_compensated),
+                "srWithdraw": bool(row.sr_withdraw),
                 "extEventType": ext_type,
                 "extEventDate": _fmt_date(row.ext_event_date),
-                # 列 28 成员增减变动时间：延包时点 → 延包事件日期 → 二轮事件日期
-                "changeTime": _fmt_date(row.restructure_time)
-                or _fmt_date(row.ext_event_date)
-                or _fmt_date(row.sr_event_date),
+                "extCompensated": bool(row.ext_compensated),
+                "extWithdraw": bool(row.ext_withdraw),
+                # 列 28 成员增减变动时间：两期事件时间取最后者（ISO 日期字典序=时间序）
+                "changeTime": max(
+                    (_fmt_date(row.sr_event_date), _fmt_date(row.ext_event_date)),
+                    default="",
+                ),
                 # 列 29 现有家庭成员人数（removed 成员不点亮）
                 "inHousehold": (row.member_uid or "") in live_uids,
                 # 列 30 为本集体经济组织成员人口：归一为布尔（"0"/"否" = 否，
@@ -780,12 +883,10 @@ class SurveySheetService:
             if r["srEventType"].startswith("sub_") or r["extEventType"].startswith("sub_")
         )
         compensated_count = sum(
-            1 for r in member_rows
-            if r["srEventType"] == "compensated" or r["extEventType"] == "compensated"
+            1 for r in member_rows if r["srCompensated"] or r["extCompensated"]
         )
         withdraw_count = sum(
-            1 for r in member_rows
-            if r["srEventType"] == "withdraw" or r["extEventType"] == "withdraw"
+            1 for r in member_rows if r["srWithdraw"] or r["extWithdraw"]
         )
         note_stats = {
             # 1996 年落实二轮延包时户代表（无数据源，留空手填）
@@ -820,6 +921,15 @@ class SurveySheetService:
                 "issuerHamlet": issuer_parts["hamlet"],
                 "issuerName": "".join(issuer_parts.values()),
                 "issuerCode": cbfbm[:14] if len(cbfbm) >= 14 else "",
+            },
+            # 落款四项：调查员/调查日期（保存调查结果时写 investigated_at）、
+            # 审核人/审核日期（确认调查结果时写 reviewer_*，撤回确认时清空）。
+            # contractor 即该户最新 SurveyCbfResult；无 result 行（手工户）时留空手填。
+            "signatures": {
+                "investigatorName": (contractor.investigator_name if contractor else "") or "",
+                "investigatedAt": _fmt_date(contractor.investigated_at if contractor else None),
+                "reviewerName": (contractor.reviewer_name if contractor else "") or "",
+                "reviewedAt": _fmt_date(contractor.reviewed_at if contractor else None),
             },
             "rows": member_rows,
             "noteStats": note_stats,
