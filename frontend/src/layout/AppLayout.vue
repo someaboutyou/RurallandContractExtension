@@ -185,7 +185,7 @@ const navItems = [
   },
   {
     key: "business",
-    label: "业务办理",
+    label: "二轮延包工作",
     children: [
       { to: "/surveys", label: "调查批次", permissions: ["contractors.view"] },
       { to: "/requests", label: "业务申请", permissions: REQUEST_MODULE_PERMISSIONS },
@@ -208,12 +208,6 @@ const navItems = [
     // 与路由 meta 同源：入口可见性必须和接口/路由的准入判据一致，
     // 否则界面能点进去、进去却被踢回首页（体验事故）。
     permissions: ["dashboard.bigscreen"],
-  },
-  {
-    key: "archives",
-    label: "档案管理",
-    to: "/archives",
-    permissions: [...REQUEST_MODULE_PERMISSIONS, "users.view", "roles.view"],
   },
   {
     key: "system",

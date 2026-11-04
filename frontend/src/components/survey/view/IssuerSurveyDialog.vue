@@ -1,16 +1,16 @@
 ﻿<template>
-  <el-dialog :model-value="modelValue" :title="dialogTitle" width="760px" @update:model-value="$emit('update:modelValue', $event)">
-    <el-form ref="formRef" :model="form" :rules="rules" label-position="top" status-icon class="survey-dialog-form">
-      <div class="form-grid-3">
+  <el-dialog :model-value="modelValue" :title="dialogTitle" width="960px" @update:model-value="$emit('update:modelValue', $event)">
+    <el-form ref="formRef" :model="form" :rules="rules" label-position="left" label-width="126px" status-icon class="survey-dialog-form">
+      <div class="form-grid-2">
+        <el-form-item label="发包方名称" prop="name">
+          <el-input v-model="form.name" maxlength="50" />
+        </el-form-item>
         <el-form-item label="发包方编码" prop="code">
           <el-input :model-value="form.code" maxlength="14" readonly @input="handleCodeInput">
             <template v-if="isCreating" #append>
               <el-button @click="generateCode">生成</el-button>
             </template>
           </el-input>
-        </el-form-item>
-        <el-form-item label="发包方名称" prop="name">
-          <el-input v-model="form.name" maxlength="50" />
         </el-form-item>
         <el-form-item label="负责人姓名" prop="responsibleName">
           <el-input v-model="form.responsibleName" maxlength="50" />
@@ -32,22 +32,25 @@
       <el-form-item label="发包方地址" prop="address">
         <el-input v-model="form.address" maxlength="100" />
       </el-form-item>
-      <div class="form-grid-3">
+      <div class="form-grid-2">
         <el-form-item label="邮政编码" prop="postcode">
           <el-input v-model="form.postcode" maxlength="6" />
-        </el-form-item>
-        <el-form-item label="调查员">
-          <el-input v-model="form.surveyorName" maxlength="254" />
         </el-form-item>
         <el-form-item label="调查日期">
           <el-date-picker v-model="form.surveyDate" value-format="YYYY-MM-DD" type="date" style="width: 100%" />
         </el-form-item>
+        <el-form-item label="调查员">
+          <el-input v-model="form.surveyorName" maxlength="254" />
+        </el-form-item>
       </div>
       <el-form-item label="调查记事">
-        <el-input v-model="form.surveyNote" type="textarea" :rows="2" maxlength="254" show-word-limit />
+        <el-input v-model="form.surveyNote" type="textarea" :rows="3" maxlength="254" show-word-limit />
       </el-form-item>
       <el-form-item label="变化原因">
         <el-input v-model="form.changeReason" type="textarea" :rows="2" maxlength="500" />
+      </el-form-item>
+      <el-form-item label="备注">
+        <el-input v-model="form.remark" type="textarea" :rows="2" maxlength="500" />
       </el-form-item>
     </el-form>
     <template #footer>
@@ -312,5 +315,11 @@ defineExpose({ openForCreate, openForEdit });
 <style scoped>
 .survey-dialog-form {
   margin-top: 16px;
+}
+.form-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 18px;
+  align-items: start;
 }
 </style>
