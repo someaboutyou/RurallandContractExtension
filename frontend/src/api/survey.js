@@ -21,6 +21,56 @@ export function exportSurveyResults(batchId, params) {
   return http.get(`/surveys/batches/${batchId}/export-results.zip`, { params, responseType: "blob" });
 }
 
+/** 承包方调查表 Excel 导出（鱼鳞图样式模板，xls）。 */
+export function exportContractorSurveyXls(batchId) {
+  return http.get(`/surveys/batches/${batchId}/contractors-xls`, { responseType: "blob" });
+}
+
+/** 承包方调查表 Excel 导入预览：上传文件，返回逐户校验报告（不落库）。 */
+export function previewContractorSurveyXls(batchId, formData) {
+  return http.post(`/surveys/batches/${batchId}/contractors-xls/preview`, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    timeout: 120000,
+  });
+}
+
+/** 承包方调查表 Excel 导入：逐户验证、导入（复用页面保存同源逻辑）。 */
+export function importContractorSurveyXls(batchId, formData) {
+  return http.post(`/surveys/batches/${batchId}/contractors-xls/import`, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    timeout: 600000,
+  });
+}
+
+// ── 后台任务版导出 / 导入（大数据量：启动任务 → 轮询进度 → 下载/看结果）──
+
+export function startXlsExportJob(batchId) {
+  return http.post(`/surveys/batches/${batchId}/contractors-xls/export-jobs`);
+}
+
+export function getXlsExportJob(batchId, jobId) {
+  return http.get(`/surveys/batches/${batchId}/contractors-xls/export-jobs/${jobId}`);
+}
+
+export function downloadXlsExportJob(batchId, jobId) {
+  return http.get(`/surveys/batches/${batchId}/contractors-xls/export-jobs/${jobId}/download`, {
+    responseType: "blob",
+    timeout: 600000, // 大文件 blob 下载走 axios 默认 10s 会被掐断
+  });
+}
+
+export function startXlsImportJob(batchId, formData) {
+  return http.post(`/surveys/batches/${batchId}/contractors-xls/import-jobs`, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    timeout: 120000,
+  });
+}
+
+export function getXlsImportJob(batchId, jobId) {
+  return http.get(`/surveys/batches/${batchId}/contractors-xls/import-jobs/${jobId}`);
+}
+
+
 export function fetchSurveyTasks(batchId, params) {
   return http.get(`/surveys/batches/${batchId}/tasks`, { params });
 }

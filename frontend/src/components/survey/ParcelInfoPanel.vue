@@ -118,8 +118,16 @@
         <el-button
           v-if="splitForm.splitMethod === 'area'"
           size="small"
+          :type="splitForm.splitBasis === 'edge' ? 'primary' : 'default'"
+          @click="startEdgePickMode"
+        >
+          点选基准边
+        </el-button>
+        <el-button
+          v-if="splitForm.splitMethod === 'area'"
+          size="small"
           type="primary"
-          :disabled="!splitCanSubmit"
+          :disabled="!splitForm.dkbm || !splitSourceHasGeometry"
           @click="splitConfigDialogVisible = true"
         >
           切割设置
@@ -226,7 +234,8 @@
           <el-table-column prop="dkmc" label="地块名称" min-width="120" />
           <el-table-column label="面积(亩)" width="100">
             <template #default="{ row }">
-              <span :class="parcelChangedClass(row)">{{ row.scmj ?? "-" }}</span>
+              <!-- scmj 库内口径 ㎡；界面列「亩」→ 换算显示（2026-11-04 统一） -->
+              <span :class="parcelChangedClass(row)">{{ row.scmj == null ? "-" : (sqmToMu(row.scmj) ?? "-") }}</span>
             </template>
           </el-table-column>
           <el-table-column label="类别" width="80">
@@ -301,10 +310,23 @@
             </div>
             <div class="parcel-detail-grid">
               <el-form-item label="实测面积（亩）">
-                <el-input-number v-model="selectedParcel.scmj" :min="0" :precision="2" style="width: 100%" />
+                <!-- scmj 库内口径 ㎡，界面输入/显示亩：显示 ÷666.67、编辑 ×666.67（2026-11-04 统一） -->
+                <el-input-number
+                  :model-value="sqmToMu(selectedParcel.scmj)"
+                  :min="0"
+                  :precision="2"
+                  style="width: 100%"
+                  @update:model-value="selectedParcel.scmj = $event == null ? null : muToSqm($event)"
+                />
               </el-form-item>
               <el-form-item label="合同面积（亩）">
-                <el-input-number v-model="selectedParcel.htmj" :min="0" :precision="2" style="width: 100%" />
+                <el-input-number
+                  :model-value="sqmToMu(selectedParcel.htmj)"
+                  :min="0"
+                  :precision="2"
+                  style="width: 100%"
+                  @update:model-value="selectedParcel.htmj = $event == null ? null : muToSqm($event)"
+                />
               </el-form-item>
             </div>
             <el-form-item label="土地利用类型">
@@ -369,7 +391,6 @@
       width="680px"
       :close-on-click-modal="false"
       destroy-on-close
-      @closed="cancelSplitParcelMode"
     >
       <!-- Geometry mode content -->
       <template v-if="splitForm.splitMethod === 'geometry'">
@@ -382,7 +403,7 @@
             <el-tag type="info" size="small">历史</el-tag>
             <span class="split-original-code">{{ splitSourceParcel?.dkbm || "-" }}</span>
             <span class="split-original-name">{{ splitSourceParcel?.dkmc || "-" }}</span>
-            <span class="split-original-area">{{ splitSourceParcel?.scmj || 0 }} 亩</span>
+            <span class="split-original-area">{{ splitSourceAreaMu }} 亩</span>
           </div>
           <el-tabs v-model="activeSplitTab" type="card" class="split-parcel-tabs">
             <el-tab-pane
@@ -406,14 +427,17 @@
                 </div>
                 <div class="split-config-grid">
                   <el-form-item label="实测面积（亩）">
-                    <el-input :model-value="parcel.scmj || 0" disabled />
+                    <!-- 预览返回的 scmj 已是 ㎡（后端统一口径），显示换算成亩 -->
+                    <el-input :model-value="sqmToMu(parcel.scmj) ?? 0" disabled />
                   </el-form-item>
                   <el-form-item label="合同面积（亩）">
+                    <!-- htmj 设置值按 ㎡ 存储（提交口径），输入亩、换算存储（2026-11-04 统一） -->
                     <el-input-number
-                      v-model="splitParcelSettings[index].htmj"
+                      :model-value="sqmToMu(splitParcelSettings[index].htmj)"
                       :min="0"
                       :precision="2"
                       style="width: 100%"
+                      @update:model-value="splitParcelSettings[index].htmj = $event == null ? null : muToSqm($event)"
                     />
                   </el-form-item>
                 </div>
@@ -477,6 +501,14 @@
             </el-form-item>
           </div>
           <div class="split-config-grid">
+            <el-form-item label="切割基准" required>
+              <el-radio-group v-model="splitForm.splitBasis" size="small" @change="handleSplitBasisChange">
+                <el-radio-button value="direction">按四方向</el-radio-button>
+                <el-radio-button value="edge">按边平行</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+          </div>
+          <div class="split-config-grid">
             <el-form-item label="切出面积（亩）" required>
               <el-input-number
                 v-model="splitForm.newScmj"
@@ -486,13 +518,38 @@
                 style="width: 100%"
               />
             </el-form-item>
-            <el-form-item label="切割方向" required>
+            <el-form-item v-if="splitForm.splitBasis === 'direction'" label="切割方向" required>
               <el-select v-model="splitForm.splitDirection" style="width: 100%">
                 <el-option label="从东侧切割" value="east" />
                 <el-option label="从西侧切割" value="west" />
                 <el-option label="从南侧切割" value="south" />
                 <el-option label="从北侧切割" value="north" />
               </el-select>
+            </el-form-item>
+            <el-form-item v-else label="切割基准边（切出块与所选边相邻）" required>
+              <div class="edge-pick-row">
+                <el-button
+                  size="small"
+                  :type="edgePickActive ? 'primary' : 'default'"
+                  @click="splitConfigDialogVisible = false; startEdgePickMode()"
+                >
+                  {{ splitForm.edgeIndex === null ? "去地图选边" : "重新选边" }}
+                </el-button>
+                <span class="edge-pick-result">
+                  {{ splitForm.edgeIndex === null ? "未选择" : `第 ${splitForm.edgeIndex + 1} 条边` }}
+                </span>
+                <el-button
+                  v-if="splitForm.edgeIndex !== null"
+                  size="small"
+                  text
+                  @click="clearEdgePickSelection"
+                >
+                  清除
+                </el-button>
+              </div>
+              <div v-if="splitForm.edgeIndex === null" class="edge-pick-hint">
+                点击后将关闭本弹窗，请在地图上点击要平行的边，选完再打开切割设置。
+              </div>
             </el-form-item>
           </div>
           <el-form-item label="切割原因">
@@ -508,7 +565,7 @@
         </el-form>
       </template>
       <template #footer>
-        <el-button @click="splitConfigDialogVisible = false">取消</el-button>
+        <el-button @click="splitConfigDialogVisible = false">关闭</el-button>
         <el-button
           type="primary"
           :loading="submittingSplitParcel"
@@ -562,6 +619,7 @@ import {
   parcelRowClassName,
   parcelChangedClass,
 } from "../../utils/parcelStatusHelpers";
+import { sqmToMu, muToSqm } from "../../utils/areaUnits";
 
 const props = defineProps({
   batchId: { type: Number, required: true },
@@ -624,6 +682,7 @@ const {
   splitForm,
   splitSourceParcel,
   splitSourceHasGeometry,
+  splitSourceAreaMu,
   splitRemainingArea,
   splitCanSubmit,
   splitModeAlertType,
@@ -637,6 +696,10 @@ const {
   startSplitDrawMode,
   submitSplitParcel,
   selectParcelInSplitMode,
+  // 按边平行切割
+  startEdgePickMode,
+  clearEdgePickSelection,
+  handleSplitBasisChange,
 } = splitResult;
 
 // --- Add parcel geometry mode ---
@@ -1103,6 +1166,23 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 10px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.edge-pick-row {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+.edge-pick-result {
+  color: #475569;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.edge-pick-hint {
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 4px;
 }
 .split-preview-loading {
   align-items: center;

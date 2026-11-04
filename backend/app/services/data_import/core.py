@@ -258,6 +258,11 @@ class DataImportService:
     def list_rows(self, db, batch_id, page, page_size, status_filter):
         return attachments.list_rows(db, batch_id, page, page_size, status_filter)
 
+    def reimport_failed_row(self, db, batch_id, row_id, data_patch, current_user):
+        from .row_reimport import reimport_failed_row
+
+        return reimport_failed_row(db, batch_id, row_id, data_patch, current_user)
+
     def rollback_batch(self, db, batch_id, current_user):
         batch = db.get(DataImportBatch, batch_id)
         if batch is None:

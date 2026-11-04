@@ -39,6 +39,7 @@
 import { computed, ref, watch } from "vue";
 import { useDictionary } from "../../composables/useDictionary";
 import { surveyStatusMap, resultStatusMap, changeTypeMap, landUseTypeMap } from "../../config/gisFieldMaps";
+import { sqmToMu } from "../../utils/areaUnits";
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -73,7 +74,12 @@ function displayValue(v) { return v === undefined || v === null || v === "" ? "�
 function dictDisplay(labelOf, v) { return displayValue(labelOf(v, v)); }
 function mapDisplay(map, v) { return displayValue(map[v] || v); }
 function booleanDisplay(v) { if (v === true) return "是"; if (v === false) return "否"; return dictDisplay(yesNoLabel, v); }
-function withAreaUnit(v) { return v === undefined || v === null || v === "" ? "未知" : v + " 亩"; }
+function withAreaUnit(v) {
+  // scmj/htmj 库内口径 ㎡；GIS 属性面板按「亩」展示 → 换算（2026-11-04 统一）
+  if (v === undefined || v === null || v === "") return "未知";
+  const mu = sqmToMu(v);
+  return mu === null ? "未知" : `${mu} 亩`;
+}
 
 const contractorInfoRows = computed(() => { const p = props.parcel || {}; return [
   { label: "承包方编码", value: displayValue(p.cbfbm) }, { label: "承包方类型", value: dictDisplay(contractorTypeLabel, p.cbflx) },

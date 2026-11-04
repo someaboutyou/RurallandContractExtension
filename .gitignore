@@ -77,3 +77,8 @@ backend/build.prev-*/
 
 # 本地临时日志
 .vite-dev.log
+
+# 仓库根的调试截图 / playwright 会话与凭据（不入库）
+/*.png
+/login*.yaml
+/.playwright-cli/

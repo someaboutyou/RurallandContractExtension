@@ -23,7 +23,38 @@ TEST_DB = "erlunyanbao_seedverify"
 RESULT_PATH = ROOT / "runtime" / ".state" / "_verify_seed_result.json"
 
 CHANGED_LAYER_URL = "https://example.com/operator-changed/{z}/{x}/{y}.png"
-CHANGED_GROUP_CODES = ("32132410000102", "32132410000103")
+# 组码不再硬编码 321324（泗洪演示）：区域种子已切到通辽（REGION_SEED_COUNTIES），
+# 空临时库里不一定存在 321324。夹具的县/镇/村/组码在 bootstrap 后从库里
+# 实际种出的第一个县级区域动态派生（见下方 fixture_codes()）。
+CHANGED_GROUP_CODES: tuple[str, ...] = ()
+
+
+def fixture_codes() -> dict[str, str]:
+    """从临时库种出的区域里取第一个县级码，派生镇/村/组夹具码。"""
+    import os as _os
+
+    _os.environ.setdefault("DATABASE_PORT", "15432")
+    from app.db.session import SessionLocal
+    from app.models.region import Region
+    from sqlalchemy import select as _select
+
+    with SessionLocal() as db:
+        county = db.scalar(
+            _select(Region).where(Region.level == "county").order_by(Region.code).limit(1)
+        )
+        if county is None:
+            check("夹具：种子里存在县级区域", False, "regions 表无 level=county 行")
+            write_result(3)
+            raise SystemExit(3)
+        code = county.code
+    return {
+        "county": code,
+        "town": f"{code}100",
+        "village": f"{code}100001",
+        "group_a": f"{code}10000101",
+        "group_b": f"{code}10000102",
+        "group_c": f"{code}10000103",
+    }
 
 
 def load_env() -> dict[str, str]:
@@ -130,27 +161,44 @@ with SessionLocal() as db:
 
 # 真实部署里 regions 由 fbf 业务数据同步而来（省/市/县/镇/村/组）。
 # 空库没有业务数据，DEFAULT_USERS 里镇/村级的用户会因目标区域不存在被跳过 —— 这是既有行为，
-# 与本次改造无关。这里补两条区域再跑一次 bootstrap，等价于"业务数据到位后重启程序"。
+# 与本次改造无关。这里按种子里实际存在的县补两条区域再跑一次 bootstrap，
+# 等价于"业务数据到位后重启程序"。
+FX = fixture_codes()
+GROUP_SCOPE_EXPECTED = {FX["group_a"]}
+CHANGED_GROUP_CODES = (FX["group_b"], FX["group_c"])
+
 with SessionLocal() as db:
-    county = db.scalar(select(Region).where(Region.code == "321324"))
+    county = db.scalar(select(Region).where(Region.code == FX["county"]))
     town = Region(
         name="青阳镇",
-        code="321324100",
+        code=FX["town"],
         level="town",
-        full_name="导入数据 / 泗洪县 / 青阳镇",
+        full_name=f"导入数据 / {county.name} / 青阳镇",
         parent_id=county.id,
-        tenant_code="321324",
+        tenant_code=FX["county"],
     )
     db.add(town)
     db.flush()
+    village = Region(
+        name="城东居",
+        code=FX["village"],
+        level="village",
+        full_name=f"导入数据 / {county.name} / 青阳镇 / 城东居",
+        parent_id=town.id,
+        tenant_code=FX["county"],
+    )
+    db.add(village)
+    db.flush()
+    # group_scope_user 只有在库里存在 14 位组码时才会被创建（_demo_permission_codes
+    # 动态取 min(14位码)，且授权行只落真实存在的区域），所以组级区域必须真实插入。
     db.add(
         Region(
-            name="城东居",
-            code="321324100001",
-            level="village",
-            full_name="导入数据 / 泗洪县 / 青阳镇 / 城东居",
-            parent_id=town.id,
-            tenant_code="321324",
+            name="城东居一组",
+            code=FX["group_a"],
+            level="group",
+            full_name=f"导入数据 / {county.name} / 青阳镇 / 城东居 / 一组",
+            parent_id=village.id,
+            tenant_code=FX["county"],
         )
     )
     db.commit()
@@ -160,7 +208,7 @@ with SessionLocal() as db:
     check("区域补齐后 bootstrap：默认用户全部创建", count(db, User) >= 7, count(db, User))
     check(
         "区域补齐后 bootstrap：group_scope_user 拿到预设授权",
-        perms_of(db, "group_scope_user") == {"32132410000101"},
+        perms_of(db, "group_scope_user") == GROUP_SCOPE_EXPECTED,
         sorted(perms_of(db, "group_scope_user")),
     )
 
@@ -216,6 +264,25 @@ with SessionLocal() as db:
     role = db.scalar(select(Role).where(Role.code == "town_auditor"))
     role.permissions = [item for item in role.permissions if item.code != "issuers.view"]
 
+    # ⑨ 字典按类型"缺则补"的两个验收面：
+    #    a) 把一个预设类型**清空** → 重启后应被补回（老口径"整表非空就不动"补不回）；
+    #    b) 把另一个预设类型的条目**改名** → 重启后不得被预设覆写。
+    from app.db.dictionary_presets import NYT2539_APPENDIX_C_DICTIONARY_ITEMS
+
+    preset_types = sorted({row[0] for row in NYT2539_APPENDIX_C_DICTIONARY_ITEMS})
+    dict_type_to_empty = "nyt2539_c20_relation_to_head"
+    dict_type_to_rename = next(t for t in preset_types if t != dict_type_to_empty)
+    db.execute(delete(DictionaryItem).where(DictionaryItem.dict_type == dict_type_to_empty))
+    rename_item = db.scalar(
+        select(DictionaryItem).where(DictionaryItem.dict_type == dict_type_to_rename).limit(1)
+    )
+    RENAMED_DICT = {
+        "type": dict_type_to_rename,
+        "value": rename_item.item_value,
+        "name": "运维改名后的条目",
+    }
+    rename_item.item_name = RENAMED_DICT["name"]
+
     db.commit()
 
 with SessionLocal() as db:
@@ -246,6 +313,31 @@ with SessionLocal() as db:
 
     layer = db.scalar(select(MapLayer).where(MapLayer.key == "image"))
     check("重启后：底图地址未被覆盖", layer.service_url == CHANGED_LAYER_URL, layer.service_url)
+
+    empty_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(DictionaryItem)
+            .where(DictionaryItem.dict_type == dict_type_to_empty)
+        )
+        or 0
+    )
+    check(
+        f"重启后：被清空的预设字典类型已补齐（{dict_type_to_empty}）",
+        empty_count > 0,
+        empty_count,
+    )
+    renamed = db.scalar(
+        select(DictionaryItem).where(
+            DictionaryItem.dict_type == RENAMED_DICT["type"],
+            DictionaryItem.item_value == RENAMED_DICT["value"],
+        )
+    )
+    check(
+        f"重启后：已有字典类型的运维改名未被覆写（{RENAMED_DICT['type']}）",
+        renamed is not None and renamed.item_name == RENAMED_DICT["name"],
+        renamed.item_name if renamed else None,
+    )
 
     perm = db.scalar(select(Permission).where(Permission.code == "dashboard.view"))
     check("重启后：权限点文案未被覆盖", perm.name == "查看工作台（已改名）", perm.name)

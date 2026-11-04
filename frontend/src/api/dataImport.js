@@ -64,3 +64,7 @@ export function fetchImportRows(batchId, params) {
 export function downloadFailedImportRows(batchId) {
   return http.get(`/data-imports/${batchId}/failed-rows.csv`, { responseType: "blob" });
 }
+
+export function reimportImportRow(batchId, rowId, data) {
+  return http.post(`/data-imports/${batchId}/rows/${rowId}/reimport`, { data });
+}

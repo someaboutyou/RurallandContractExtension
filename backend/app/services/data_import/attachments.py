@@ -87,19 +87,17 @@ def build_failed_rows_csv(db: Session, batch_id: int) -> tuple[str, bytes]:
 
 
 def list_rows(db: Session, batch_id: int, page: int, page_size: int, status_filter: str | None) -> dict:
-    if status_filter and status_filter != "failed":
-        return {"items": [], "total": 0, "page": page, "pageSize": page_size}
+    conditions = [DataImportRow.import_batch_id == batch_id]
+    if status_filter:
+        conditions.append(DataImportRow.status == status_filter)
     stmt = (
         select(DataImportRow)
-        .where(DataImportRow.import_batch_id == batch_id, DataImportRow.status == "failed")
+        .where(*conditions)
         .order_by(DataImportRow.id.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
-    total_stmt = (
-        select(func.count(DataImportRow.id))
-        .where(DataImportRow.import_batch_id == batch_id, DataImportRow.status == "failed")
-    )
+    total_stmt = select(func.count(DataImportRow.id)).where(*conditions)
     return {
         "items": [serialize_row(item) for item in db.scalars(stmt).all()],
         "total": db.scalar(total_stmt) or 0,

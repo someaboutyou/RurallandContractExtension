@@ -1547,41 +1547,62 @@ def ensure_default_request_workflow_mappings(db: Session) -> None:
 
 
 def ensure_dictionary_presets(db: Session) -> None:
-    """仅在**字典表为空**时灌入内置预设；表里已有数据则完全不动。
+    """按 **dict_type 缺则补**：某个字典类型在表里一条都没有时，灌入该类型的内置预设；
+    该类型已有任何条目（哪怕只剩一条）则一行不碰。
 
-    旧实现是「表非空就再按 dict_type 同步一次」（`_sync_dictionary_group`）：那个同步会
-    覆写已存在字典项的 `dict_name / item_name / sort_order / remark / enabled`，还会
-    **删除**所有不在预设清单里的字典项——运维在「字典管理」页改过或补录过的条目会在
-    重启后丢失。现在改为：有数据就一行不碰。
+    历史教训（两版）：
+    - 最初版是「表非空就再按 dict_type 同步一次」（`_sync_dictionary_group`）：那个同步会
+      覆写已存在字典项的 `dict_name / item_name / sort_order / remark / enabled`，还会
+      **删除**所有不在预设清单里的字典项——运维在「字典管理」页改过或补录过的条目会在
+      重启后丢失。
+    - 上一版改为「仅整张表为空时灌一次」：保住了运维数据，但代码后续新增的 dict_type
+      在**字典表已非空的老库**上永远灌不进去（2026-11-03 实例：还原的现场库只有
+      `survey_org`/`app_download` 两类，整套 `nyt2539_c20_*` 预设缺失，
+      「与户主关系」下拉只能显示裸码）。
 
-    注意取舍：字典表非空时，代码后续版本新增的 dict_type 不会自动灌入，
-    需要时请显式执行运维数据脚本。
+    现版按类型粒度"缺则补"：既不覆盖/删除运维改过的条目，又保证新增预设类型
+    能在老库上自动补齐。运维若删光某类型想彻底弃用，重启后会被补回——这是
+    "预设类型必须存在"口径的代价，如需永久下线某字典请在「字典管理」里停用条目。
     """
-    existing_count = db.scalar(select(func.count()).select_from(DictionaryItem)) or 0
-    if existing_count > 0:
-        return
-
     from app.db.dictionary_presets import NYT2539_APPENDIX_C_DICTIONARY_ITEMS
 
-    for dict_type, dict_name, item_value, item_name, sort_order, remark in NYT2539_APPENDIX_C_DICTIONARY_ITEMS:
-        db.add(
-            DictionaryItem(
-                dict_type=dict_type,
-                dict_name=dict_name,
-                item_value=item_value,
-                item_name=item_name,
-                sort_order=sort_order,
-                enabled=True,
-                remark=remark,
-                tenant_code=None,
+    preset_types: dict[str, list[tuple]] = {}
+    for row in NYT2539_APPENDIX_C_DICTIONARY_ITEMS:
+        preset_types.setdefault(row[0], []).append(row)
+
+    existing_counts = dict(
+        db.execute(
+            select(DictionaryItem.dict_type, func.count())
+            .group_by(DictionaryItem.dict_type)
+        ).all()
+    )
+
+    changed = False
+    for dict_type, rows in preset_types.items():
+        if existing_counts.get(dict_type, 0) > 0:
+            continue
+        for _dict_type, dict_name, item_value, item_name, sort_order, remark in rows:
+            db.add(
+                DictionaryItem(
+                    dict_type=dict_type,
+                    dict_name=dict_name,
+                    item_value=item_value,
+                    item_name=item_name,
+                    sort_order=sort_order,
+                    enabled=True,
+                    remark=remark,
+                    tenant_code=None,
+                )
             )
-        )
-    db.commit()
+        changed = True
+
+    if changed:
+        db.commit()
 
 
 # 原 `_sync_dictionary_group()` 已删除：它会在每次启动时覆写已存在字典项的字段，
-# 并删除所有不在预设清单里的项，属于\"用代码预设覆盖运维数据\"。
-# 字典预设现在只在字典表为空时灌入一次，见 `ensure_dictionary_presets()`。
+# 并删除所有不在预设清单里的项，属于"用代码预设覆盖运维数据"。
+# 字典预设现按 dict_type "缺则补"，见 `ensure_dictionary_presets()`。
 
 
 

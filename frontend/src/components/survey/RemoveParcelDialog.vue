@@ -31,12 +31,12 @@
           <el-option
             v-for="p in eligibleParcels"
             :key="p.dkbm"
-            :label="`${p.dkbm} — ${p.dkmc || '未命名'}（${p.scmj || 0} 亩）`"
+            :label="`${p.dkbm} — ${p.dkmc || '未命名'}（${formatSqmsAsMu(p.scmj, '0 亩')}）`"
             :value="p.dkbm"
           >
             <span class="option-code">{{ p.dkbm }}</span>
             <span class="option-name">{{ p.dkmc || '未命名' }}</span>
-            <span class="option-area">{{ p.scmj || 0 }} 亩</span>
+            <span class="option-area">{{ formatSqmsAsMu(p.scmj, '0 亩') }}</span>
           </el-option>
         </el-select>
       </el-form-item>
@@ -44,7 +44,7 @@
       <el-descriptions v-if="selectedParcel" :column="2" border size="small" style="margin-bottom: 16px">
         <el-descriptions-item label="地块编码">{{ selectedParcel.dkbm }}</el-descriptions-item>
         <el-descriptions-item label="地块名称">{{ selectedParcel.dkmc || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="实测面积">{{ selectedParcel.scmj || 0 }} 亩</el-descriptions-item>
+        <el-descriptions-item label="实测面积">{{ formatSqmsAsMu(selectedParcel.scmj, '0 亩') }}</el-descriptions-item>
         <el-descriptions-item label="地块类别">
           {{ dklbMap[selectedParcel.dklb] || selectedParcel.dklb || '-' }}
         </el-descriptions-item>
@@ -87,6 +87,7 @@ import {
   isSplitSourceParcel,
   isSplitGeneratedParcel,
 } from "../../utils/parcelStatusHelpers";
+import { formatSqmsAsMu } from "../../utils/areaUnits";
 
 const emit = defineEmits(["done"]);
 

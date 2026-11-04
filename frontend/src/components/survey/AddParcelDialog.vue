@@ -160,6 +160,7 @@ import { ElMessage } from "element-plus";
 
 import { generateNextSurveyParcelCode } from "../../api/survey";
 import { useDictionary } from "../../composables/useDictionary";
+import { muToSqm } from "../../utils/areaUnits";
 
 const props = defineProps({
   batchId: { type: Number, default: null },
@@ -309,8 +310,9 @@ async function handleSubmit() {
         ...form,
         dkbm: form.dkbm.trim(),
         dkmc: form.dkmc.trim(),
-        scmj: Number(form.scmj),
-        htmj: form.htmj != null ? Number(form.htmj) : undefined,
+        // 界面输入口径为亩；API/库内 scmj/htmj 一律 ㎡ —— 提交前换算（2026-11-04 统一）。
+        scmj: muToSqm(Number(form.scmj)),
+        htmj: form.htmj != null ? muToSqm(Number(form.htmj)) : undefined,
         geometry: geometryPayload.value?.geometry || null,
         geometrySourceSrid: geometryPayload.value?.geometrySourceSrid || 4326,
       },

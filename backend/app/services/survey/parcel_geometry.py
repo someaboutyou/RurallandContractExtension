@@ -1,5 +1,6 @@
 ﻿import json
 import logging
+import math
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select, text
@@ -17,6 +18,13 @@ from app.core.crs import get_target_srid
 from app.services.data_access_service import data_access_service
 
 logger = logging.getLogger(__name__)
+
+# 面积单位口径（2026-11-04 统一，全后端唯一换算系数）：
+# 库内与所有 API 的 scmj / htmj / newScmj 一律为平方米（㎡）——与历史导入数据、
+# 打印出件（sheet.py / contract_template_service.py ÷666.67）、NY/T 2539 导出同口径。
+# 几何计算（ST_Area、切割二分）天然是 ㎡，仅"按面积切割"的目标面积入参需要 ㎡→亩 换算。
+SQM_PER_MU = 666.6666667
+
 
 class SurveyServiceParcelGeometryMixin:
     def validate_parcel_geometry(
@@ -182,6 +190,7 @@ class SurveyServiceParcelGeometryMixin:
                     int(payload.get("geometrySourceSrid") or 4326),
                 )
             else:
+                # newScmj 口径为 ㎡（2026-11-04 统一），切割算法内部用亩，先换算。
                 new_scmj = float(payload.get("newScmj") or 0)
                 if new_scmj <= 0:
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="split area is required")
@@ -190,7 +199,8 @@ class SurveyServiceParcelGeometryMixin:
                     pending_source_geometry,
                     src_srid,
                     payload.get("splitDirection"),
-                    new_scmj,
+                    new_scmj / SQM_PER_MU,
+                    edge_index=self._parse_edge_index(payload.get("edgeIndex")),
                 )
             # Build a minimal parcel-like object for _prepare_split_generated_parcels.
             class _PendingParcel:
@@ -206,6 +216,7 @@ class SurveyServiceParcelGeometryMixin:
                     int(payload.get("geometrySourceSrid") or 4326),
                 )
             else:
+                # newScmj 口径为 ㎡（2026-11-04 统一），切割算法内部用亩，先换算。
                 new_scmj = float(payload.get("newScmj") or 0)
                 if new_scmj <= 0:
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="split area is required")
@@ -213,7 +224,8 @@ class SurveyServiceParcelGeometryMixin:
                     db,
                     old_parcel.id,
                     payload.get("splitDirection"),
-                    new_scmj,
+                    new_scmj / SQM_PER_MU,
+                    edge_index=self._parse_edge_index(payload.get("edgeIndex")),
                 )
             mock_parcel = old_parcel
 
@@ -308,7 +320,7 @@ class SurveyServiceParcelGeometryMixin:
             WITH input_geom AS (
                 SELECT """
             + self._geojson_to_target_sql()
-            + """ AS geom
+            + f""" AS geom
             ),
             local_parcels AS (
                 SELECT
@@ -613,13 +625,253 @@ class SurveyServiceParcelGeometryMixin:
                 })
         return parts
 
+    # ------------------------------------------------------------------
+    # 按边平行切割（edge split）：用户选择源地块的一条外环边，切割线平行于
+    # 该边，把与所选边相邻、面积等于目标值的部分切出去。实现方式：取边角度
+    # θ，把几何旋转 -θ（边变水平），在旋转坐标系内对切割线偏距做二分逼近目
+    # 标面积，切完再转回原坐标系输出。
+    # ------------------------------------------------------------------
+
+    _ROW_SOURCE_SQL = (
+        "SELECT ST_Multi(ST_CollectionExtract(ST_MakeValid(geom), 3)) AS geom "
+        "FROM survey_dk_result WHERE id = :row_id"
+    )
+
+    def _geojson_source_sql(self) -> str:
+        return f"SELECT {self._geojson_to_target_sql('src_geojson', 'src_srid')} AS geom"
+
+    @staticmethod
+    def _parse_edge_index(value) -> int | None:
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid edge index") from exc
+
+    def _load_edge_frame(self, db: Session, source_sql: str, params: dict, edge_index: int) -> dict:
+        """取最大多边形的外环与内部参考点，计算所选边的旋转基准（角度/枢轴/内侧方向）。"""
+        row = db.execute(
+            text(
+                f"""
+                WITH src AS ({source_sql}),
+                polys AS (SELECT (ST_Dump(geom)).geom AS p FROM src),
+                biggest AS (SELECT p FROM polys ORDER BY ST_Area(p) DESC LIMIT 1)
+                SELECT
+                    ST_AsGeoJSON(ST_ExteriorRing(p)) AS ring_geojson,
+                    ST_X(ST_PointOnSurface(p)) AS pos_x,
+                    ST_Y(ST_PointOnSurface(p)) AS pos_y
+                FROM biggest
+                """
+            ),
+            dict(params),
+        ).mappings().first()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="parcel geometry is empty")
+        try:
+            ring = json.loads(row["ring_geojson"])["coordinates"]
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="parcel geometry ring is invalid") from exc
+        return self._compute_edge_frame(ring, (float(row["pos_x"]), float(row["pos_y"])), int(edge_index))
+
+    @staticmethod
+    def _compute_edge_frame(ring, interior_point, edge_index: int) -> dict:
+        points = list(ring)
+        if len(points) > 1 and points[0] == points[-1]:
+            points = points[:-1]
+        count = len(points)
+        if count < 3:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="parcel ring is invalid")
+        if edge_index < 0 or edge_index >= count:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"edge index out of range 0-{count - 1}",
+            )
+        ax, ay = float(points[edge_index][0]), float(points[edge_index][1])
+        bx, by = float(points[(edge_index + 1) % count][0]), float(points[(edge_index + 1) % count][1])
+        theta = math.atan2(by - ay, bx - ax)
+        px, py = ax, ay
+        ix, iy = interior_point
+        dx, dy = ix - px, iy - py
+        cos_r, sin_r = math.cos(-theta), math.sin(-theta)
+        rotated_iy = py + dx * sin_r + dy * cos_r
+        side = 1 if rotated_iy > py else (-1 if rotated_iy < py else 0)
+        if side == 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="cannot determine edge side")
+        return {"theta": theta, "px": px, "py": py, "side": side, "edgeIndex": edge_index, "ringSize": count}
+
+    def _load_rotated_extent(self, db: Session, source_sql: str, params: dict, rot_params: dict) -> dict:
+        row = db.execute(
+            text(
+                f"""
+                WITH src AS ({source_sql}),
+                rot AS (SELECT ST_Rotate(src.geom, :rot, :px, :py) AS geom FROM src)
+                SELECT
+                    ST_XMin(geom) AS min_x,
+                    ST_YMin(geom) AS min_y,
+                    ST_XMax(geom) AS max_x,
+                    ST_YMax(geom) AS max_y,
+                    ST_Area(geom) AS area_sqm
+                FROM rot
+                """
+            ),
+            {**params, **rot_params},
+        ).mappings().first()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="parcel geometry is empty")
+        return {
+            "minX": float(row["min_x"]),
+            "minY": float(row["min_y"]),
+            "maxX": float(row["max_x"]),
+            "maxY": float(row["max_y"]),
+            "areaSqm": float(row["area_sqm"]),
+        }
+
+    def _measure_rotated_clip_area_sqm(
+        self, db: Session, source_sql: str, params: dict, rot_params: dict, bounds: dict
+    ) -> float:
+        area_sqm = db.scalar(
+            text(
+                f"""
+                WITH src AS ({source_sql}),
+                rot AS (SELECT ST_Rotate(src.geom, :rot, :px, :py) AS geom FROM src),
+                clip AS (
+                    SELECT ST_MakeEnvelope(:left, :bottom, :right, :top, {get_target_srid()}) AS geom
+                )
+                SELECT COALESCE(
+                    ST_Area(
+                        ST_Multi(
+                            ST_CollectionExtract(
+                                ST_MakeValid(ST_Intersection(rot.geom, clip.geom)),
+                                3
+                            )
+                        )
+                    ),
+                    0
+                )
+                FROM rot
+                CROSS JOIN clip
+                """
+            ),
+            {**params, **rot_params, **bounds},
+        )
+        return float(area_sqm or 0)
+
+    def _split_rotated_fragments(
+        self, db: Session, source_sql: str, params: dict, rot_params: dict, bounds: dict
+    ) -> list[dict]:
+        rows = db.execute(
+            text(
+                f"""
+                WITH src AS ({source_sql}),
+                rot AS (SELECT ST_Rotate(src.geom, :rot, :px, :py) AS geom FROM src),
+                clip AS (
+                    SELECT ST_MakeEnvelope(:left, :bottom, :right, :top, {get_target_srid()}) AS geom
+                ),
+                fragments AS (
+                    SELECT
+                        0 AS part_group,
+                        ST_Multi(ST_CollectionExtract(ST_MakeValid((dump).geom), 3)) AS geom
+                    FROM rot
+                    CROSS JOIN clip
+                    CROSS JOIN LATERAL ST_Dump(
+                        ST_CollectionExtract(ST_MakeValid(ST_Intersection(rot.geom, clip.geom)), 3)
+                    ) AS dump
+                    UNION ALL
+                    SELECT
+                        1 AS part_group,
+                        ST_Multi(ST_CollectionExtract(ST_MakeValid((dump).geom), 3)) AS geom
+                    FROM rot
+                    CROSS JOIN clip
+                    CROSS JOIN LATERAL ST_Dump(
+                        ST_CollectionExtract(ST_MakeValid(ST_Difference(rot.geom, clip.geom)), 3)
+                    ) AS dump
+                )
+                SELECT
+                    part_group,
+                    ST_AsGeoJSON(ST_Transform(ST_Rotate(geom, :rot_back, :px, :py), 4326)) AS geojson,
+                    ROUND(CAST(ST_Area(geom) / 666.6666667 AS numeric), 4) AS area_mu
+                FROM fragments
+                WHERE geom IS NOT NULL
+                  AND NOT ST_IsEmpty(geom)
+                ORDER BY part_group, ST_Area(geom) DESC, ST_XMin(geom), ST_YMin(geom)
+                """
+            ),
+            {**params, **rot_params, "rot_back": -rot_params["rot"], **bounds},
+        ).mappings().all()
+        return self._split_rows_to_parts(rows)
+
+    def _split_geometry_by_edge(
+        self, db: Session, source_sql: str, params: dict, edge_index: int, target_area_mu: float
+    ) -> dict:
+        frame = self._load_edge_frame(db, source_sql, params, edge_index)
+        rot_params = {"rot": -frame["theta"], "px": frame["px"], "py": frame["py"]}
+        extent = self._load_rotated_extent(db, source_sql, params, rot_params)
+        target_area_sqm = float(target_area_mu) * 666.6666667
+        source_area_sqm = float(extent["areaSqm"])
+        if target_area_sqm <= 0 or target_area_sqm >= source_area_sqm:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="split area must be smaller than source parcel area",
+            )
+        if frame["side"] > 0:
+            span = extent["maxY"] - frame["py"]
+        else:
+            span = frame["py"] - extent["minY"]
+        if span <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="failed to split parcel along selected edge",
+            )
+
+        padding = 1.0
+
+        def strip_bounds(distance: float) -> dict:
+            if frame["side"] > 0:
+                return {
+                    "left": extent["minX"] - padding,
+                    "bottom": frame["py"],
+                    "right": extent["maxX"] + padding,
+                    "top": frame["py"] + distance,
+                }
+            return {
+                "left": extent["minX"] - padding,
+                "bottom": frame["py"] - distance,
+                "right": extent["maxX"] + padding,
+                "top": frame["py"],
+            }
+
+        low, high = 0.0, span + padding
+        for _ in range(40):
+            middle = (low + high) / 2
+            area_sqm = self._measure_rotated_clip_area_sqm(
+                db, source_sql, params, rot_params, strip_bounds(middle)
+            )
+            if area_sqm < target_area_sqm:
+                low = middle
+            else:
+                high = middle
+        bounds = strip_bounds((low + high) / 2)
+        parts = self._split_rotated_fragments(db, source_sql, params, rot_params, bounds)
+        if len(parts) < 2:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="failed to split parcel along selected edge",
+            )
+        return {"parts": parts}
+
     def _split_row_geometry_by_direction(
         self,
         db: Session,
         row_id: int,
         direction: str,
         target_area_mu: float,
+        edge_index: int | None = None,
     ) -> dict:
+        if edge_index is not None:
+            return self._split_geometry_by_edge(
+                db, self._ROW_SOURCE_SQL, {"row_id": row_id}, int(edge_index), target_area_mu
+            )
         normalized_direction = str(direction or "").strip().lower()
         if normalized_direction not in {"east", "west", "south", "north"}:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid split direction")
@@ -948,7 +1200,19 @@ class SurveyServiceParcelGeometryMixin:
         source_srid: int,
         direction: str,
         target_area_mu: float,
+        edge_index: int | None = None,
     ) -> dict:
+        if edge_index is not None:
+            return self._split_geometry_by_edge(
+                db,
+                self._geojson_source_sql(),
+                {
+                    "src_geojson": json.dumps(source_geometry, ensure_ascii=False),
+                    "src_srid": int(source_srid or 4326),
+                },
+                int(edge_index),
+                target_area_mu,
+            )
         normalized_direction = str(direction or "").strip().lower()
         if normalized_direction not in {"east", "west", "south", "north"}:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid split direction")

@@ -829,6 +829,10 @@ def derive_and_enrich_boundaries(
                 coords.update(ring)
         progress.flush(f"boundary-scan {chunk_index + 1}")
 
+    # 界址点总量此时已可确定：先并入 total，Phase B 计数才不会超过 total
+    progress.total += len(coords)
+    progress.flush(totalRows=progress.total)
+
     # ── Phase B：界址点 get-or-create（批量）────────────────────────────
     # 判重键是 (tenant_code, x, y)：首查不带租户过滤（共点允许跨村复用），
     # 这里显式丢弃别的租户的点，防止把外租户的点号映射进本租户的界址线。
@@ -891,6 +895,16 @@ def derive_and_enrich_boundaries(
                     coord_to_code[coord] = code
                     created_points += 1
             db.commit()
+            progress.processed += len(coord_chunk)
+            progress.success += len(coord_chunk)
+            progress.flush(f"boundary-points {start // _BOUNDARY_INSERT_CHUNK + 1}")
+
+    # 复用的已有界址点（get-or-create 命中）同样计入处理量
+    reused_now = len(coords) - created_points
+    if reused_now > 0:
+        progress.processed += reused_now
+        progress.success += reused_now
+    progress.flush("boundary-points done")
 
     # ── Phase C：收集界址线点对 ─────────────────────────────────────────
     edges: set[tuple[str, str]] = set()
@@ -907,6 +921,10 @@ def derive_and_enrich_boundaries(
                     if code_a and code_b and code_a != code_b:
                         edges.add(_order_pair(code_a, code_b))
         progress.flush(f"boundary-edges {chunk_index + 1}")
+
+    # 界址线总量并入 total，Phase D 计数才不会超过 total
+    progress.total += len(edges)
+    progress.flush(totalRows=progress.total)
 
     # ── Phase D：界址线 get-or-create（批量）────────────────────────────
     endpoint_codes = list({code for pair in edges for code in pair})
@@ -951,12 +969,20 @@ def derive_and_enrich_boundaries(
                     )
                     created_lines += 1
             db.commit()
+            progress.processed += len(pair_chunk)
+            progress.success += len(pair_chunk)
+            progress.flush(f"boundary-lines {start // _BOUNDARY_INSERT_CHUNK + 1}")
 
-    # 进度总量的界址点/线部分现在才能确定
-    progress.total += len(coords) + len(edges)
-    progress.flush(totalRows=progress.total)
+    # 复用的已有界址线（get-or-create 命中）同样计入处理量
+    reused_lines_now = len(edges) - created_lines
+    if reused_lines_now > 0:
+        progress.processed += reused_lines_now
+        progress.success += reused_lines_now
+    progress.flush("boundary-lines done")
 
     # ── Phase E：shp 属性回填 ───────────────────────────────────────────
+    # 界址点/线的 processed 已在 Phase B/D 实时计入，回填为属性 update、
+    # 不占 total 份额，不重复计数。
     jzd_import_file = _new_import_file(
         db, batch, current_user, now,
         file_type="jzd",

@@ -362,10 +362,15 @@ class SurveySplitParcelRequest(BaseModel):
     newDkbm: str | None = Field(default=None, max_length=19)
     newDkmc: str | None = Field(default=None, max_length=50)
     splitMode: str | None = Field(default="area", max_length=32)
+    # 切出面积，单位 ㎡（2026-11-04 统一口径：scmj/htmj/newScmj 一律 ㎡，界面用亩、边界换算）
     newScmj: float | None = Field(default=None, gt=0)
     splitDirection: str | None = Field(default=None, max_length=16)
+    edgeIndex: int | None = Field(default=None, ge=0)
     splitGeometry: dict | None = None
     geometrySourceSrid: int = Field(default=4326, ge=1, le=999999)
+    # 待保存（未落库）地块的源图形：前端切"新增地块"时传入，否则预览查不到地块
+    sourceGeometry: dict | None = None
+    sourceGeometrySrid: int | None = Field(default=None, ge=1, le=999999)
     reason: str | None = Field(default=None, max_length=500)
     generatedParcels: list["SurveySplitGeneratedParcel"] = []
 
@@ -373,6 +378,7 @@ class SurveySplitParcelRequest(BaseModel):
 class SurveySplitGeneratedParcel(BaseModel):
     dkbm: str = Field(min_length=1, max_length=19)
     dkmc: str = Field(min_length=1, max_length=50)
+    # 面积一律 ㎡（预览返回与保存入参同口径；亩值由界面层换算）
     scmj: float | None = Field(default=None, gt=0)
     htmj: float | None = Field(default=None, gt=0)
     geometry: dict | None = None
@@ -551,7 +557,12 @@ class SurveyMemberUpdate(BaseModel):
     name: str = Field(min_length=1, max_length=50)
     gender: str = Field(min_length=1, max_length=1)
     idType: str = Field(min_length=1, max_length=1)
-    idNo: str = Field(min_length=1, max_length=20)
+    # ⛔ 不能 min_length=1：真实业务数据存在「无证件号」的成员（2026-11-03 扎鲁特旗
+    # 周立树/卢学义两行 cyzjhm 为空）。本类既是 update_result 的请求体、又是
+    # SurveyMemberRead（GET results 响应）的父类——卡 min_length 会同时导致
+    # 「打开调查录入 500」和「页面回存 422」。证件号码的必填性由导入匹配等
+    # 业务逻辑按需校验，schema 只管形状。
+    idNo: str = Field(default="", max_length=20)
     relationToHead: str = Field(min_length=1, max_length=2)
     noteCode: str | None = Field(default=None, max_length=1)
     isCoOwner: str | None = Field(default=None, max_length=1)

@@ -712,6 +712,132 @@ def export_survey_results(
     )
 
 
+# ── 承包方调查表 Excel 导入 / 导出（鱼鳞图样式模板，2026-11-03）──────────────
+@router.get("/batches/{batch_id}/contractors-xls")
+def export_contractor_survey_xls(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    from urllib.parse import quote
+
+    filename, content = survey_service.export_contractors_xls(db, batch_id, current_user)
+    return Response(
+        content=content,
+        media_type="application/vnd.ms-excel",
+        headers={
+            # 中文文件名走 RFC 5987 filename*；filename 只作不支持时的 ASCII 兜底
+            "Content-Disposition": f"attachment; filename=\"contractor_survey.xls\"; filename*=UTF-8''{quote(filename)}",
+        },
+    )
+
+
+@router.post("/batches/{batch_id}/contractors-xls/preview")
+async def preview_contractor_survey_xls(
+    batch_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    content = await file.read()
+    return {"data": survey_service.preview_contractor_xls_import(db, batch_id, current_user, content)}
+
+
+@router.post("/batches/{batch_id}/contractors-xls/import")
+async def import_contractor_survey_xls(
+    batch_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    content = await file.read()
+    return {"data": survey_service.import_contractors_xls(db, batch_id, current_user, content)}
+
+
+# ── 后台任务版导出 / 导入（大数据量不超时，前端轮询进度）──────────────────
+
+@router.post("/batches/{batch_id}/contractors-xls/export-jobs")
+def start_contractor_xls_export_job(
+    batch_id: int,
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    from app.services.survey import xls_jobs
+
+    job = xls_jobs.start_export_job(batch_id, current_user.id)
+    return {"data": {"jobId": job["id"]}}
+
+
+@router.get("/batches/{batch_id}/contractors-xls/export-jobs/{job_id}")
+def get_contractor_xls_export_job(
+    batch_id: int,
+    job_id: str,
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    from app.services.survey import xls_jobs
+
+    job = xls_jobs.get_job(job_id)
+    if job is None or job["batchId"] != batch_id:
+        raise HTTPException(status_code=404, detail="导出任务不存在或已过期")
+    return {"data": xls_jobs.job_public_view(job)}
+
+
+@router.get("/batches/{batch_id}/contractors-xls/export-jobs/{job_id}/download")
+def download_contractor_xls_export_job(
+    batch_id: int,
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    from urllib.parse import quote
+
+    from app.services.survey import xls_jobs
+
+    job = xls_jobs.get_job(job_id)
+    if job is None or job["batchId"] != batch_id or job["status"] != "done":
+        raise HTTPException(status_code=404, detail="导出任务不存在、未完成或已过期")
+    # 下载人 ≠ 任务创建人时再校验一次区域权限
+    batch = survey_service._ensure_batch(db, batch_id)
+    from app.services.data_access_service import data_access_service
+
+    data_access_service.ensure_region_filter_in_scope(
+        current_user, batch.region_code, detail="当前批次区域不在可导出范围内"
+    )
+    return Response(
+        content=job["content"],
+        media_type="application/vnd.ms-excel",
+        headers={
+            "Content-Disposition": f"attachment; filename=\"contractor_survey.xls\"; filename*=UTF-8''{quote(job['filename'])}",
+        },
+    )
+
+
+@router.post("/batches/{batch_id}/contractors-xls/import-jobs")
+async def start_contractor_xls_import_job(
+    batch_id: int,
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    from app.services.survey import xls_jobs
+
+    content = await file.read()
+    job = xls_jobs.start_import_job(batch_id, current_user.id, content)
+    return {"data": {"jobId": job["id"]}}
+
+
+@router.get("/batches/{batch_id}/contractors-xls/import-jobs/{job_id}")
+def get_contractor_xls_import_job(
+    batch_id: int,
+    job_id: str,
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    from app.services.survey import xls_jobs
+
+    job = xls_jobs.get_job(job_id)
+    if job is None or job["batchId"] != batch_id:
+        raise HTTPException(status_code=404, detail="导入任务不存在或已过期")
+    return {"data": xls_jobs.job_public_view(job)}
+
+
 @router.get("/batches/{batch_id}/results/{contractor_uid}/diffs", response_model=ApiResponse[PageResponse[SurveyChangeDiffRead]])
 def list_survey_diffs(
     batch_id: int,

@@ -25,7 +25,7 @@
         <ContractorMemberPanel ref="contractorMemberPanel" :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :result="resultForm" :changed-fields="computedChangedFields" :readonly="dataReadOnly" :can-generate-code="!dataReadOnly && resultForm.resultStatus === 'added'" @generate-code="generateResultContractorCode" />
       </el-collapse-item>
       <el-collapse-item title="地块信息" name="parcels" :disabled="isCreatingContractorResult">
-        <ParcelInfoPanel v-if="isPanelMounted('parcels')" :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :parcels="parcels" :persisted-dkbms="persistedParcelDkbms" :parcels-loading="parcelsLoading" :can-manage="canManage && canWrite" :is-result-locked="dataReadOnly" :saved-swap-records="savedSwapRecords" :saved-split-records="savedSplitRecords" :saved-remove-records="savedRemoveRecords" :can-rollback-saved-parcel-change="canRollbackSavedParcelChange" :rollback-change-loading-id="rollbackingSavedChangeId" :persisting-dkbm="persistingParcelDkbm" @swap-parcels="handleOpSwapParcels" @add-parcel="handlePendingOperation" @split-parcel="handlePendingOperation" @remove-parcel="handleOpRemoveParcel" @rollback-saved-swap="handleRollbackSavedSwap" @rollback-saved-split="handleRollbackSavedSplit" @rollback-saved-remove="handleRollbackSavedRemove" @undo-pending-remove="handleUndoPendingRemoveFromPanel" @persist-parcel="handlePersistPendingParcel" />
+        <ParcelInfoPanel v-if="isPanelMounted('parcels')" :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :parcels="parcelsForPanel" :persisted-dkbms="persistedParcelDkbms" :parcels-loading="parcelsLoading" :can-manage="canManage && canWrite" :is-result-locked="dataReadOnly" :saved-swap-records="savedSwapRecords" :saved-split-records="savedSplitRecords" :saved-remove-records="savedRemoveRecords" :can-rollback-saved-parcel-change="canRollbackSavedParcelChange" :rollback-change-loading-id="rollbackingSavedChangeId" :persisting-dkbm="persistingParcelDkbm" @swap-parcels="handleOpSwapParcels" @add-parcel="handlePendingOperation" @split-parcel="handlePendingOperation" @remove-parcel="handleOpRemoveParcel" @rollback-saved-swap="handleRollbackSavedSwap" @rollback-saved-split="handleRollbackSavedSplit" @rollback-saved-remove="handleRollbackSavedRemove" @undo-pending-remove="handleUndoPendingRemoveFromPanel" @persist-parcel="handlePersistPendingParcel" />
       </el-collapse-item>
       <el-collapse-item title="承包地块示意图" name="plotSketchMap" :disabled="isCreatingContractorResult">
         <PlotSketchMapPanel v-if="isPanelMounted('plotSketchMap')" :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :refresh-key="plotSketchRefreshKey" />
@@ -324,9 +324,17 @@ const savedRemoveRecords = computed(() =>
     const bs = item.beforeSummary || {};
     const as = item.afterSummary || {};
     const removedDkbm = String(as.dkbm || "").trim();
+    // remove_parcel 的快照（parcel/relation 列名快照 + geometry），
+    // 用于合成「已移除」展示行与撤回时的待保存预览行。
+    const parcelSnapshot = bs.parcel && typeof bs.parcel === "object" ? bs.parcel : {};
+    const relationSnapshot = bs.relation && typeof bs.relation === "object" ? bs.relation : {};
     return {
       ...item,
       removedDkbm,
+      removedDkmc: String(parcelSnapshot.dkmc || "").trim(),
+      removedScmj: parcelSnapshot.scmj ?? null,
+      removedGeometry: bs.geometry || null,
+      relationCbfbm: String(relationSnapshot.cbfbm || "").trim(),
       sourceResultStatus: bs.source_result_status || "normal",
       sourceChangeType: bs.source_change_type || "none",
       sourceChangeReason: bs.source_change_reason || "",
@@ -335,6 +343,35 @@ const savedRemoveRecords = computed(() =>
     };
   }),
 );
+
+// ---- 已保存移除的展示行 ----
+// 后端 /parcels 刻意过滤 result_status='removed'（"移除本批次新增地块"= 净零变化，
+// 不能把已移除地块重新暴露给前端），所以「撤回移除」按钮没有可挂的行。
+// 这里按变更记录快照**合成**已移除行：仅用于列表展示与撤回入口，
+// 不带图形（不画到地图）、不参与任何"现势地块"判定（resultStatus='removed' 天然被排除）。
+const removedSyntheticParcels = computed(() =>
+  savedRemoveRecords.value
+    .filter((item) => item.removedDkbm)
+    .map((item) => ({
+      dkbm: item.removedDkbm,
+      dkmc: item.removedDkmc || "",
+      scmj: item.removedScmj,
+      cbfbm: item.relationCbfbm || resultForm.code,
+      cbfmc: resultForm.name,
+      resultStatus: "removed",
+      isChanged: true,
+      changeType: "remove_parcel",
+      changeReason: item.reason || "",
+      _syntheticRemoved: true,
+    }))
+    .filter((row, index, list) => list.findIndex((i) => i.dkbm === row.dkbm) === index)
+);
+
+const parcelsForPanel = computed(() => {
+  const existing = new Set(parcels.value.map((item) => item?.dkbm).filter(Boolean));
+  const extra = removedSyntheticParcels.value.filter((row) => !existing.has(row.dkbm));
+  return extra.length ? [...parcels.value, ...extra] : parcels.value;
+});
 
 // ---- Factories ----
 function createEmptyResult() {
@@ -487,6 +524,21 @@ function applyPendingParcelPreview(operation) {
         changeReason: payload.sourceChangeReason || "",
         _pending: true,
       };
+      return;
+    }
+    // 已保存移除的行不在 parcels 里（/parcels 过滤 removed），凭撤回载荷里的快照
+    // 合成待保存预览行，让"已撤回、还没保存"的中间态在列表里可见。
+    const restored = payload.restoreParcel || {};
+    if (restored.dkbm) {
+      parcels.value = [...parcels.value, {
+        ...restored,
+        cbfmc: restored.cbfmc || resultForm.name,
+        resultStatus: payload.sourceResultStatus || "normal",
+        isChanged: Boolean(payload.sourceIsChanged),
+        changeType: payload.sourceChangeType || "none",
+        changeReason: payload.sourceChangeReason || "",
+        _pending: true,
+      }];
     }
   }
 }
@@ -612,6 +664,8 @@ function pendingOperationLabelPreview(operation) {
   if (operation?.type === "remove_parcel") return `移除地块：${p.dkbm || "-"}`;
   if (operation?.type === "split_parcel") { const cnt = Array.isArray(p.generatedParcels) && p.generatedParcels.length ? p.generatedParcels.length : 1; return `切割地块：${p.dkbm || "-"} -> ${cnt} 块`; }
   if (operation?.type === "rollback_split_parcel") return `撤销切割：${p.sourceDkbm || "-"}`;
+  if (operation?.type === "rollback_remove_parcel") return `撤回移除：${p.dkbm || "-"}`;
+  if (operation?.type === "rollback_swap_parcels") return `撤回互换：还原 ${((p.restoreDkbms) || []).length} 块，退回 ${((p.returnDkbms) || []).length} 块`;
   if (operation?.type === "split_household") return `分户：原户注销，新增 ${(p.newHouseholds || []).length} 户`;
   if (operation?.type === "merge_household") return `合户：注销 ${(p.sourceContractorUids || []).length} 个原户，新增 ${p.newCbfmc || p.newCbfbm || "新户"}`;
   return operation?.type || "未命名操作";
@@ -759,22 +813,33 @@ async function handleRollbackSavedSplit(change) {
 async function handleRollbackSavedRemove(change) {
   if (!props.activeBatch || !activeTask.value || !change?.id) return;
   if (hasPendingOperations.value) { ElMessage.warning("请先处理顶部未保存操作，再撤回已保存移除"); return; }
+  if (!change.removedDkbm) { ElMessage.warning("该移除记录缺少地块编码，无法撤回，请联系管理员核查变更记录。"); return; }
   try {
     await ElMessageBox.confirm(`确定撤回这次已保存的地块移除吗？\n地块编码：${change.removedDkbm || "-"}`, "撤回已保存移除", { type: "warning", confirmButtonText: "加入待保存", cancelButtonText: "取消" });
     rollbackingSavedChangeId.value = change.id;
-    const removedParcel = parcels.value.find((item) => item.dkbm === change.removedDkbm && item.resultStatus === "removed" && !item._pending);
-    if (!removedParcel) { ElMessage.warning("当前页面地块状态已变化，请先重新打开调查录入后再试。"); return; }
+    // ⛔ 不能要求 parcels 里存在 resultStatus='removed' 的行：/parcels 接口刻意过滤已移除地块，
+    // 那个判据永远 miss，导致「撤回已保存移除」在界面上 100% 不可达（2026-11-04 修）。
+    // 撤回所需的信息全部在变更记录里（后端 rollback 也会按 change_id 重新校验）。
     handlePendingOperation({
       type: "rollback_remove_parcel",
       payload: {
         changeId: change.id,
         changeNo: change.changeNo,
         dkbm: change.removedDkbm,
-        cbfbm: removedParcel.cbfbm || change.cbfbm || resultForm.code,
+        cbfbm: change.relationCbfbm || resultForm.code,
         sourceResultStatus: change.sourceResultStatus || "normal",
         sourceChangeType: change.sourceChangeType || "none",
         sourceChangeReason: change.sourceChangeReason || "",
         sourceIsChanged: Boolean(change.sourceIsChanged),
+        // 快照行：pending 预览用（已移除行不在 parcels 里，需要凭它合成"撤回后"的预览行）。
+        restoreParcel: {
+          dkbm: change.removedDkbm,
+          dkmc: change.removedDkmc || "",
+          scmj: change.removedScmj,
+          cbfbm: change.relationCbfbm || resultForm.code,
+          cbfmc: resultForm.name,
+          geometry: change.removedGeometry || null,
+        },
         reason: `撤回移除 ${change.changeNo}`,
       },
     });

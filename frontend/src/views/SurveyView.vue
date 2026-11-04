@@ -58,27 +58,38 @@
               <div><span>已跳过</span>{{ batch.skippedCount || 0 }} 户</div>
             </div>
           </template>
-          <button type="button" class="batch-card" :class="{ 'is-active': activeBatch?.id === batch.id }" @click="handleBatchSelect(batch)">
+          <!-- 卡片用 div 而非 button：选中批次的卡片内要放「承包户导出/导入」入口，button 不能嵌 button -->
+          <div
+            class="batch-card"
+            :class="{ 'is-active': activeBatch?.id === batch.id }"
+            role="button"
+            tabindex="0"
+            @click="handleBatchSelect(batch)"
+            @keydown.enter.prevent="handleBatchSelect(batch)"
+          >
             <span class="batch-card-title">{{ batch.batchName || batch.batchNo }}</span>
             <span class="batch-card-status-row">
               <el-tag :type="batchStatusType(batch.status)" size="small">{{ batchStatusLabel(batch.status) }}</el-tag>
               <span class="batch-card-progress">{{ batchSurveySummary(batch) }}</span>
             </span>
-            <span v-if="batch.createdByMe || batch.assignedToMe" class="batch-card-badges">
-              <el-tag v-if="batch.createdByMe" size="small" type="success" effect="plain">我创建</el-tag>
-              <el-tag v-if="batch.assignedToMe" size="small" type="primary" effect="plain">分给我 {{ batch.myTaskCount }} 户</el-tag>
-            </span>
-            <span class="batch-card-assignee" :class="{ 'is-empty': !batch.assigneeCount }">
-              调查员：{{ assigneeSummary(batch) }}
+            <span class="batch-card-meta-row">
+              <span v-if="batch.createdByMe || batch.assignedToMe" class="batch-card-badges">
+                <el-tag v-if="batch.createdByMe" size="small" type="success" effect="plain">我创建</el-tag>
+                <el-tag v-if="batch.assignedToMe" size="small" type="primary" effect="plain">分给我 {{ batch.myTaskCount }} 户</el-tag>
+              </span>
+              <span class="batch-card-assignee" :class="{ 'is-empty': !batch.assigneeCount }">
+                调查员：{{ assigneeSummary(batch) }}
+              </span>
             </span>
             <span v-if="batch.unassignedCount" class="batch-card-unassigned">
               还有 {{ batch.unassignedCount }} 户待分配，请及时改派
             </span>
-            <span class="batch-card-metrics">
-              <span><b>{{ batch.taskCount || 0 }}</b> 应调查户数</span>
-              <span><b>{{ batch.surveyedCount || 0 }}</b> 已调查</span>
+            <!-- 选中批次的简版操作入口（链接按钮，不占额外面板） -->
+            <span v-if="activeBatch?.id === batch.id" class="batch-card-actions" @click.stop>
+              <el-button link size="small" type="primary" @click="handleExportContractorXls">承包户导出</el-button>
+              <el-button v-if="canManage && batch.status !== 'finished'" link size="small" type="success" @click="xlsImportVisible = true">承包户导入</el-button>
             </span>
-          </button>
+          </div>
         </el-tooltip>
       </div>
       <div class="batch-footer-actions">
@@ -178,6 +189,8 @@
     <IssuerSurveyDialog ref="issuerSurveyDialog" v-model="issuerSurveyVisible" :active-batch="activeBatch" :can-manage="canManage" @saved="onIssuerSurveySaved" />
     <DeregisteredContractorsDialog ref="deregisteredDialog" :active-batch="activeBatch" :can-manage="canManage" @restored="onResultSaved" />
     <TaskAssignDialog ref="taskAssignDialog" :active-batch="activeBatch" @assigned="onTasksAssigned" />
+    <ContractorXlsImportDialog v-model="xlsImportVisible" :batch="activeBatch" @imported="loadTasks" />
+    <ContractorXlsExportDialog v-model="xlsExportVisible" :batch="activeBatch" />
   </div>
 </template>
 
@@ -191,6 +204,8 @@ import ContractorResultDialog from "../components/survey/view/ContractorResultDi
 import DeregisteredContractorsDialog from "../components/survey/view/DeregisteredContractorsDialog.vue";
 import IssuerSurveyDialog from "../components/survey/view/IssuerSurveyDialog.vue";
 import TaskAssignDialog from "../components/survey/view/TaskAssignDialog.vue";
+import ContractorXlsImportDialog from "../components/survey/ContractorXlsImportDialog.vue";
+import ContractorXlsExportDialog from "../components/survey/ContractorXlsExportDialog.vue";
 
 import { fetchSurveyBatches, fetchSurveyAssignees, fetchSurveyTasks, fetchSurveyIssuers, finishSurveyBatch, exportSurveyResults, confirmSurveyResult, skipSurveyTask } from "../api/survey";
 import { fetchRegionTree } from "../api/region";
@@ -419,6 +434,16 @@ async function handleExportResults() {
   const link = document.createElement("a"); link.href = url; link.download = `${activeBatch.value.batchNo || activeBatch.value.id}_survey_results.zip`; link.click(); URL.revokeObjectURL(url);
 }
 
+// ---- 承包方调查表 Excel 导入 / 导出 ----
+const xlsImportVisible = ref(false);
+const xlsExportVisible = ref(false);
+
+// 导出走后台任务 + 进度弹窗：大数据量不再阻塞浏览器等待下载
+function handleExportContractorXls() {
+  if (!activeBatch.value) return;
+  xlsExportVisible.value = true;
+}
+
 // ---- Task operations ----
 async function loadTasks() {
   if (!activeBatch.value) { tasks.value = []; return; }
@@ -581,6 +606,7 @@ loadInitialData();
 }
 
 .batch-footer-actions {
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -608,11 +634,24 @@ loadInitialData();
   margin-top: 10px;
 }
 
+.batch-card-meta-row {
+  align-items: center;
+  column-gap: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  row-gap: 2px;
+}
+
 .batch-card-badges {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.batch-card-badges:empty {
+  display: none;
 }
 
 .batch-card-badges :deep(.el-tag) {
@@ -677,8 +716,7 @@ loadInitialData();
   overflow-wrap: anywhere;
 }
 
-.batch-card-status-row,
-.batch-card-metrics {
+.batch-card-status-row {
   align-items: center;
   display: flex;
   gap: 8px;
@@ -691,23 +729,17 @@ loadInitialData();
   white-space: nowrap;
 }
 
-.batch-card-metrics {
-  border-top: 1px solid #e2e8f0;
+.batch-card-actions {
+  border-top: 1px dashed #e2e8f0;
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
   padding-top: 8px;
 }
 
-.batch-card-metrics span {
-  color: #64748b;
-  display: flex;
-  flex-direction: column;
-  font-size: 12px;
-  gap: 2px;
-}
-
-.batch-card-metrics b {
-  color: #0f172a;
-  font-size: 18px;
-  line-height: 1;
+.batch-card-actions :deep(.el-button) {
+  margin-left: 0;
+  padding: 0 6px;
 }
 
 .batch-footer-actions {

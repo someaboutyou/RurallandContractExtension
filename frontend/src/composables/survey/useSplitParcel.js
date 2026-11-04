@@ -2,8 +2,10 @@
 import { ElMessage } from "element-plus";
 import shp from "shpjs";
 import Draw from "ol/interaction/Draw";
+import { toLonLat } from "ol/proj";
 import { generateNextSurveyParcelCode, previewSplitSurveyParcel } from "../../api/survey";
 import { isCurrentParcel, isSplitSourceParcel } from "../../utils/parcelStatusHelpers";
+import { sqmToMu, muToSqm } from "../../utils/areaUnits";
 
 /**
  * Composable for split-parcel mode logic.
@@ -38,6 +40,9 @@ export function useSplitParcel(ctx) {
   const splitDrawMode = ref("");
   const generatingSplitCode = ref(false);
   const submittingSplitParcel = ref(false);
+  // 按边选边模式：在地图上点击源地块的一条边
+  const edgePickActive = ref(false);
+  let edgePickHandler = null;
 
   // --- Split preview state ---
   const splitPreviewLoading = ref(false);
@@ -53,6 +58,9 @@ export function useSplitParcel(ctx) {
       newDkmc: "",
       newScmj: 0,
       splitDirection: "east",
+      // 面积模式切割基准：direction = 东南西北四方向；edge = 平行于所选边
+      splitBasis: "direction",
+      edgeIndex: null,
       splitMethod: "geometry",
       reason: "",
     };
@@ -65,15 +73,16 @@ export function useSplitParcel(ctx) {
     parcels.value.find((item) => item?.dkbm === splitForm.dkbm && isCurrentParcel(item)) || null
   );
   const splitSourceHasGeometry = computed(() => Boolean(splitSourceParcel.value?.geometry));
-  const splitRemainingArea = computed(() => {
+  // 面积单位口径（2026-11-04）：scmj 库内是 ㎡，面积模式的一切输入/比较/展示统一换算成亩。
+  const splitSourceAreaMu = computed(() => {
     if (!splitSourceParcel.value) return 0;
-    const area = Number(splitSourceParcel.value.scmj || 0);
-    return Math.max(0, +(area - Number(splitForm.newScmj || 0)).toFixed(2));
+    return sqmToMu(splitSourceParcel.value.scmj) ?? 0;
+  });
+  const splitRemainingArea = computed(() => {
+    return Math.max(0, +(splitSourceAreaMu.value - Number(splitForm.newScmj || 0)).toFixed(2));
   });
   const splitMaxArea = computed(() => {
-    if (!splitSourceParcel.value) return 0;
-    const area = Number(splitSourceParcel.value.scmj || 0);
-    return Math.max(0, +(area - 0.01).toFixed(2));
+    return Math.max(0, +(splitSourceAreaMu.value - 0.01).toFixed(2));
   });
   const splitCanSubmit = computed(() => {
     if (!splitModeActive.value) return false;
@@ -82,13 +91,15 @@ export function useSplitParcel(ctx) {
       if (!splitGeometry.value || !splitPreviewGenerated.value.length) return false;
       return splitParcelSettings.value.every((s) => s.dkmc?.trim());
     }
-    // Area mode
+    // Area mode（newScmj 界面口径为亩；与源地块面积（亩）比较）
     if (!splitForm.newDkbm.trim() || !splitForm.newDkmc.trim()) return false;
-    return (
-      Number(splitForm.newScmj) > 0 &&
-      Number(splitForm.newScmj) < Number(splitSourceParcel.value?.scmj || 0) &&
-      Boolean(splitForm.splitDirection)
-    );
+    if (!(Number(splitForm.newScmj) > 0 && Number(splitForm.newScmj) < splitSourceAreaMu.value)) {
+      return false;
+    }
+    if (splitForm.splitBasis === "edge") {
+      return splitForm.edgeIndex !== null && splitForm.edgeIndex >= 0;
+    }
+    return Boolean(splitForm.splitDirection);
   });
   const splitModeAlertType = computed(() => {
     if (!splitSourceParcel.value) return "warning";
@@ -118,6 +129,12 @@ export function useSplitParcel(ctx) {
         return `验证通过，将生成 ${splitPreviewGenerated.value.length} 个现势地块，请填写每个地块的名称。`;
       }
       return "切割图形已准备好，正在等待验证。";
+    }
+    if (splitForm.splitBasis === "edge") {
+      if (splitForm.edgeIndex === null || splitForm.edgeIndex < 0) {
+        return "请在地图上点选源地块的一条边作为切割基准，将平行于该边切出指定面积。";
+      }
+      return `已选第 ${splitForm.edgeIndex + 1} 条边，将平行于该边切出 ${splitForm.newScmj} 亩，预计剩余 ${splitRemainingArea.value} 亩。`;
     }
     return `请填写切出面积和方向，当前预计剩余 ${splitRemainingArea.value} 亩。`;
   });
@@ -311,6 +328,138 @@ export function useSplitParcel(ctx) {
     }
   }
 
+  // --- Edge picking (按边平行切割) ---
+  function parcelExteriorRings(geometry) {
+    if (!geometry) return [];
+    if (geometry.type === "Polygon") return [geometry.coordinates?.[0]].filter(Boolean);
+    if (geometry.type === "MultiPolygon") {
+      return (geometry.coordinates || []).map((polygon) => polygon?.[0]).filter(Boolean);
+    }
+    return [];
+  }
+
+  function ringAreaAbs(ring) {
+    let sum = 0;
+    for (let i = 0; i < ring.length - 1; i++) {
+      sum += ring[i][0] * ring[i + 1][1] - ring[i + 1][0] * ring[i][1];
+    }
+    return Math.abs(sum / 2);
+  }
+
+  function pointToSegmentDistance(point, a, b) {
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const lengthSq = dx * dx + dy * dy;
+    if (lengthSq === 0) {
+      return Math.hypot(point[0] - a[0], point[1] - a[1]);
+    }
+    let t = ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / lengthSq;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(point[0] - (a[0] + t * dx), point[1] - (a[1] + t * dy));
+  }
+
+  /**
+   * 在源地块（最大外环）上找离点击位置最近的边。
+   * 后端按"最大多边形外环 + 顶点顺序"解析 edgeIndex，这里保持同一约定。
+   */
+  function findNearestEdgeOnRing(geometry, lonLat) {
+    const rings = parcelExteriorRings(geometry);
+    if (!rings.length) return null;
+    let ring = rings[0];
+    if (rings.length > 1) {
+      let bestArea = -1;
+      for (const candidate of rings) {
+        const area = ringAreaAbs(candidate);
+        if (area > bestArea) {
+          bestArea = area;
+          ring = candidate;
+        }
+      }
+    }
+    if (!ring || ring.length < 3) return null;
+    const closed = ring.length > 1 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1];
+    const vertexCount = closed ? ring.length - 1 : ring.length;
+    let best = null;
+    for (let i = 0; i < vertexCount; i++) {
+      const a = ring[i];
+      const b = ring[(i + 1) % vertexCount];
+      const distance = pointToSegmentDistance(lonLat, a, b);
+      if (!best || distance < best.distance) {
+        best = { distance, edgeIndex: i, coordinates: [a, b] };
+      }
+    }
+    return best;
+  }
+
+  function drawEdgeHighlight(coordinates) {
+    if (!geoJsonFormat || !draftSource) return;
+    draftSource.clear();
+    const feature = geoJsonFormat.readFeature(
+      { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates } },
+      { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857" },
+    );
+    draftSource.addFeature(feature);
+  }
+
+  function handleMapClickForEdgePick(event) {
+    if (!edgePickActive.value) return;
+    const geometry = splitSourceParcel.value?.geometry;
+    const lonLat = toLonLat(event.coordinate);
+    const best = findNearestEdgeOnRing(geometry, lonLat);
+    if (!best) {
+      ElMessage.warning("未能在源地块上定位到边，请点击地块边线附近");
+      return;
+    }
+    splitForm.edgeIndex = best.edgeIndex;
+    drawEdgeHighlight(best.coordinates);
+    edgePickActive.value = false;
+  }
+
+  function startEdgePickMode() {
+    if (!splitModeActive.value) return;
+    if (!splitSourceHasGeometry.value) {
+      ElMessage.warning("当前地块没有图形数据，无法选边");
+      return;
+    }
+    stopSplitDraw();
+    // 选边即切换切割基准为"按边平行"
+    splitForm.splitBasis = "edge";
+    edgePickActive.value = true;
+    if (mapRef.value) {
+      stopEdgePickListener();
+      edgePickHandler = handleMapClickForEdgePick;
+      mapRef.value.on("singleclick", edgePickHandler);
+    }
+    ElMessage.info("请在地图上点击源地块要平行的边附近位置");
+  }
+
+  function stopEdgePickListener() {
+    if (edgePickHandler && mapRef.value) {
+      mapRef.value.un("singleclick", edgePickHandler);
+    }
+    edgePickHandler = null;
+  }
+
+  function stopEdgePickMode() {
+    edgePickActive.value = false;
+    stopEdgePickListener();
+  }
+
+  function clearEdgePickSelection() {
+    splitForm.edgeIndex = null;
+    if (splitForm.splitBasis === "edge") {
+      draftSource.clear();
+    }
+  }
+
+  function handleSplitBasisChange(basis) {
+    stopEdgePickMode();
+    splitForm.edgeIndex = null;
+    if (basis !== "edge") {
+      draftSource.clear();
+    }
+  }
+
   // --- Mode lifecycle ---
   async function beginSplitParcelMode(parcel) {
     if (!parcel) return;
@@ -318,9 +467,12 @@ export function useSplitParcel(ctx) {
     splitForm.dkbm = parcel.dkbm;
     splitForm.newScmj = 0;
     splitForm.splitMethod = "geometry";
+    splitForm.splitBasis = "direction";
+    splitForm.edgeIndex = null;
     splitForm.reason = "";
     splitForm.newDkbm = "";
     splitForm.newDkmc = "";
+    stopEdgePickMode();
     clearSplitDraft();
     await nextTick();
     if (!mapReady.value) {
@@ -335,6 +487,7 @@ export function useSplitParcel(ctx) {
   function finishSplitParcelMode() {
     splitModeActive.value = false;
     stopSplitDraw();
+    stopEdgePickMode();
     clearSplitDraft();
     Object.assign(splitForm, defaultSplitForm());
   }
@@ -346,6 +499,9 @@ export function useSplitParcel(ctx) {
   function switchSplitMethod(method) {
     splitForm.splitMethod = method;
     splitForm.newScmj = 0;
+    stopEdgePickMode();
+    splitForm.splitBasis = "direction";
+    splitForm.edgeIndex = null;
     if (method !== "geometry") {
       stopSplitDraw();
       clearSplitDraft();
@@ -545,8 +701,13 @@ export function useSplitParcel(ctx) {
         payload.splitMode = "area";
         payload.newDkbm = splitForm.newDkbm.trim();
         payload.newDkmc = splitForm.newDkmc.trim();
-        payload.newScmj = Number(splitForm.newScmj);
-        payload.splitDirection = splitForm.splitDirection;
+        // newScmj 界面口径为亩，API/库内口径为 ㎡ —— 提交前换算（2026-11-04 统一）。
+        payload.newScmj = muToSqm(Number(splitForm.newScmj));
+        if (splitForm.splitBasis === "edge" && splitForm.edgeIndex !== null) {
+          payload.edgeIndex = splitForm.edgeIndex;
+        } else {
+          payload.splitDirection = splitForm.splitDirection;
+        }
         const { data } = await previewSplitSurveyParcel(props.batchId, props.contractorUid, payload);
         const generatedParcels = Array.isArray(data.data?.generatedParcels) ? data.data.generatedParcels : [];
         if (generatedParcels.length < 2) {
@@ -577,6 +738,9 @@ export function useSplitParcel(ctx) {
       if (splitForm.dkbm !== parcel.dkbm) {
         splitForm.dkbm = parcel.dkbm;
         splitForm.newScmj = 0;
+        stopEdgePickMode();
+        splitForm.splitBasis = "direction";
+        splitForm.edgeIndex = null;
         clearSplitDraft();
       }
     }
@@ -599,6 +763,7 @@ export function useSplitParcel(ctx) {
     // Computed
     splitSourceParcel,
     splitSourceHasGeometry,
+    splitSourceAreaMu,
     splitRemainingArea,
     splitMaxArea,
     splitCanSubmit,
@@ -616,6 +781,12 @@ export function useSplitParcel(ctx) {
     submitSplitParcel,
     selectParcelInSplitMode,
     validateSplitGeometry,
+    // 按边平行切割
+    edgePickActive,
+    startEdgePickMode,
+    stopEdgePickMode,
+    clearEdgePickSelection,
+    handleSplitBasisChange,
   };
 }
 

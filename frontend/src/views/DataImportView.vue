@@ -167,14 +167,44 @@
       <el-table-column prop="entityType" label="类型" width="110" />
       <el-table-column prop="entityKey" label="业务键" min-width="180" />
       <el-table-column prop="operationType" label="操作" width="100" />
-      <el-table-column prop="status" label="状态" width="100">
+      <el-table-column prop="status" label="状态" width="110">
         <template #default="{ row }">
-          <el-tag :type="row.status === 'success' ? 'success' : 'danger'">{{ row.status }}</el-tag>
+          <el-tag v-if="row.status === 'success' && row.warningMessage" type="warning">修正导入</el-tag>
+          <el-tag v-else :type="row.status === 'success' ? 'success' : 'danger'">{{ row.status === "success" ? "成功" : "失败" }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="errorMessage" label="错误信息" min-width="260" />
+      <el-table-column prop="errorMessage" label="错误信息" min-width="240" />
+      <el-table-column v-if="canManage" label="操作" fixed="right" width="110">
+        <template #default="{ row }">
+          <el-button v-if="row.status === 'failed'" link type="primary" @click="openFixDialog(row)">修正导入</el-button>
+        </template>
+      </el-table-column>
     </el-table>
   </el-drawer>
+
+  <el-dialog v-model="fixVisible" title="修正错误数据并重新导入" width="720px">
+    <el-alert
+      v-if="fixRow"
+      class="upload-tip"
+      type="warning"
+      show-icon
+      :closable="false"
+      :title="`第 ${fixRow.rowNo} 行（${fixRow.entityType}）原错误：${fixRow.errorMessage || '未知'}`"
+    />
+    <el-alert class="upload-tip" type="info" show-icon :closable="false" title="修正字段值后重新导入；导入成功后该行会标记为「修正导入」，原错误信息保留在行明细中。" />
+    <el-table :data="fixFields" v-loading="fixSubmitting" border max-height="420">
+      <el-table-column prop="name" label="字段" width="180" />
+      <el-table-column label="值">
+        <template #default="{ row }">
+          <el-input v-model="row.value" :disabled="fixSubmitting" />
+        </template>
+      </el-table-column>
+    </el-table>
+    <template #footer>
+      <el-button @click="fixVisible = false">取消</el-button>
+      <el-button :loading="fixSubmitting" type="success" @click="handleFixImport">修正并导入</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup>
@@ -188,6 +218,7 @@ import {
   fetchImportBatches,
   fetchImportProgress,
   fetchImportRows,
+  reimportImportRow,
   rollbackImport,
   uploadImportGbPackage,
   uploadImportGdb,
@@ -532,6 +563,55 @@ async function reloadRows() {
     detailRows.value = data.data.items;
   } finally {
     rowLoading.value = false;
+  }
+}
+
+const fixVisible = ref(false);
+const fixSubmitting = ref(false);
+const fixRow = ref(null);
+const fixFields = ref([]);
+
+function openFixDialog(row) {
+  fixRow.value = row;
+  const source = row.normalizedData && Object.keys(row.normalizedData).length ? row.normalizedData : row.rawData || {};
+  fixFields.value = Object.entries(source).map(([name, value]) => ({
+    name,
+    value: value === null || value === undefined ? "" : String(value),
+  }));
+  fixVisible.value = true;
+}
+
+async function handleFixImport() {
+  if (!activeBatch.value || !fixRow.value) return;
+  const patch = {};
+  for (const field of fixFields.value) {
+    patch[field.name] = field.value.trim() === "" ? null : field.value;
+  }
+  try {
+    await ElMessageBox.confirm("确认按修正后的数据重新导入该行吗？导入成功后该行将标记为「修正导入」。", "修正导入", {
+      type: "warning",
+      confirmButtonText: "修正并导入",
+      cancelButtonText: "取消",
+    });
+  } catch {
+    return;
+  }
+  fixSubmitting.value = true;
+  try {
+    const { data } = await reimportImportRow(activeBatch.value.id, fixRow.value.id, patch);
+    if (data.data?.status === "success") {
+      ElMessage.success("修正导入成功");
+      fixVisible.value = false;
+      await reloadRows();
+      await loadBatches();
+    } else {
+      ElMessage.error(data.data?.errorMessage || "修正导入失败");
+      await reloadRows();
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || "修正导入失败");
+  } finally {
+    fixSubmitting.value = false;
   }
 }
 

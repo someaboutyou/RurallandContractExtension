@@ -16,6 +16,7 @@ from app.models.survey import (
 )
 from app.models.user import User
 from app.services.data_access_service import data_access_service
+from app.services.survey.parcel_geometry import SQM_PER_MU
 
 logger = logging.getLogger(__name__)
 
@@ -336,11 +337,18 @@ class SurveyServiceParcelOpsMixin:
             if dkbm in used_codes or dkbm in existing_codes:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"parcel code already exists: {dkbm}")
             used_codes.add(dkbm)
+            # 面积单位口径（2026-11-04 统一）：库里 scmj/htmj 一律 ㎡。
+            # part["areaMu"] 是几何面积（亩），落库/预览返回前换算成 ㎡。
+            # 切割设置里人工改过的合同面积（definitions[index].htmj，前端已按 ㎡ 提交）优先采用。
+            area_sqm = round(float(part["areaMu"]) * SQM_PER_MU, 2)
+            definition_htmj = None
+            if index < len(definitions):
+                definition_htmj = (definitions[index] or {}).get("htmj")
             generated.append({
                 "dkbm": dkbm,
                 "dkmc": dkmc,
-                "scmj": round(float(part["areaMu"]), 2),
-                "htmj": round(float(part["areaMu"]), 2),
+                "scmj": area_sqm,
+                "htmj": round(float(definition_htmj), 2) if definition_htmj else area_sqm,
                 "geometry": part["geometry"],
             })
 
@@ -400,15 +408,17 @@ class SurveyServiceParcelOpsMixin:
                 int(payload.get("geometrySourceSrid") or 4326),
             )
         else:
+            # newScmj 口径为 ㎡（2026-11-04 统一）；old_area（scmj 列）同为 ㎡，比较口径一致。
             new_scmj = float(payload.get("newScmj") or 0)
             if new_scmj <= 0:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="split area is required")
-            if payload.get("splitDirection"):
+            if payload.get("splitDirection") or self._parse_edge_index(payload.get("edgeIndex")) is not None:
                 split_preview = self._split_row_geometry_by_direction(
                     db,
                     old_parcel.id,
                     payload.get("splitDirection"),
-                    new_scmj,
+                    new_scmj / SQM_PER_MU,
+                    edge_index=self._parse_edge_index(payload.get("edgeIndex")),
                 )
             else:
                 if new_scmj >= old_area:
@@ -509,6 +519,7 @@ class SurveyServiceParcelOpsMixin:
                 "action": "split_parcel",
                 "split_mode": split_mode,
                 "split_direction": payload.get("splitDirection"),
+                "split_edge_index": self._parse_edge_index(payload.get("edgeIndex")),
                 "original_dkbm": old_parcel.dkbm,
                 "generated_count": len(generated_parcels),
                 "generated_parcels": [

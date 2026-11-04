@@ -62,6 +62,12 @@ class DataImportRowRead(BaseModel):
     createdAt: datetime
 
 
+class DataImportRowReimport(BaseModel):
+    """失败行人工修正后重新导入：data 为修正后的字段值（覆盖原 normalized_data）。"""
+
+    data: dict
+
+
 class DataImportJobRead(BaseModel):
     batchId: int
     jobId: str

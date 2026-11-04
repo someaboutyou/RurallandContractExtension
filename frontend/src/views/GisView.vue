@@ -116,7 +116,7 @@
             <span>{{ ui.issuer }}</span>
             <strong>{{ selectedParcel?.fbfmc || ui.unknown }}</strong>
             <span>{{ ui.area }}</span>
-            <strong>{{ selectedParcel?.htmj || selectedParcel?.scmj || ui.unknown }}</strong>
+            <strong>{{ formatSqmsAsMu(selectedParcel?.htmj ?? selectedParcel?.scmj) }}</strong>
           </div>
         </div>
 
@@ -344,8 +344,8 @@
                     <span>{{ index + 1 }}</span>
                     <span>{{ parcel.dkbm || ui.unknown }}</span>
                     <span>{{ parcel.dkmc || '-' }}</span>
-                    <span>{{ parcel.htmj ? parcel.htmj + ' 亩' : '-' }}</span>
-                    <span>{{ parcel.scmj ? parcel.scmj + ' 亩' : '-' }}</span>
+                    <span>{{ parcel.htmj ? sqmToMu(parcel.htmj) + ' 亩' : '-' }}</span>
+                    <span>{{ parcel.scmj ? sqmToMu(parcel.scmj) + ' 亩' : '-' }}</span>
                   </div>
                   <div v-if="!contractorParcels.length" class="gis-mini-empty">暂无地块数据</div>
                 </div>
@@ -426,6 +426,7 @@ import { useDictionary } from "../composables/useDictionary";
 import { fetchMapLayers } from "../api/mapLayer";
 import { fetchMapConfig } from "../api/system";
 import { basemapConfigs as fallbackBasemaps, vectorLayerConfigs as fallbackVectors } from "../config/mapLayers";
+import { sqmToMu, formatSqmsAsMu } from "../utils/areaUnits";
 
 const ui = {
   title: "\u519c\u6751\u627f\u5305\u7ecf\u8425\u6743 GIS \u4e00\u5f20\u56fe",
@@ -742,7 +743,10 @@ function booleanDisplay(value) {
 }
 
 function withAreaUnit(value) {
-  return value === undefined || value === null || value === "" ? ui.unknown : `${value} 亩`;
+  // scmj/htmj 库内口径 ㎡；GIS 界面按「亩」展示 → 换算（2026-11-04 统一）
+  if (value === undefined || value === null || value === "") return ui.unknown;
+  const mu = sqmToMu(value);
+  return mu === null ? ui.unknown : `${mu} 亩`;
 }
 
 const contractorInfoRows = computed(() => {
@@ -1613,8 +1617,8 @@ function highlightParcel(parcel, coordinate, fallbackFeature = null) {
 function updateAttrsByParcel(parcel) {
   updateAttrsByEntries([
     { label: "\u5730\u5757\u4fe1\u606f", value: parcel.dkmc || parcel.dkbm || ui.unknown },
-    { label: "\u5408\u540c\u9762\u79ef", value: parcel.htmj || ui.unknown },
-    { label: "\u5b9e\u6d4b\u9762\u79ef", value: parcel.scmj || ui.unknown },
+    { label: "\u5408\u540c\u9762\u79ef", value: withAreaUnit(parcel.htmj) },
+    { label: "\u5b9e\u6d4b\u9762\u79ef", value: withAreaUnit(parcel.scmj) },
     { label: ui.contractor, value: parcel.cbfmc || ui.unknown },
     { label: ui.issuer, value: parcel.fbfmc || ui.unknown },
   ]);
