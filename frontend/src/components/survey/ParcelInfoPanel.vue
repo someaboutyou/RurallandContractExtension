@@ -2,6 +2,7 @@
   <div
     v-loading.lock="isValidatingAddGeometry"
     class="parcel-info-panel"
+    :class="{ 'is-fullscreen': isParcelFullscreen }"
     element-loading-text="正在核验新增地块图形，请稍候..."
     element-loading-background="rgba(255, 255, 255, 0.72)"
   >
@@ -45,6 +46,15 @@
           移除地块
         </el-button>
         <span v-if="isResultLocked" class="toolbar-lock-hint">（只读）</span>
+        <span class="toolbar-fullscreen-slot">
+          <el-button
+            size="small"
+            :type="isParcelFullscreen ? 'primary' : 'default'"
+            @click="toggleParcelFullscreen"
+          >
+            {{ isParcelFullscreen ? "退出全屏" : "地图全屏" }}
+          </el-button>
+        </span>
       </div>
 
       <div v-if="addModeActive" class="parcel-toolbar-add-mode">
@@ -166,6 +176,7 @@
             v-model="activeBasemap"
             size="small"
             placeholder="底图"
+            :teleported="!isParcelFullscreen"
             @change="handleBasemapChange"
           >
             <el-option
@@ -647,6 +658,17 @@ const boundaryDialog = ref(null);
 const mapRoot = ref(null);
 const selectedParcel = ref(null);
 
+// --- 地图全屏 ---
+// 面板整体 fixed 铺满视口；进出全屏后必须 updateMapSize，否则 OpenLayers 画布尺寸停留在旧容器。
+const isParcelFullscreen = ref(false);
+function toggleParcelFullscreen() {
+  isParcelFullscreen.value = !isParcelFullscreen.value;
+  nextTick(() => draftMap.updateMapSize());
+}
+function handleFullscreenKeydown(event) {
+  if (event.key === "Escape" && isParcelFullscreen.value) toggleParcelFullscreen();
+}
+
 // --- Map + draft layer ---
 const dialogMap = useDialogMap(mapRoot);
 const draftMap = useParcelDraftMap(mapRoot, dialogMap);
@@ -656,7 +678,9 @@ const { activeBasemap, basemapOptions } = draftMap;
 const toolModeActive = computed(() => addModeActive.value || splitModeActive.value);
 const actionDisabled = computed(() => !props.canManage || props.isResultLocked || toolModeActive.value);
 const parcelTableMaxHeight = computed(() => (
-  splitModeActive.value ? "340px" : "calc(92vh - 380px)"
+  splitModeActive.value
+    ? "340px"
+    : (isParcelFullscreen.value ? "calc(100vh - 240px)" : "calc(92vh - 380px)")
 ));
 
 // --- Split parcel mode ---
@@ -947,10 +971,12 @@ watch(
 );
 
 onMounted(async () => {
+  window.addEventListener("keydown", handleFullscreenKeydown);
   await renderParcelsOnMap(props.parcels);
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener("keydown", handleFullscreenKeydown);
   draftMap.stopDraw();
   splitDrawMode.value = "";
   draftMap.removeDraftLayer();
@@ -1051,8 +1077,25 @@ onBeforeUnmount(() => {
 }
 
 .toolbar-lock-hint { color: #909399; font-size: 12px; }
+.toolbar-fullscreen-slot { margin-left: auto; }
 
 .parcel-layout { display: flex; gap: 12px; height: calc(92vh - 380px); min-height: 450px; }
+.parcel-info-panel.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  /* 高于 el-dialog 遮罩（约 2000+），保证铺在最上层 */
+  z-index: 3000;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  padding: 12px 16px;
+  overflow: auto;
+}
+.parcel-info-panel.is-fullscreen .parcel-layout {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
 .parcel-map-container { flex: 1; position: relative; min-width: 0; border: 1px solid #ebeef5; border-radius: 4px; overflow: hidden; }
 .parcel-map-container.is-add-mode { border-color: #60a5fa; box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.35); }
 .parcel-map-container.is-split-mode { border-color: #fb923c; box-shadow: inset 0 0 0 1px rgba(251, 146, 60, 0.35); }
