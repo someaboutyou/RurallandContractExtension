@@ -49,7 +49,8 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import fiona
 from fiona.crs import CRS
-from sqlalchemy import exists, func, literal_column, select
+from sqlalchemy import column, exists, func, literal_column, select, table, text
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session, aliased
 
 from app.models.cbht import CONTRACT_STATUS_ACTIVE, Cbht
@@ -262,41 +263,16 @@ class _Scope:
         self.dk_filters = dk_filters
         self.valid_dkbm_sq = valid_dkbm_sq
 
-        # 7) 界址点：落在有效地块边界上（无 result_status 字段，有效性随地块图形）
-        jzd_filters = []
+        # 7) 界址点：落在有效地块边界上（无 result_status 字段，有效性随地块图形）。
+        #    有效性判定不放在 ORM 大查询里（优化器对小规模 VALUES 之外的形态
+        #    估行失控，见 _ensure_valid_jzd_table 注释），只保留租户过滤；
+        #    空间判定在物化临时表时分批执行。
+        jzd_tenant_filters = []
         tf = tenant(SurveyJzdResult, current_user)
         if tf is not None:
-            jzd_filters.append(tf)
-        jzd_filters.append(_jzd_on_valid_dk_exists(SurveyJzdResult, self))
-        self.jzd_filters = jzd_filters
-
-        # 8) 界址线：两端界址点都参与有效地块
-        j1 = aliased(SurveyJzdResult)
-        j2 = aliased(SurveyJzdResult)
-        z = SurveyJzxResult
-        jzx_filters = []
-        tf = tenant(z, current_user)
-        if tf is not None:
-            jzx_filters.append(tf)
-        jzx_filters.append(
-            exists(
-                select(1).select_from(j1).where(
-                    j1.jzdh == z.qdjzdh,
-                    j1.tenant_code == z.tenant_code,
-                    _jzd_on_valid_dk_exists(j1, self),
-                )
-            )
-        )
-        jzx_filters.append(
-            exists(
-                select(1).select_from(j2).where(
-                    j2.jzdh == z.zdjzdh,
-                    j2.tenant_code == z.tenant_code,
-                    _jzd_on_valid_dk_exists(j2, self),
-                )
-            )
-        )
-        self.jzx_filters = jzx_filters
+            jzd_tenant_filters.append(tf)
+        self.jzd_tenant_filters = jzd_tenant_filters
+        self._valid_jzd_ready = False
 
 
 def _jzd_on_valid_dk_exists(jzd, scope: _Scope):
@@ -308,6 +284,13 @@ def _jzd_on_valid_dk_exists(jzd, scope: _Scope):
     (easting, northing) 序。故 PostGIS 取点用 ``ST_MakePoint(jzd.y, jzd.x)``，
     GeoJSON/WKT 输出坐标也按 ``[y, x]`` 即 (东, 北)。
     ``survey_dk_result.geom`` 是 PostGIS 原生列、ORM 模型未声明，须用 literal_column。
+
+    性能（2026-11-04）：县域实测 18.6 万界址点 × 4.6 万地块，逐行
+    ``ST_DWithin(ST_Boundary(ST_Force2D(geom)), …)`` 把几何列包进函数 ⇒ GiST
+    索引失效，每点全表扫，导出卡死十小时级。改为**索引预筛 + 精确判定**两级：
+    先用原始几何 ``ST_DWithin(geom, pt, tol)`` 走 GiST 把候选压到点位附近的
+    少数几个面（边界 ⊆ 面 ⇒ 该条件是边界判定的必要条件，合取后语义不变），
+    再对候选行做原样的边界精确判定。
     """
     pt = func.ST_SetSRID(func.ST_MakePoint(jzd.y, jzd.x), _EPSG)
     geom_col = literal_column("survey_dk_result.geom")
@@ -317,6 +300,8 @@ def _jzd_on_valid_dk_exists(jzd, scope: _Scope):
             SurveyDkResult.result_status.notin_(_INVALID_RESULT_STATUSES),
             SurveyDkResult.dkbm.in_(scope.valid_dkbm_sq),
             geom_col.is_not(None),
+            # 索引预筛：原始几何判定走 GiST（边界 ⊆ 面 ⇒ 必要条件，语义不变）
+            func.ST_DWithin(geom_col, pt, _BOUNDARY_SNAP_TOLERANCE),
             func.ST_DWithin(func.ST_Boundary(func.ST_Force2D(geom_col)), pt, _BOUNDARY_SNAP_TOLERANCE),
         )
     )
@@ -469,11 +454,105 @@ def _iter_dk(scope: _Scope, geometry_mode: str = "geojson"):
         yield row
 
 
+# ---------------------------------------------------------------------------
+# 有效界址点集合：物化临时表 + JZD/JZX 迭代器
+# ---------------------------------------------------------------------------
+
+# 有效界址点临时表（session 级，会话结束自动消失）。列与 survey_jzd_result 对齐。
+_VALID_JZD = table(
+    "_nyt_valid_jzd",
+    column("jzdh"),
+    column("tenant_code"),
+    column("x"),
+    column("y"),
+)
+
+
+def _ensure_valid_jzd_table(scope: _Scope) -> None:
+    """把「有效界址点」一次性物化进本会话的临时表（幂等）。
+
+    判定语义与旧实现逐位一致：点落在某个有效地块（租户内、编码来自有效地块
+    信息、非注销/消亡/移除/拆分源）边界 2mm 容差内。
+
+    为什么这么做（2026-11-04 县域实测，扎鲁特旗 18.6 万点 / 4.6 万地块）：
+
+    - 空间判定放进 ORM 大查询（含 jzx 的双点 join + 双重半连接）时，优化器
+      估行失控：j2 走 Seq Scan 产生 3700 万行中间结果、Join Filter 再滤
+      9285 万行，导出要跑小时级；连 ``CREATE TEMP TABLE AS SELECT`` 的
+      物化形态同样被带偏（10 分钟不出结果）。
+    - 而「小批量 VALUES 常量表达 + 每点对地块 GiST 索引判定」的形态实测
+      稳定在 0.03ms/点。故这里应用层分批：候选点按租户过滤后整表取出
+      （索引扫描，秒级），每 2000 点一批跑空间判定，命中行写入临时表
+      （约 20~30s），JZD/JZX 导出再与临时表做纯 B-tree join。
+    """
+    if scope._valid_jzd_ready:
+        return
+    db = scope.db
+    db.execute(text(
+        "CREATE TEMP TABLE _nyt_valid_jzd "
+        "(jzdh VARCHAR(32), tenant_code VARCHAR(32), x NUMERIC(15,3), y NUMERIC(15,3))"
+    ))
+    # 有效地块编码子查询 → 内联字面量 SQL（与 scope.valid_dkbm_sq 同一对象，保证口径同源）
+    valid_dkbm_sql = str(
+        scope.valid_dkbm_sq.compile(
+            dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
+        )
+    )
+    # 候选点：租户内全部界址点（18.6 万行，纯索引扫描）
+    candidates = db.execute(
+        select(SurveyJzdResult.jzdh, SurveyJzdResult.tenant_code, SurveyJzdResult.y, SurveyJzdResult.x)
+        .where(*scope.jzd_tenant_filters)
+    ).all()
+    batch: list[tuple] = []
+
+    def _flush(rows: list[tuple]) -> None:
+        if not rows:
+            return
+        # 候选行序 (jzdh, tenant_code, y, x)：y=东坐标(easting)、x=北坐标(northing)
+        values = ", ".join(
+            "('{jzdh}', '{tc}', {x}, {y})".format(
+                jzdh=r[0].replace("'", "''"), tc=r[1].replace("'", "''"),
+                x=repr(float(r[3])), y=repr(float(r[2])),
+            )
+            for r in rows
+        )
+        pt = f"ST_SetSRID(ST_MakePoint(v.y, v.x), {_EPSG})"
+        db.execute(text(f"""
+            INSERT INTO _nyt_valid_jzd (jzdh, tenant_code, x, y)
+            SELECT v.jzdh, v.tenant_code, v.x, v.y
+            FROM (VALUES {values}) AS v(jzdh, tenant_code, x, y)
+            WHERE EXISTS (
+                SELECT 1 FROM survey_dk_result d
+                WHERE d.tenant_code = v.tenant_code
+                  AND d.result_status NOT IN ('cancelled', 'extinct', 'removed', 'split_source')
+                  AND d.dkbm IN ({valid_dkbm_sql})
+                  AND d.geom IS NOT NULL
+                  AND ST_DWithin(d.geom, {pt}, {_BOUNDARY_SNAP_TOLERANCE})
+                  AND ST_DWithin(ST_Boundary(ST_Force2D(d.geom)), {pt}, {_BOUNDARY_SNAP_TOLERANCE})
+            )
+        """))
+
+    for row in candidates:
+        if row[2] is None or row[3] is None:
+            continue  # 无坐标的点不可能参与地块边界（与旧 exists 判 NULL 同语义）
+        batch.append(row)
+        if len(batch) >= 2000:
+            _flush(batch)
+            batch.clear()
+    _flush(batch)
+    db.execute(text("CREATE INDEX _nyt_valid_jzd_tj ON _nyt_valid_jzd (tenant_code, jzdh)"))
+    scope._valid_jzd_ready = True
+
+
 def _iter_jzd(scope: _Scope, geometry_mode: str = "geojson"):
+    """界址点。有效性已由临时表保证（temp 行 = 通过租户+空间判定的点）。"""
+    _ensure_valid_jzd_table(scope)
     m = SurveyJzdResult
+    v = _VALID_JZD
     stmt = (
         select(m.jzdh, m.jblx, m.bz, m.x, m.y)
-        .where(*scope.jzd_filters)
+        .select_from(m)
+        .join(v, (v.c.jzdh == m.jzdh) & (v.c.tenant_code == m.tenant_code))
         .execution_options(**_YIELD)
     )
     for r in scope.db.execute(stmt):
@@ -491,15 +570,23 @@ def _iter_jzd(scope: _Scope, geometry_mode: str = "geojson"):
 
 
 def _iter_jzx(scope: _Scope, geometry_mode: str = "geojson"):
-    """界址线：几何取两端界址点连线（两端坐标由界址点表 join 而来）。"""
+    """界址线：两端界址点都在有效点集（临时表）里；几何取两端连线。
+
+    注意 join 条件必须带 tenant_code（与界址点表的唯一键/临时表索引对齐），
+    否则优化器可能退化成纯 jzdh join 的错误计划。
+    """
+    _ensure_valid_jzd_table(scope)
     z = SurveyJzxResult
-    j1 = aliased(SurveyJzdResult)
-    j2 = aliased(SurveyJzdResult)
+    vj1 = _VALID_JZD.alias()
+    vj2 = _VALID_JZD.alias()
     stmt = (
-        select(z.qdjzdh, z.zdjzdh, z.jzxlb, z.jzxwz, z.jzxsm, j1.x, j1.y, j2.x, j2.y)
-        .join(j1, (j1.jzdh == z.qdjzdh) & (j1.tenant_code == z.tenant_code))
-        .join(j2, (j2.jzdh == z.zdjzdh) & (j2.tenant_code == z.tenant_code))
-        .where(*scope.jzx_filters)
+        select(
+            z.qdjzdh, z.zdjzdh, z.jzxlb, z.jzxwz, z.jzxsm,
+            vj1.c.x, vj1.c.y, vj2.c.x, vj2.c.y,
+        )
+        .select_from(z)
+        .join(vj1, (vj1.c.jzdh == z.qdjzdh) & (vj1.c.tenant_code == z.tenant_code))
+        .join(vj2, (vj2.c.jzdh == z.zdjzdh) & (vj2.c.tenant_code == z.tenant_code))
         .execution_options(**_YIELD)
     )
     for r in scope.db.execute(stmt):
@@ -611,13 +698,20 @@ def _write_gdb(scope: _Scope, gdb_path: Path, reporter=None) -> dict[str, int]:
             reporter.report(_layer_progress(idx), f"写入 {name}（{idx + 1}/{len(_ALL_LAYERS)}）")
         coll = fiona.open(gdb_path, "w", **kwargs)
         count = 0
+        batch: list[dict] = []
         try:
             for row in iters[name]:
                 geom = row.pop(_GEOMETRY_KEY, None)
-                coll.write({"geometry": geom, "properties": row})
-                count += 1
-                if reporter and count % 5000 == 0:
-                    reporter.report(_layer_progress(idx), f"写入 {name}…已 {count} 行")
+                batch.append({"geometry": geom, "properties": row})
+                if len(batch) >= 2000:
+                    coll.writerecords(batch)
+                    count += len(batch)
+                    batch.clear()
+                    if reporter:
+                        reporter.report(_layer_progress(idx), f"写入 {name}…已 {count} 行")
+            if batch:
+                coll.writerecords(batch)
+                count += len(batch)
         finally:
             _close_quietly(coll)
         counts[name] = count
@@ -671,17 +765,6 @@ def _write_sqlite(scope: _Scope, db_path: Path, reporter=None) -> dict[str, int]
     return counts
 
 
-def _sql_literal(kind: str, value):
-    """ADO Execute 拼 SQL 的字面量：字符串转义引号，NULL 直接写 NULL。"""
-    if value is None:
-        return "NULL"
-    if kind in ("s", "d"):
-        return "'" + str(value).replace("'", "''") + "'"
-    if isinstance(value, float):
-        return repr(value)
-    return str(value)
-
-
 def _write_mdb_shp(scope: _Scope, out_dir: Path, reporter=None) -> dict[str, int]:
     """MDB（属性表，ADO 写入）+ shp 子目录（空间层）。"""
     counts: dict[str, int] = {}
@@ -694,7 +777,8 @@ def _write_mdb_shp(scope: _Scope, out_dir: Path, reporter=None) -> dict[str, int
             idx = step["idx"]
             reporter.report(_layer_progress(idx), f"{message}（{idx + 1}/{len(_ALL_LAYERS)}）")
 
-    # -- 空间层 → shp
+    # -- 空间层 → shp（批量 writerecords：逐要素 write 每条一次 GDAL 落盘调用，
+    #    22 万界址线实测要分钟级；攒批后一次提交一批）
     shp_dir = out_dir / "shp"
     shp_dir.mkdir(parents=True, exist_ok=True)
     _ensure_proj_data()
@@ -708,18 +792,28 @@ def _write_mdb_shp(scope: _Scope, out_dir: Path, reporter=None) -> dict[str, int
             shp_path, "w", driver="ESRI Shapefile", schema=schema,
             encoding="utf-8", crs=CRS.from_epsg(_EPSG),
         ) as dst:
+            batch: list[dict] = []
             for row in iters[name]:
                 geom = row.pop(_GEOMETRY_KEY, None)
                 if geom is None:
                     continue  # shp 无法存空几何
-                dst.write({"geometry": geom, "properties": row})
-                count += 1
-                if reporter and count % 5000 == 0:
-                    reporter.report(_layer_progress(step["idx"]), f"写入 shp/{name}…已 {count} 行")
+                batch.append({"geometry": geom, "properties": row})
+                if len(batch) >= 2000:
+                    dst.writerecords(batch)
+                    count += len(batch)
+                    batch.clear()
+                    if reporter:
+                        reporter.report(_layer_progress(step["idx"]), f"写入 shp/{name}…已 {count} 行")
+            if batch:
+                dst.writerecords(batch)
+                count += len(batch)
         step["idx"] += 1
         counts[name] = count
 
-    # -- 属性表 → mdb（ADOX 建库 + ADODB 建表插入；ODBC 路径有段错误风险，弃用）
+    # -- 属性表 → mdb（ADOX 建库 + ADODB 客户端游标 Recordset 批量插入；
+    #    ODBC 路径有段错误风险弃用；逐行 Execute 拼 SQL 每行一次 COM 往返 +
+    #    Jet SQL 解析，县级数万行实测十几分钟，Recordset 缓冲 + UpdateBatch
+    #    每 5000 行一次提交，实测快一个量级以上）
     from win32com.client import Dispatch  # noqa: PLC0415 — 仅 mdb 分支需要 pywin32
 
     conn_str = f"Provider=Microsoft.ACE.OLEDB.12.0;Data Source={mdb_path};"
@@ -742,28 +836,27 @@ def _write_mdb_shp(scope: _Scope, out_dir: Path, reporter=None) -> dict[str, int
                 else:
                     col_defs.append(f"[{fname}] DOUBLE")
             conn.Execute(f"CREATE TABLE [{name}] ({', '.join(col_defs)})")
-            col_names = ", ".join(f"[{f[0]}]" for f in fields)
-            insert_prefix = f"INSERT INTO [{name}] ({col_names}) VALUES ("
-            batch = 0
+            field_names = [f[0] for f in fields]
+            rs = Dispatch("ADODB.Recordset")
+            rs.CursorLocation = 3  # adUseClient：AddNew 只进本地缓冲，不逐行往返服务端
+            rs.Open(f"[{name}]", conn, 1, 4, 2)  # adOpenKeyset + adLockBatchOptimistic + adCmdTable
             count = 0
-            in_trans = False
-            for row in iters[name]:
-                row.pop(_GEOMETRY_KEY, None)
-                literals = ", ".join(_sql_literal(f[1], row.get(f[0])) for f in fields)
-                if not in_trans:
-                    conn.BeginTrans()  # 空表不能开着事务关连接（ADO 会报"不能被明确地切断"）
-                    in_trans = True
-                conn.Execute(insert_prefix + literals + ")")
-                count += 1
-                if reporter and count % 5000 == 0:
-                    reporter.report(_layer_progress(step["idx"]), f"写入 mdb {name}…已 {count} 行")
-                batch += 1
-                if batch >= 2000:
-                    conn.CommitTrans()
-                    in_trans = False
-                    batch = 0
-            if in_trans:
-                conn.CommitTrans()
+            pending = 0
+            try:
+                for row in iters[name]:
+                    row.pop(_GEOMETRY_KEY, None)
+                    rs.AddNew(field_names, [row.get(fn) for fn in field_names])
+                    count += 1
+                    pending += 1
+                    if reporter and count % 5000 == 0:
+                        reporter.report(_layer_progress(step["idx"]), f"写入 mdb {name}…已 {count} 行")
+                    if pending >= 5000:
+                        rs.UpdateBatch()
+                        pending = 0
+                if pending:
+                    rs.UpdateBatch()
+            finally:
+                rs.Close()
             step["idx"] += 1
             counts[name] = count
     finally:
