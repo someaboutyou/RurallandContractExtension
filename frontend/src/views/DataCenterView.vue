@@ -14,8 +14,8 @@
           <div class="quick-link-desc">浏览和维护标准 FBF 数据。</div>
         </RouterLink>
         <RouterLink class="quick-link-card" to="/contractors">
-          <div class="quick-link-title">承包方管理</div>
-          <div class="quick-link-desc">查看承包方与家庭成员信息。</div>
+          <div class="quick-link-title">承包方台账</div>
+          <div class="quick-link-desc">查看标准承包方台账与家庭成员信息。</div>
         </RouterLink>
         <RouterLink class="quick-link-card" to="/requests">
           <div class="quick-link-title">业务申请</div>

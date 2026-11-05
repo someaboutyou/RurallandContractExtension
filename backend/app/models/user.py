@@ -1,4 +1,4 @@
-from sqlalchemy import ForeignKey, String
+from sqlalchemy import ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
@@ -16,6 +16,9 @@ class User(Base, TimestampMixin):
     tenant_code: Mapped[str | None] = mapped_column(ForeignKey("tenants.code"), nullable=True, index=True)
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), nullable=False, index=True)
     region_id: Mapped[int] = mapped_column(ForeignKey("regions.id"), nullable=False, index=True)
+    # 当前进入的调查批次（「调查批次管理」里点「进入任务」写入）。
+    # 相关页面（承包方调查等）默认按该批次加载；为空时回退到默认批次。
+    current_survey_batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     tenant = relationship("Tenant", back_populates="users")
     role = relationship("Role", back_populates="users")

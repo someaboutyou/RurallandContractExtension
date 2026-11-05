@@ -1,6 +1,12 @@
+import io
 import logging
+import os
+import subprocess
+import tempfile
+import zipfile
 from pathlib import Path
 from datetime import date
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
@@ -9,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_permission
 from app.models.cbht import CONTRACT_SOURCE_GENERATED, Cbht
-from app.models.survey import SurveyCbdkxxBase, SurveyCbdkxxResult
+from app.models.survey import SurveyCbdkxxBase, SurveyCbdkxxResult, SurveyCbfResult
 from app.models.user import User
 from app.schemas.pagination import PageResponse
 from app.schemas.response import ApiResponse
@@ -43,6 +49,8 @@ from app.schemas.survey import (
     SurveySwapParcelsRequest,
     SurveySplitHouseholdRequest,
     SurveyMergeHouseholdRequest,
+    SurveyCurrentBatchUpdate,
+    ParcelSurveyExportRequest,
     SurveyGenerateRequest,
     SurveyPlotSketchMapRead,
     SurveyRestructureCreate,
@@ -108,6 +116,35 @@ def list_active_survey_batches(
 ):
     """进行中的调查批次（含区域与创建人），供新建批次时把已初始化区域置灰不可选。"""
     return {"data": survey_service.list_active_regions(db, current_user)}
+
+
+@router.get("/current-batch", response_model=ApiResponse[SurveyBatchRead | None])
+def get_current_survey_batch(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """当前用户「进入任务」时记住的批次（未进入过返回 null）。"""
+    return {"data": survey_service.get_current_batch(db, current_user)}
+
+
+@router.put("/current-batch", response_model=ApiResponse[SurveyBatchRead])
+def set_current_survey_batch(
+    payload: SurveyCurrentBatchUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """记录当前批次，下次进入系统时相关页面默认显示该批次。"""
+    return {"data": survey_service.set_current_batch(db, payload.batchId, current_user)}
+
+
+@router.get("/batches/{batch_id}/stats", response_model=ApiResponse[dict])
+def get_survey_batch_stats(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """本批次统计：发包方 / 承包方 / 家庭成员 / 承包地块 / 承包合同。"""
+    return {"data": survey_service.batch_stats(db, batch_id, current_user)}
 
 
 @router.post("/batches", response_model=ApiResponse[SurveyBatchRead])
@@ -357,6 +394,154 @@ def get_survey_parcels(
     result = survey_service.get_result(db, batch_id, contractor_uid, current_user)
     cbfbm = result.get("code", "")
     return {"data": land_parcel_service.get_survey_parcels(db, result.get("batchId") or batch_id, cbfbm, current_user)}
+
+
+@router.get("/parcels/overview", response_model=ApiResponse[dict])
+def get_parcels_overview(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, alias="pageSize", ge=1, le=200),
+    keyword: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """建库中心 > 承包地块：以承包方为单位组织地块清单。"""
+    return {
+        "data": land_parcel_service.get_parcels_overview(
+            db, page, page_size, keyword, current_user
+        )
+    }
+
+
+@router.post("/parcels/export-docx")
+def export_parcel_survey_docx(
+    payload: ParcelSurveyExportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """导出选中承包地块的《承包地块调查表》Word。
+
+    单个地块直接返回 .docx；多个地块打包为 .zip（每地块一个 .docx）。
+    """
+    from app.services.parcel_survey_docx_service import (
+        DOCX_MEDIA_TYPE,
+        parcel_survey_docx_service,
+    )
+
+    files: list[tuple[str, bytes]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in payload.items:
+        key = (item.cbfbm.strip(), item.dkbm.strip())
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            content, filename = parcel_survey_docx_service.render(
+                db,
+                cbfbm=key[0],
+                dkbm=key[1],
+                batch_id=payload.batchId,
+            )
+        except ValueError as exc:
+            logger.warning("parcel survey export skipped: %s", exc)
+            continue
+        files.append((filename, content))
+
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="未找到可导出的承包地块调查表",
+        )
+
+    if len(files) == 1:
+        filename, content = files[0]
+        return Response(
+            content=content,
+            media_type=DOCX_MEDIA_TYPE,
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"
+            },
+        )
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for filename, content in files:
+            archive.writestr(filename, content)
+    zip_name = "承包地块调查表.zip"
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(zip_name)}"
+        },
+    )
+
+
+@router.post("/parcels/export-sketch-pdf")
+def export_parcel_sketch_pdf(
+    payload: ParcelSurveyExportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """导出选中承包地块的《承包地块示意图》PDF。
+
+    同一承包方合并为一个 PDF；多个承包方打包为 .zip。
+    """
+    groups: dict[str, set[str]] = {}
+    for item in payload.items:
+        cbfbm = item.cbfbm.strip()
+        dkbm = item.dkbm.strip()
+        if cbfbm and dkbm:
+            groups.setdefault(cbfbm, set()).add(dkbm)
+    if not groups:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="请选择承包地块"
+        )
+
+    files: list[tuple[str, bytes]] = []
+    for cbfbm, dkbms in groups.items():
+        try:
+            html, contractor_name = _build_selected_sketch_html(
+                db,
+                cbfbm=cbfbm,
+                dkbms=dkbms,
+                batch_id=payload.batchId,
+                current_user=current_user,
+            )
+        except ValueError as exc:
+            logger.warning("parcel sketch export skipped: %s", exc)
+            continue
+        content = _html_to_pdf(html)
+        stem = _safe_filename_stem(f"{cbfbm}{contractor_name}承包地块示意图")
+        files.append((f"{stem}.pdf", content))
+
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="未找到可导出的承包地块示意图",
+        )
+
+    if len(files) == 1:
+        filename, content = files[0]
+        return Response(
+            content=content,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"
+            },
+        )
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for filename, content in files:
+            archive.writestr(filename, content)
+    zip_name = "承包地块示意图.zip"
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(zip_name)}"
+        },
+    )
 
 
 @router.get("/batches/{batch_id}/results/{contractor_uid}/parcels/{dkbm}/boundary", response_model=ApiResponse[SurveyParcelBoundaryRead])
@@ -979,6 +1164,144 @@ def _parcel_area_mu(parcel: dict) -> float:
 
 def _fmt_date_cn(value: date) -> str:
     return f"{value.year}年{value.month:02d}月{value.day:02d}日"
+
+
+_BROWSER_CANDIDATES = (
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+)
+
+
+def _find_pdf_browser() -> str | None:
+    for candidate in _BROWSER_CANDIDATES:
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _html_to_pdf(html: str) -> bytes:
+    """用无头 Edge/Chrome 把打印版 HTML 转成 PDF（地块示意图）。"""
+    browser = _find_pdf_browser()
+    if not browser:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="未找到 Edge/Chrome，无法生成地块示意图 PDF",
+        )
+    with tempfile.TemporaryDirectory(prefix="parcel_sketch_") as tmp:
+        html_path = Path(tmp) / "sketch.html"
+        pdf_path = Path(tmp) / "sketch.pdf"
+        profile_path = Path(tmp) / "profile"
+        html_path.write_text(html, encoding="utf-8")
+        command = [
+            browser,
+            "--headless=new",
+            "--disable-gpu",
+            "--no-sandbox",
+            f"--user-data-dir={profile_path}",
+            f"--print-to-pdf={pdf_path}",
+            "--print-to-pdf-no-header",
+            "--virtual-time-budget=4000",
+            html_path.as_uri(),
+        ]
+        try:
+            subprocess.run(command, capture_output=True, timeout=90, check=False)
+        except subprocess.TimeoutExpired as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="地块示意图 PDF 生成超时",
+            ) from exc
+        if not pdf_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="地块示意图 PDF 生成失败",
+            )
+        return pdf_path.read_bytes()
+
+
+def _safe_filename_stem(value: str) -> str:
+    return "".join("_" if char in '\\/:*?"<>|' else char for char in value)
+
+
+def _build_selected_sketch_html(
+    db: Session,
+    *,
+    cbfbm: str,
+    dkbms: set[str],
+    batch_id: int | None,
+    current_user: User,
+) -> tuple[str, str]:
+    contractor = db.scalars(
+        sa_select(SurveyCbfResult)
+        .where(SurveyCbfResult.cbfbm == cbfbm)
+        .order_by(SurveyCbfResult.id.desc())
+    ).first()
+    data_batch_id = batch_id or 0
+    parcels = land_parcel_service.get_survey_parcels(
+        db, data_batch_id, cbfbm, current_user
+    )
+    if not parcels:
+        raise ValueError(f"未找到承包地块：{cbfbm}")
+    if dkbms and not any((parcel.get("dkbm") or "") in dkbms for parcel in parcels):
+        raise ValueError(f"未找到承包地块：{cbfbm}")
+
+    nearby_parcels = land_parcel_service.get_nearby_survey_parcels(
+        db, data_batch_id, cbfbm, current_user
+    )
+    today_text = _fmt_date_cn(date.today())
+    notice_reviewer = (getattr(contractor, "gsshr", "") or "") if contractor else ""
+    review_date_raw = getattr(contractor, "gsshrq", None) if contractor else None
+    survey_date_raw = getattr(contractor, "cbfdcrq", None) if contractor else None
+    review_date_cn = (
+        _fmt_date_cn(review_date_raw.date() if hasattr(review_date_raw, "date") else review_date_raw)
+        if review_date_raw
+        else (
+            _fmt_date_cn(survey_date_raw.date() if hasattr(survey_date_raw, "date") else survey_date_raw)
+            if survey_date_raw
+            else ""
+        )
+    )
+
+    sketch_plots = []
+    total_area = 0.0
+    # 按户输出：选中地块只用于确定“户”，图内展示该户全部承包地块。
+    for parcel in parcels:
+        area_mu = _parcel_area_mu(parcel)
+        total_area += area_mu
+        sketch_plots.append(
+            {
+                "code": (parcel.get("dkbm") or "")[14:] or parcel.get("dkbm") or "",
+                "dkbm": parcel.get("dkbm") or "",
+                "area": _fmt_area_mu(area_mu),
+                "north": parcel.get("dkbz") or "",
+                "south": parcel.get("dknz") or "",
+                "west": parcel.get("dkxz") or "",
+                "east": parcel.get("dkdz") or "",
+                "geometry": parcel.get("geometry"),
+            }
+        )
+
+    contractor_name = (getattr(contractor, "cbfmc", "") or "") if contractor else ""
+    html = contract_template_service.render_plot_sketch_map(
+        contractor_name=contractor_name,
+        contractor_code=cbfbm,
+        total_plots=len(parcels),
+        total_area=_fmt_area_mu(total_area),
+        sketch_plots=sketch_plots,
+        overview_plots=nearby_parcels,
+        highlight_plots=sketch_plots,
+        village_name=(getattr(contractor, "group_region_name", "") or "") if contractor else "",
+        auditor=f"审核者：{notice_reviewer}　{review_date_cn}" if notice_reviewer and review_date_cn else "",
+        mapper=f"制图者：{notice_reviewer}　{review_date_cn}" if notice_reviewer and review_date_cn else "",
+        publisher="",
+        compile_unit=dictionary_service.get_setting(
+            db, SURVEY_ORG_DICT_TYPE, DEFAULT_SURVEY_ORG,
+        ),
+        audit_date=review_date_cn or today_text,
+        map_date=review_date_cn or today_text,
+    )
+    return html, contractor_name
 
 
 @router.get("/batches/{batch_id}/results/{contractor_uid}/contract", response_model=ApiResponse[SurveyContractRead | None])

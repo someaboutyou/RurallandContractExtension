@@ -136,6 +136,71 @@ class SurveyServiceBatchMixin:
         }
 
 
+    def get_batch(self, db: Session, batch_id: int, current_user: User) -> dict:
+        batch = db.scalar(select(SurveyBatch).where(SurveyBatch.id == batch_id))
+        if batch is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="调查批次不存在")
+        return self._serialize_batch(db, batch, None, current_user=current_user)
+
+    def get_current_batch(self, db: Session, current_user: User) -> dict | None:
+        """当前用户「进入任务」时记住的批次；批次已不存在时自动清空。"""
+        batch_id = getattr(current_user, "current_survey_batch_id", None)
+        if not batch_id:
+            return None
+        batch = db.scalar(select(SurveyBatch).where(SurveyBatch.id == batch_id))
+        if batch is None:
+            current_user.current_survey_batch_id = None
+            db.commit()
+            return None
+        return self._serialize_batch(db, batch, None, current_user=current_user)
+
+    def set_current_batch(self, db: Session, batch_id: int, current_user: User) -> dict:
+        batch = db.scalar(select(SurveyBatch).where(SurveyBatch.id == batch_id))
+        if batch is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="调查批次不存在")
+        current_user.current_survey_batch_id = batch.id
+        db.commit()
+        return self._serialize_batch(db, batch, None, current_user=current_user)
+
+    def batch_stats(self, db: Session, batch_id: int, current_user: User) -> dict:
+        """本批次统计：发包方 / 承包方 / 家庭成员 / 承包地块 / 承包合同。"""
+        batch = db.scalar(select(SurveyBatch).where(SurveyBatch.id == batch_id))
+        if batch is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="调查批次不存在")
+        issuer_count = db.scalar(
+            select(func.count(func.distinct(SurveyFbfBase.fbfbm))).where(
+                SurveyFbfBase.batch_id == batch_id
+            )
+        ) or 0
+        contractor_count = db.scalar(
+            select(func.count(SurveyCbfBase.id)).where(SurveyCbfBase.batch_id == batch_id)
+        ) or 0
+        member_count = db.scalar(
+            select(func.count(SurveyCbfJtcyBase.id)).where(
+                SurveyCbfJtcyBase.batch_id == batch_id
+            )
+        ) or 0
+        parcel_count = db.scalar(
+            select(func.count(SurveyCbdkxxBase.id)).where(
+                SurveyCbdkxxBase.batch_id == batch_id
+            )
+        ) or 0
+        contract_count = db.scalar(
+            select(func.count(func.distinct(SurveyCbdkxxBase.cbhtbm))).where(
+                SurveyCbdkxxBase.batch_id == batch_id,
+                SurveyCbdkxxBase.cbhtbm.isnot(None),
+                SurveyCbdkxxBase.cbhtbm != "",
+            )
+        ) or 0
+        return {
+            "batchId": batch_id,
+            "issuerCount": int(issuer_count),
+            "contractorCount": int(contractor_count),
+            "memberCount": int(member_count),
+            "parcelCount": int(parcel_count),
+            "contractCount": int(contract_count),
+        }
+
     def list_active_regions(self, db: Session, current_user: User) -> list[dict]:
         """进行中的调查批次（含区域码与创建人），供「新建调查批次」把已初始化区域置灰。
 

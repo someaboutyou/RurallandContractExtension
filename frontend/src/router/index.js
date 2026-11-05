@@ -8,6 +8,7 @@ import { useAuthStore } from "../stores/auth";
 const LoginView = () => import("../views/LoginView.vue");
 const DashboardView = () => import("../views/DashboardView.vue");
 const DataCenterView = () => import("../views/DataCenterView.vue");
+const ParcelOverviewView = () => import("../views/ParcelOverviewView.vue");
 const ArchiveView = () => import("../views/ArchiveView.vue");
 const LayerManagementView = () => import("../views/LayerManagementView.vue");
 const RegionManagementView = () => import("../views/RegionManagementView.vue");
@@ -18,6 +19,7 @@ const ContractorView = () => import("../views/ContractorView.vue");
 const DataImportView = () => import("../views/DataImportView.vue");
 const DataExportView = () => import("../views/DataExportView.vue");
 const SurveyView = () => import("../views/SurveyView.vue");
+const SurveyContractorView = () => import("../views/SurveyContractorView.vue");
 const GisView = () => import("../views/GisView.vue");
 const RequestView = () => import("../views/RequestView.vue");
 const RequestAttachmentTemplateView = () => import("../views/RequestAttachmentTemplateView.vue");
@@ -36,9 +38,11 @@ const appChildren = [
   { path: "gis", name: "gis", component: GisView, meta: { requiresAuth: true, permissions: ["dashboard.view"] } },
   { path: "issuers", name: "issuers", component: IssuerView, meta: { requiresAuth: true, permissions: ["issuers.view"] } },
   { path: "contractors", name: "contractors", component: ContractorView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
+  { path: "parcels", name: "parcels", component: ParcelOverviewView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
   { path: "data-imports", name: "data-imports", component: DataImportView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
   { path: "data-exports", name: "data-exports", component: DataExportView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
   { path: "surveys", name: "surveys", component: SurveyView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
+  { path: "survey-contractors", name: "survey-contractors", component: SurveyContractorView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
   { path: "requests", name: "requests", component: RequestView, meta: { requiresAuth: true, permissions: REQUEST_MODULE_PERMISSIONS } },
   {
     path: "data-center",

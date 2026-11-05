@@ -7,7 +7,9 @@
     @closed="handleClosed"
   >
     <el-alert
-      title="请补充新增地块的属性信息，保存调查结果时会与已核验通过的图形一起提交。"
+      :title="requireGeometry
+        ? '请补充新增地块的属性信息，保存调查结果时会与已核验通过的图形一起提交。'
+        : '请填写新增地块的属性信息；图形可在调查成果的「地块信息」中补充维护。'"
       type="info"
       :closable="false"
       show-icon
@@ -40,11 +42,18 @@
       <div class="form-row">
         <el-form-item label="地块类别" required class="form-third">
           <el-select v-model="form.dklb" style="width: 100%">
-            <el-option label="耕地" value="01" />
-            <el-option label="园地" value="02" />
-            <el-option label="林地" value="03" />
-            <el-option label="草地" value="04" />
-            <el-option label="其他" value="99" />
+            <template v-if="requireGeometry">
+              <el-option label="耕地" value="01" />
+              <el-option label="园地" value="02" />
+              <el-option label="林地" value="03" />
+              <el-option label="草地" value="04" />
+              <el-option label="其他" value="99" />
+            </template>
+            <template v-else>
+              <el-option label="承包地块" value="10" />
+              <el-option label="自留地" value="21" />
+              <el-option label="机动地" value="22" />
+            </template>
           </el-select>
         </el-form-item>
         <el-form-item label="土地用途" required class="form-third">
@@ -166,6 +175,9 @@ const props = defineProps({
   batchId: { type: Number, default: null },
   contractorUid: { type: String, default: "" },
   existingParcelCodes: { type: Array, default: () => [] },
+  // 是否必须先有已核验图形。调查成果里的新增地块需要图形；
+  // 「承包地块」列表里的新增允许只填属性（图形后续在调查成果中补充）。
+  requireGeometry: { type: Boolean, default: true },
 });
 
 const emit = defineEmits(["done", "closed"]);
@@ -204,7 +216,7 @@ function defaultForm() {
     dkmc: "",
     scmj: 0,
     htmj: null,
-    dklb: "01",
+    dklb: props.requireGeometry ? "01" : "10",
     tdyt: "1",
     sfjbnt: "1",
     dldj: "01",
@@ -233,7 +245,7 @@ const canSubmit = computed(() =>
   form.tdyt &&
   form.sfjbnt &&
   form.dldj &&
-  geometryPayload.value?.geometry
+  (!props.requireGeometry || Boolean(geometryPayload.value?.geometry))
 );
 
 function buildExistingCodeSet() {

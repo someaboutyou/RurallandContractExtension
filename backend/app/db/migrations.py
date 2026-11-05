@@ -1228,6 +1228,8 @@ def _upgrade_users(engine: Engine) -> None:
     statements: list[str] = []
     if "tenant_code" not in columns:
         statements.append("ALTER TABLE users ADD COLUMN tenant_code VARCHAR(12)")
+    if "current_survey_batch_id" not in columns:
+        statements.append("ALTER TABLE users ADD COLUMN current_survey_batch_id INTEGER")
 
     with engine.begin() as connection:
         for statement in statements:

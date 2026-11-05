@@ -759,3 +759,17 @@ class SurveyContractorRead(BaseModel):
 # 《包地变化摸底表》纯推导无存储；《家庭成员变化摸底表》的摸底数据随
 # update_result 的 familyMembers[*].sheet 子对象提交（宽松 dict，细校验在
 # 服务层做；事实类字段一律不做必填闸门，见 MEMORY 必填闸门教训）。
+
+
+class ParcelSurveyExportItem(BaseModel):
+    cbfbm: str = Field(min_length=1, max_length=18)
+    dkbm: str = Field(min_length=1, max_length=19)
+
+
+class ParcelSurveyExportRequest(BaseModel):
+    items: list[ParcelSurveyExportItem] = Field(min_length=1, max_length=500)
+    batchId: int | None = None
+
+
+class SurveyCurrentBatchUpdate(BaseModel):
+    batchId: int

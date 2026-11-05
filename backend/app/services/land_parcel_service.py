@@ -1,7 +1,7 @@
 import json
 from types import SimpleNamespace
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.survey import (
@@ -349,6 +349,138 @@ class LandParcelService:
 
         result.sort(key=lambda item: (item.get("dkbm") or "", 1 if item.get("resultStatus") in {"removed", "split_source"} else 0))
         return result
+
+    def get_parcels_overview(
+        self,
+        db: Session,
+        page: int,
+        page_size: int,
+        keyword: str | None,
+        current_user: User,
+    ) -> dict:
+        """以承包方为单位汇总承包地块（当前结果态）。
+
+        供「建库中心 > 承包地块」树形清单使用：父行为承包方，子行为其地块。
+        面积字段沿用 NY/T 2539 口径：htmj/scmj 为平方米，htmjm/yhtmjm 为亩。
+        """
+        stmt = select(SurveyCbfResult)
+        count_stmt = select(func.count(SurveyCbfResult.id))
+        if keyword:
+            pattern = f"%{keyword.strip()}%"
+            # 发包方命中：先由「承包地块关系 + 发包方结果表」找出对应的承包方编码。
+            issuer_cbfbm = (
+                select(SurveyCbdkxxResult.cbfbm)
+                .join(
+                    SurveyFbfResult,
+                    SurveyFbfResult.fbfbm == SurveyCbdkxxResult.fbfbm,
+                )
+                .where(
+                    or_(
+                        SurveyFbfResult.fbfbm.ilike(pattern),
+                        SurveyFbfResult.fbfmc.ilike(pattern),
+                    )
+                )
+            )
+            condition = or_(
+                SurveyCbfResult.cbfbm.ilike(pattern),
+                SurveyCbfResult.cbfmc.ilike(pattern),
+                SurveyCbfResult.cbfbm.in_(issuer_cbfbm),
+            )
+            stmt = stmt.where(condition)
+            count_stmt = count_stmt.where(condition)
+
+        total = db.scalar(count_stmt) or 0
+        contractors = db.scalars(
+            stmt.order_by(SurveyCbfResult.cbfbm.asc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).all()
+        if not contractors:
+            return {"items": [], "total": total, "page": page, "pageSize": page_size}
+
+        cbfbm_list = [contractor.cbfbm for contractor in contractors]
+
+        relation_rows = db.scalars(
+            select(SurveyCbdkxxResult)
+            .where(
+                SurveyCbdkxxResult.cbfbm.in_(cbfbm_list),
+                SurveyCbdkxxResult.result_status.notin_(("removed", "split_source")),
+            )
+            .order_by(SurveyCbdkxxResult.cbfbm.asc(), SurveyCbdkxxResult.dkbm.asc())
+        ).all()
+        relations_by_cbfbm: dict[str, list] = {}
+        for relation in relation_rows:
+            relations_by_cbfbm.setdefault(relation.cbfbm, []).append(relation)
+
+        dkbm_list = sorted({relation.dkbm for relation in relation_rows})
+        dk_map: dict[str, object] = {}
+        if dkbm_list:
+            dk_rows = db.scalars(
+                select(SurveyDkResult)
+                .where(
+                    SurveyDkResult.dkbm.in_(dkbm_list),
+                    SurveyDkResult.result_status != "removed",
+                )
+                .order_by(SurveyDkResult.dkbm.asc(), SurveyDkResult.id.desc())
+            ).all()
+            for row in dk_rows:
+                dk_map.setdefault(row.dkbm, row)
+
+        fbfbm_list = sorted({relation.fbfbm for relation in relation_rows if relation.fbfbm})
+        fbf_map: dict[str, object] = {}
+        if fbfbm_list:
+            for row in db.scalars(
+                select(SurveyFbfResult).where(SurveyFbfResult.fbfbm.in_(fbfbm_list))
+            ).all():
+                fbf_map[row.fbfbm] = row
+
+        items = []
+        for index, contractor in enumerate(contractors, start=(page - 1) * page_size + 1):
+            parcels = []
+            for relation in relations_by_cbfbm.get(contractor.cbfbm, []):
+                dk = dk_map.get(relation.dkbm)
+                if dk is None:
+                    continue
+                fbf = fbf_map.get(relation.fbfbm)
+                parcels.append(
+                    {
+                        "dkbm": relation.dkbm,
+                        "dkmc": dk.dkmc,
+                        "htmj": str(relation.htmj) if relation.htmj is not None else None,
+                        "yhtmj": str(relation.yhtmj) if relation.yhtmj is not None else None,
+                        "htmjm": str(relation.htmjm) if relation.htmjm is not None else None,
+                        "yhtmjm": str(relation.yhtmjm) if relation.yhtmjm is not None else None,
+                        "scmj": str(dk.scmj) if dk.scmj is not None else None,
+                        "dklb": dk.dklb,
+                        "tdlylx": dk.tdlylx,
+                        "sfjbnt": dk.sfjbnt,
+                        "dkdz": dk.dkdz,
+                        "dknz": dk.dknz,
+                        "dkxz": dk.dkxz,
+                        "dkbz": dk.dkbz,
+                        "dkbzxx": dk.dkbzxx,
+                        "sfqqqg": relation.sfqqqg,
+                        "fbfbm": relation.fbfbm,
+                        "fbfmc": fbf.fbfmc if fbf else None,
+                        "cbfbm": contractor.cbfbm,
+                        "cbfmc": contractor.cbfmc,
+                        "resultStatus": relation.result_status,
+                        "isChanged": relation.is_changed,
+                        "changeType": relation.change_type,
+                        "changeReason": relation.change_reason,
+                    }
+                )
+            items.append(
+                {
+                    "cbfbm": contractor.cbfbm,
+                    "cbfmc": contractor.cbfmc,
+                    "contractorUid": contractor.contractor_uid,
+                    "householdNo": f"{index:04d}",
+                    "parcelCount": len(parcels),
+                    "parcels": parcels,
+                }
+            )
+        return {"items": items, "total": total, "page": page, "pageSize": page_size}
 
     def get_nearby_survey_parcels(
         self,

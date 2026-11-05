@@ -397,6 +397,7 @@
 {% set issuer = packet.issuer %}
 {% set contractor = packet.contractor %}
 
+{% if not parcel_only %}
 <!-- ①② 封面 -->
 <div class="page pg-portrait cover">
   <div class="cover-head"></div>
@@ -570,6 +571,7 @@
     </tr>
   </table>
 </div>
+{% endif %}
 
 {# ⑤⑥ 一个地块一套表：承包地块调查表 + 界址点坐标成果表 #}
 {% for parcel in packet.parcels %}
@@ -706,6 +708,7 @@
   </table>
 </div>
 
+{% if include_point_sheets %}
 {% for page_points in parcel.point_pages %}
 <div class="page pg-portrait">
   <h1 class="form-title">界址点坐标成果表</h1>
@@ -744,6 +747,7 @@
   </table>
 </div>
 {% endfor %}
+{% endif %}
 {% endfor %}
 
 {% if not packet.parcels %}

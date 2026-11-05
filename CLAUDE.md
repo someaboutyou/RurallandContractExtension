@@ -57,3 +57,10 @@ scripts/   项目中用到的启动脚本
 - **survey_*_base（base 表）**：存放基础数据和变化前的值。当前状态 `a` 存放在 base 表中
 - **survey_*_result（result 表）**：存放变化后的值。`a → b` 时，`b` 写入 result，`a` 保留在 base；`b → c` 时，`c` 写入 result，`b` 保留在 base。即 result 总是最新状态，base 总是上一状态
 - **survey_*_diff（diff 表）**：存放完整变化过程记录（如 `a → b`、`b → c`），用于追溯
+
+## 参考系统（CS 版，业务逻辑基准）
+
+- 位置：`C:\Program Files (x86)\YuLinTu\YuLinTuLandDelayTool`
+- 性质：二轮延包数据建库系统的 CS 桌面版本。
+- 用途：本 Web 程序的业务逻辑参考基准。后续新增功能或调整现有功能时，必须先参考该 CS 系统的业务逻辑、字段与流程，保持业务语义一致。
+- 约束：该目录仅作参考，不属于本仓库，不要修改其内容。

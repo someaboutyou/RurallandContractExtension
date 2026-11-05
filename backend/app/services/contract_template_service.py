@@ -676,7 +676,14 @@ class ContractTemplateService:
         ]
         return self._render_cadastral_html(db, packets)
 
-    def _render_cadastral_html(self, db: Session, packets: list[dict]) -> str:
+    def _render_cadastral_html(
+        self,
+        db: Session,
+        packets: list[dict],
+        *,
+        parcel_only: bool = False,
+        include_point_sheets: bool = True,
+    ) -> str:
         template = self._env.get_template("cadastral_survey.html")
         return template.render(
             packets=packets,
@@ -686,6 +693,42 @@ class ContractTemplateService:
             ),
             member_min_rows=CADASTRAL_MEMBER_MIN_ROWS,
             points_per_page=CADASTRAL_POINTS_PER_PAGE,
+            parcel_only=parcel_only,
+            include_point_sheets=include_point_sheets,
+        )
+
+    def build_parcel_survey_html(
+        self,
+        db: Session,
+        *,
+        cbfbm: str,
+        dkbms: list[str],
+        batch_id: int | None = None,
+    ) -> tuple[str, dict]:
+        """只渲染指定地块的《承包地块调查表》（不含封面/发包方/承包方/坐标成果表）。"""
+        options = self._cadastral_options(db)
+        packet = self._build_cadastral_packet(
+            db, cbfbm=cbfbm, batch_id=batch_id, options=options,
+        )
+        wanted = {str(code) for code in dkbms if code}
+        packet["parcels"] = [
+            parcel for parcel in packet.get("parcels", [])
+            if parcel.get("dkbm") in wanted
+        ]
+        # 调查表最多展示 CADASTRAL_PARCEL_POINT_ROWS 个界址点；超出时表内会提示
+        # “其余 N 个界址点见《界址点坐标成果表》”，因此必须把成果表一并输出。
+        include_point_sheets = any(
+            len(parcel.get("points") or []) > CADASTRAL_PARCEL_POINT_ROWS
+            for parcel in packet["parcels"]
+        )
+        return (
+            self._render_cadastral_html(
+                db,
+                [packet],
+                parcel_only=True,
+                include_point_sheets=include_point_sheets,
+            ),
+            packet,
         )
 
     def _build_cadastral_packet(

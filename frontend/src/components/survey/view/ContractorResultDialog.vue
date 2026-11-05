@@ -20,17 +20,34 @@
         <el-button v-if="canUndoPendingOperation(operation)" link type="danger" size="small" @click="handleUndoPendingOperationPreview(index)">撤销</el-button>
       </div>
     </div>
-    <el-collapse v-model="openPanels" class="survey-collapse" @change="handlePanelsChange">
-      <el-collapse-item name="contractor" :title="`承包方及其家庭成员（${resultForm.familyMembers.length}人）`">
+    <div class="survey-panel-switch">
+      <el-button
+        v-for="panel in panelButtons"
+        :key="panel.name"
+        size="small"
+        :type="activePanel === panel.name ? 'primary' : ''"
+        :plain="activePanel !== panel.name"
+        :disabled="panel.disabled"
+        @click="switchPanel(panel.name)"
+      >
+        {{ panel.label }}
+      </el-button>
+    </div>
+
+    <div class="survey-panel-body">
+      <section v-show="activePanel === 'contractor'" class="survey-panel-section">
         <ContractorMemberPanel ref="contractorMemberPanel" :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :result="resultForm" :changed-fields="computedChangedFields" :readonly="dataReadOnly" :can-generate-code="!dataReadOnly && resultForm.resultStatus === 'added'" @generate-code="generateResultContractorCode" />
-      </el-collapse-item>
-      <el-collapse-item title="地块信息" name="parcels" :disabled="isCreatingContractorResult">
+      </section>
+
+      <section v-show="activePanel === 'parcels'" class="survey-panel-section">
         <ParcelInfoPanel v-if="isPanelMounted('parcels')" :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :parcels="parcelsForPanel" :persisted-dkbms="persistedParcelDkbms" :parcels-loading="parcelsLoading" :can-manage="canManage && canWrite" :is-result-locked="dataReadOnly" :saved-swap-records="savedSwapRecords" :saved-split-records="savedSplitRecords" :saved-remove-records="savedRemoveRecords" :can-rollback-saved-parcel-change="canRollbackSavedParcelChange" :rollback-change-loading-id="rollbackingSavedChangeId" :persisting-dkbm="persistingParcelDkbm" @swap-parcels="handleOpSwapParcels" @add-parcel="handlePendingOperation" @split-parcel="handlePendingOperation" @remove-parcel="handleOpRemoveParcel" @rollback-saved-swap="handleRollbackSavedSwap" @rollback-saved-split="handleRollbackSavedSplit" @rollback-saved-remove="handleRollbackSavedRemove" @undo-pending-remove="handleUndoPendingRemoveFromPanel" @persist-parcel="handlePersistPendingParcel" />
-      </el-collapse-item>
-      <el-collapse-item title="承包地块示意图" name="plotSketchMap" :disabled="isCreatingContractorResult">
+      </section>
+
+      <section v-show="activePanel === 'plotSketchMap'" class="survey-panel-section">
         <PlotSketchMapPanel v-if="isPanelMounted('plotSketchMap')" :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :refresh-key="plotSketchRefreshKey" />
-      </el-collapse-item>
-      <el-collapse-item title="合同信息" name="contract" :disabled="isCreatingContractorResult">
+      </section>
+
+      <section v-show="activePanel === 'contract'" class="survey-panel-section">
         <ContractInfoPanel
           v-if="isPanelMounted('contract')"
           :batch-id="activeBatch?.id"
@@ -38,10 +55,9 @@
           :can-manage="canManage && canWrite"
           :batch-status="activeBatch?.status || 'active'"
         />
-      </el-collapse-item>
-    </el-collapse>
-    <el-collapse v-if="!isCreatingContractorResult" v-model="openAuxPanels" class="survey-collapse survey-collapse--aux">
-      <el-collapse-item title="调查附件 & 转业业务申请" name="aux">
+      </section>
+
+      <section v-show="activePanel === 'aux'" class="survey-panel-section">
         <div v-if="canManage && canWrite && !dataReadOnly" class="phase2-upload">
           <el-select v-model="attachmentCategory" style="width: 160px" size="small">
             <el-option v-for="item in attachmentCategoryOptions" :key="item.value" :label="item.label" :value="item.value" />
@@ -77,8 +93,8 @@
           </div>
           <el-button type="success" size="small" @click="handleGenerateRequest">生成业务申请</el-button>
         </el-form>
-      </el-collapse-item>
-    </el-collapse>
+      </section>
+    </div>
     <template #footer>
       <el-button @click="close">取消</el-button>
       <el-button v-if="canManage && canWrite && !isResultLocked && (!savedTerminated || terminalPendingOperation)" :loading="savingResult || creatingContractor" type="success" @click="handleSaveResult">{{ isCreatingContractorResult ? "新增并保存" : "保存调查结果" }}</el-button>
@@ -171,18 +187,29 @@ const unconfirmingResult = ref(false);
 const printingCadastral = ref(false);
 const activeTask = ref(null);
 const isCreatingContractorResult = ref(false);
-// 折叠面板：openPanels = 当前展开的面板；openedPanels = 展开过一次的面板。
-// el-collapse-item 的内容是常挂载（v-show），而地块/示意图/合同三个面板在 mount 时
-// 就会立刻拉数据，所以用 v-if 卡住首次展开 —— 不展开就不挂载，维持原 lazy tab 的请求数。
-const openPanels = ref(["contractor"]);
-const openAuxPanels = ref([]);
+// 按钮切换面板：activePanel = 当前显示的面板；openedPanels = 打开过一次的面板。
+// 地块/示意图/合同三个面板在 mount 时就会立刻拉数据，所以用 v-if 卡住首次打开 ——
+// 没点过就不挂载，维持 lazy 加载、避免一次拉全部数据。
+const activePanel = ref("contractor");
 const openedPanels = ref(["contractor"]);
 function isPanelMounted(name) { return openedPanels.value.includes(name); }
-async function handlePanelsChange(names) {
-  const list = Array.isArray(names) ? names : [names];
-  for (const name of list) if (!openedPanels.value.includes(name)) openedPanels.value = [...openedPanels.value, name];
-  if (list.includes("parcels")) {
-    // 地图容器需要先完成挂载，再初始化 OpenLayers。
+const panelButtons = computed(() => {
+  const buttons = [
+    { name: "contractor", label: `承包方及家庭成员（${resultForm.familyMembers.length}人）`, disabled: false },
+    { name: "parcels", label: "地块信息", disabled: isCreatingContractorResult.value },
+    { name: "plotSketchMap", label: "承包地块示意图", disabled: isCreatingContractorResult.value },
+    { name: "contract", label: "合同信息", disabled: isCreatingContractorResult.value },
+  ];
+  if (!isCreatingContractorResult.value) {
+    buttons.push({ name: "aux", label: "调查附件&转业业务申请", disabled: false });
+  }
+  return buttons;
+});
+async function switchPanel(name) {
+  activePanel.value = name;
+  if (!openedPanels.value.includes(name)) openedPanels.value = [...openedPanels.value, name];
+  if (name === "parcels") {
+    // 地图容器需要先完成挂载，再初始化 OpenLayers；同时补拉地块数据。
     await nextTick();
     if (!parcelsLoaded.value && !parcelsLoading.value) {
       await Promise.all([loadSurveyParcels(), loadSavedParcelChanges()]);
@@ -1087,7 +1114,7 @@ async function reloadSurveyResult() {
 }
 
 // ---- Open / Close ----
-async function openForResult(batch, row) {
+async function openForResult(batch, row, options = {}) {
   isCreatingContractorResult.value = false; activeTask.value = row; selectedParcel.value = null; parcels.value = []; persistedParcelDkbms.value = []; parcelsLoaded.value = false;
   previewAttachmentVisible.value = false; previewAttachment.value = null; attachmentPreviewIndex.value = -1;
   pendingOperations.value = []; savedSwapChanges.value = []; savedSplitChanges.value = []; savedRemoveChanges.value = []; savedParcelChangeLoading.value = false; rollbackingSavedChangeId.value = null;
@@ -1095,8 +1122,12 @@ async function openForResult(batch, row) {
   Object.assign(resultForm, createEmptyResult(), data.data, { familyMembers: (data.data.familyMembers || []).map((item) => ({ ...item })) });
   // 调查员 / 调查日期取「本次」的默认值（当前登录用户 + 当天），不再沿用库里的历史痕迹。
   applyCurrentSurveyDefaults();
-  resetPhase2Forms(); openPanels.value = ["contractor"]; openedPanels.value = ["contractor"]; openAuxPanels.value = []; emit("update:modelValue", true);
+  const initialPanel = options.panel || "contractor";
+  resetPhase2Forms(); activePanel.value = initialPanel; openedPanels.value = [initialPanel]; emit("update:modelValue", true);
   await loadDiffs(); await loadPhase2();
+  if (initialPanel === "parcels") {
+    await Promise.all([loadSurveyParcels(), loadSavedParcelChanges()]);
+  }
 }
 
 function openForCreate(batch) {
@@ -1106,7 +1137,7 @@ function openForCreate(batch) {
   Object.assign(resultForm, createEmptyResult(), { code: batch?.regionCode || props.activeRegionCode || "", groupRegionCode: batch?.regionCode || props.activeRegionCode || "", groupRegionName: batch?.regionName || props.activeRegionLabel || "", resultStatus: "added", changeType: "add_contractor", isChanged: false });
   // 新增承包方：调查员 / 调查日期直接落「本次」的默认值（当前登录用户 + 当天）。
   applyCurrentSurveyDefaults();
-  resetPhase2Forms(); openPanels.value = ["contractor"]; openedPanels.value = ["contractor"]; openAuxPanels.value = []; emit("update:modelValue", true);
+  resetPhase2Forms(); activePanel.value = "contractor"; openedPanels.value = ["contractor"]; emit("update:modelValue", true);
 }
 
 function close() {
@@ -1202,6 +1233,26 @@ defineExpose({ openForResult, openForCreate });
 
 /* 附属区与主数据区同一套样式，只在间距上留一道分隔；不另设配色，保持两处观感一致。 */
 .survey-collapse--aux { margin-top: 6px; }
+
+/* ---- 按钮式面板切换 ---- */
+.survey-panel-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.survey-panel-switch :deep(.el-button) {
+  margin-left: 0;
+}
+
+.survey-panel-body {
+  min-height: 240px;
+}
+
+.survey-panel-section {
+  min-height: 0;
+}
 </style>
 
 

@@ -13,6 +13,21 @@ export function fetchActiveSurveyBatches() {
   return http.get("/surveys/active-batches");
 }
 
+/** 当前用户「进入任务」记住的批次。 */
+export function fetchCurrentSurveyBatch() {
+  return http.get("/surveys/current-batch");
+}
+
+/** 记录当前批次（下次进入系统时相关页面默认显示该批次）。 */
+export function setCurrentSurveyBatch(batchId) {
+  return http.put("/surveys/current-batch", { batchId });
+}
+
+/** 批次统计：发包方 / 承包方 / 家庭成员 / 承包地块 / 承包合同。 */
+export function fetchSurveyBatchStats(batchId) {
+  return http.get(`/surveys/batches/${batchId}/stats`);
+}
+
 export function finishSurveyBatch(batchId) {
   return http.post(`/surveys/batches/${batchId}/finish`);
 }
@@ -233,6 +248,27 @@ export function fetchSurveyAttachmentCategories() {
 
 export function fetchSurveyParcels(batchId, contractorUid, params) {
   return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/parcels`, { params });
+}
+
+/** 建库中心 > 承包地块：以承包方为单位的地块汇总清单。 */
+export function fetchParcelsOverview(params) {
+  return http.get("/surveys/parcels/overview", { params });
+}
+
+/** 导出选中地块的《承包地块调查表》Word（一个返回 docx，多个返回 zip）。 */
+export function exportParcelSurveyDocx(payload) {
+  return http.post("/surveys/parcels/export-docx", payload, {
+    responseType: "blob",
+    timeout: 180000,
+  });
+}
+
+/** 导出选中地块的《承包地块示意图》PDF（单户返回 pdf，多户返回 zip）。 */
+export function exportParcelSketchPdf(payload) {
+  return http.post("/surveys/parcels/export-sketch-pdf", payload, {
+    responseType: "blob",
+    timeout: 300000,
+  });
 }
 
 export function validateSurveyParcelGeometry(batchId, contractorUid, payload) {

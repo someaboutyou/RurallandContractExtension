@@ -185,9 +185,12 @@ const navItems = [
   },
   {
     key: "business",
-    label: "二轮延包工作",
+    label: "建库中心",
     children: [
-      { to: "/surveys", label: "调查批次", permissions: ["contractors.view"] },
+      { to: "/surveys", label: "调查批次管理", permissions: ["contractors.view"] },
+      { to: "/issuers", label: "发包方管理", permissions: ["issuers.view"] },
+      { to: "/survey-contractors", label: "承包方管理", permissions: ["contractors.view"] },
+      { to: "/parcels", label: "承包地块管理", permissions: ["contractors.view"] },
       { to: "/requests", label: "业务申请", permissions: REQUEST_MODULE_PERMISSIONS },
     ],
   },
@@ -195,8 +198,7 @@ const navItems = [
     key: "data-center",
     label: "数据中心",
     children: [
-      { to: "/issuers", label: "发包方管理", permissions: ["issuers.view"] },
-      { to: "/contractors", label: "承包方管理", permissions: ["contractors.view"] },
+      { to: "/contractors", label: "承包方台账", permissions: ["contractors.view"] },
       { to: "/data-imports", label: "数据导入", permissions: ["contractors.view"] },
       { to: "/data-exports", label: "数据导出", permissions: ["contractors.view"] },
     ],
