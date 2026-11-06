@@ -55,6 +55,7 @@ from app.schemas.survey import (
     ContractorDocumentExportRequest,
     ContractorLockRequest,
     ContractorRelationReplaceRequest,
+    BatchFormsExportRequest,
     IssuerSurveyDocxExportRequest,
     ParcelSurveyExportRequest,
     SurveyGenerateRequest,
@@ -1139,6 +1140,34 @@ def repair_contractor_members(
     from app.services.contractor_relation_service import contractor_relation_service
 
     return {"data": contractor_relation_service.repair_members(db, batch_id, current_user)}
+
+
+@router.post("/batches/{batch_id}/forms-export")
+def export_batch_forms(
+    batch_id: int,
+    payload: BatchFormsExportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """按选中发包方批量导出调查表单（承包台账/调查报表）。"""
+    from urllib.parse import quote
+
+    from app.services.batch_form_export_service import batch_form_export_service
+
+    filename, content, media_type = batch_form_export_service.export(
+        db,
+        batch_id,
+        payload.issuerUids,
+        payload.forms,
+        current_user,
+    )
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"
+        },
+    )
 
 
 # ── 承包地块导入：地块调查表 / 摸底核实表 / 矢量图斑 ────────────────────────

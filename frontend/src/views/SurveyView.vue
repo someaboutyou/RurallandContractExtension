@@ -179,6 +179,32 @@
           <el-table-column prop="phone" label="联系电话" width="130" />
           <el-table-column prop="address" label="地址" min-width="200" show-overflow-tooltip />
         </el-table>
+
+        <div class="batch-forms-export">
+          <div class="batch-forms-head">
+            <span class="batch-forms-title">导出调查表单</span>
+            <span class="batch-selected-hint">已选 {{ selectedIssuerRows.length }} 个发包方</span>
+          </div>
+          <div class="batch-forms-checks">
+            <el-checkbox
+              v-for="form in FORM_OPTIONS"
+              :key="form.value"
+              v-model="formChecks[form.value]"
+            >
+              {{ form.label }}
+            </el-checkbox>
+          </div>
+          <div class="batch-forms-actions">
+            <el-button
+              type="primary"
+              :loading="batchExporting"
+              :disabled="!selectedIssuerRows.length || !hasCheckedForm"
+              @click="handleBatchFormExport"
+            >
+              导出
+            </el-button>
+          </div>
+        </div>
       </div>
     </section>
     <section v-else class="panel table-page">
@@ -204,6 +230,7 @@ import MergeIssuerDialog from "../components/survey/view/MergeIssuerDialog.vue";
 import QualityCheckDialog from "../components/survey/QualityCheckDialog.vue";
 
 import {
+  exportBatchForms,
   exportSurveyResults,
   fetchSurveyAssignees,
   fetchSurveyBatchStats,
@@ -252,6 +279,24 @@ const issuerRows = ref([]);
 const issuerKeyword = ref("");
 const selectedIssuerRows = ref([]);
 const enteringTask = ref(false);
+
+const FORM_OPTIONS = [
+  { value: "issuer_excel", label: "发包方调查表（Excel）" },
+  { value: "contractor_excel", label: "承包方调查表（Excel）" },
+  { value: "parcel_excel", label: "承包地块调查表（Excel）" },
+  { value: "notice_excel", label: "延包调查公示表（Excel）" },
+  { value: "baseline_excel", label: "摸底调查核实表（Excel）" },
+  { value: "baseline_print_excel", label: "摸底调查核实表（打印版）" },
+  { value: "issuer_word", label: "发包方调查表（Word）" },
+  { value: "contractor_word", label: "承包方调查表（Word）" },
+  { value: "parcel_word", label: "承包地块调查表（Word）" },
+  { value: "public_notice_word", label: "公示结果归户表（Word）" },
+];
+const formChecks = reactive(
+  Object.fromEntries(FORM_OPTIONS.map((item) => [item.value, false])),
+);
+const hasCheckedForm = computed(() => Object.values(formChecks).some(Boolean));
+const batchExporting = ref(false);
 
 // ---- 发包方维护（新增 / 编辑 / 合并 / 删除）----
 const issuerTableRef = ref(null);
@@ -401,6 +446,50 @@ function onIssuersMerged() {
   selectedIssuerRows.value = [];
   issuerTableRef.value?.clearSelection();
   loadBatchDetail();
+}
+
+function downloadBlob(data, filename) {
+  const url = URL.createObjectURL(data);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function filenameFromDisposition(disposition) {
+  const match = /filename\*=UTF-8''([^;]+)/i.exec(disposition || "");
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+async function handleBatchFormExport() {
+  if (!activeBatch.value || !selectedIssuerRows.value.length) {
+    ElMessage.warning("请先勾选发包方");
+    return;
+  }
+  const forms = FORM_OPTIONS.filter((item) => formChecks[item.value]).map((item) => item.value);
+  if (!forms.length) {
+    ElMessage.warning("请至少勾选一种调查表单");
+    return;
+  }
+  batchExporting.value = true;
+  try {
+    const { data, headers } = await exportBatchForms(activeBatch.value.id, {
+      issuerUids: selectedIssuerRows.value.map((row) => row.issuerUid),
+      forms,
+    });
+    const filename =
+      filenameFromDisposition(headers?.["content-disposition"]) ||
+      (String(headers?.["content-type"] || "").includes("zip") ? "调查表单.zip" : "调查表单.xls");
+    downloadBlob(data, filename);
+    ElMessage.success("调查表单已导出");
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || "导出调查表单失败");
+  } finally {
+    batchExporting.value = false;
+  }
 }
 
 async function handleEnterTask() {
@@ -716,6 +805,45 @@ onMounted(async () => {
   color: var(--el-text-color-secondary);
   font-size: 13px;
   white-space: nowrap;
+}
+
+.batch-forms-export {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 6px;
+  background: var(--el-fill-color-lighter);
+}
+
+.batch-forms-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.batch-forms-title {
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.batch-forms-checks {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px 14px;
+}
+
+.batch-forms-checks :deep(.el-checkbox) {
+  height: 24px;
+  margin-right: 0;
+}
+
+.batch-forms-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 @media (max-width: 1280px) {

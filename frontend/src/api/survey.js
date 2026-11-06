@@ -82,6 +82,14 @@ export function importParcels(batchId, formData) {
   });
 }
 
+/** 按选中发包方批量导出调查表单。 */
+export function exportBatchForms(batchId, payload) {
+  return http.post(`/surveys/batches/${batchId}/forms-export`, payload, {
+    responseType: "blob",
+    timeout: 600000,
+  });
+}
+
 /** 家庭成员关联修复。 */
 export function repairContractorMembers(batchId) {
   return http.post(`/surveys/batches/${batchId}/contractor-relations/repair-members`, {}, {

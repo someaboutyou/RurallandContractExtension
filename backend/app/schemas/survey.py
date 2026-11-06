@@ -821,6 +821,11 @@ class ContractorRelationReplaceRequest(BaseModel):
     toRelation: str = Field(min_length=1, max_length=8)
 
 
+class BatchFormsExportRequest(BaseModel):
+    issuerUids: list[str] = Field(min_length=1, max_length=500)
+    forms: list[str] = Field(min_length=1, max_length=20)
+
+
 # ── 数据质检 ─────────────────────────────────────────────────
 
 
