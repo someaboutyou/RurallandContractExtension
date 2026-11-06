@@ -101,6 +101,7 @@
         <div class="batch-detail-actions">
           <el-button type="primary" :loading="enteringTask" @click="handleEnterTask">进入任务</el-button>
           <el-button plain :icon="Download" @click="handleExportResults">导出成果</el-button>
+          <el-button plain type="warning" @click="qualityCheckVisible = true">数据质检</el-button>
           <el-button
             v-if="canFinishBatch"
             plain
@@ -148,12 +149,25 @@
           <div class="toolbar-actions">
             <el-input v-model="issuerKeyword" clearable placeholder="搜索发包方" style="width: 220px" @keyup.enter="loadIssuerRows" @clear="loadIssuerRows" />
             <el-button :icon="Search" plain @click="loadIssuerRows">查询</el-button>
+            <el-button plain @click="issuerXlsExportVisible = true">发包方导出</el-button>
+            <template v-if="canManage">
+              <el-button
+                :disabled="activeBatch?.status === 'finished' || selectedIssuerRows.length < 2"
+                type="warning"
+                plain
+                @click="openMergeIssuer"
+              >合并</el-button>
+              <el-button :disabled="activeBatch?.status === 'finished'" :icon="Plus" type="primary" @click="openCreateIssuer">新增</el-button>
+              <el-button :disabled="activeBatch?.status === 'finished'" plain @click="issuerXlsImportVisible = true">发包方导入</el-button>
+            </template>
             <span class="batch-selected-hint">已选 {{ selectedIssuerRows.length }} 个发包方</span>
           </div>
         </div>
         <el-table
+          ref="issuerTableRef"
           v-loading="issuerLoading"
           :data="issuerRows"
+          row-key="issuerUid"
           border
           stripe
           size="small"
@@ -166,6 +180,19 @@
           <el-table-column prop="responsibleName" label="负责人" width="110" />
           <el-table-column prop="phone" label="联系电话" width="130" />
           <el-table-column prop="address" label="地址" min-width="200" show-overflow-tooltip />
+          <el-table-column label="操作" width="120" fixed="right" class-name="survey-action-column">
+            <template #default="{ row }">
+              <div class="survey-row-actions">
+                <el-button link type="primary" @click="openIssuerSurvey(row)">编辑</el-button>
+                <el-button
+                  v-if="canManage && activeBatch?.status !== 'finished'"
+                  link
+                  type="danger"
+                  @click="deleteIssuerRow(row)"
+                >删除</el-button>
+              </div>
+            </template>
+          </el-table-column>
         </el-table>
       </div>
 
@@ -188,6 +215,11 @@
     </section>
 
     <BatchCreateDialog ref="batchCreateDialog" v-model="batchDialogVisible" @created="onBatchCreated" />
+    <IssuerSurveyDialog ref="issuerSurveyDialog" v-model="issuerSurveyVisible" :active-batch="activeBatch" :can-manage="canManage" @saved="onIssuerSaved" />
+    <MergeIssuerDialog ref="mergeIssuerDialog" v-model="mergeIssuerVisible" :active-batch="activeBatch" :rows="selectedIssuerRows" @merged="onIssuersMerged" />
+    <QualityCheckDialog v-model="qualityCheckVisible" :batch="activeBatch" />
+    <IssuerXlsExportDialog v-model="issuerXlsExportVisible" :batch="activeBatch" />
+    <IssuerXlsImportDialog v-model="issuerXlsImportVisible" :batch="activeBatch" @imported="onIssuersImported" />
   </div>
 </template>
 
@@ -198,8 +230,14 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { CircleCheck, Download, Plus, Search } from "@element-plus/icons-vue";
 
 import BatchCreateDialog from "../components/survey/view/BatchCreateDialog.vue";
+import IssuerSurveyDialog from "../components/survey/view/IssuerSurveyDialog.vue";
+import MergeIssuerDialog from "../components/survey/view/MergeIssuerDialog.vue";
+import QualityCheckDialog from "../components/survey/QualityCheckDialog.vue";
+import IssuerXlsExportDialog from "../components/survey/IssuerXlsExportDialog.vue";
+import IssuerXlsImportDialog from "../components/survey/IssuerXlsImportDialog.vue";
 
 import {
+  deleteSurveyIssuer,
   exportSurveyResults,
   fetchSurveyAssignees,
   fetchSurveyBatchStats,
@@ -251,6 +289,18 @@ const formChecks = reactive({ issuer: false, contractor: false, parcel: false })
 const hasCheckedForm = computed(() => formChecks.issuer || formChecks.contractor || formChecks.parcel);
 const batchExporting = ref(false);
 const enteringTask = ref(false);
+
+// ---- 发包方维护（新增 / 编辑 / 合并 / 删除）----
+const issuerTableRef = ref(null);
+const issuerSurveyDialog = ref(null);
+const issuerSurveyVisible = ref(false);
+const mergeIssuerDialog = ref(null);
+const mergeIssuerVisible = ref(false);
+// ---- 发包方调查表 Excel 导出 / 导入 ----
+const issuerXlsExportVisible = ref(false);
+const issuerXlsImportVisible = ref(false);
+// ---- 数据质检 ----
+const qualityCheckVisible = ref(false);
 
 // ---- Region state ----
 const regionTree = ref([]);
@@ -375,6 +425,61 @@ async function loadIssuerRows() {
 
 function handleIssuerSelectionChange(rows) { selectedIssuerRows.value = rows || []; }
 
+// ---- Issuer operations ----
+function openCreateIssuer() {
+  if (!activeBatch.value || activeBatch.value?.status === "finished") return;
+  issuerSurveyDialog.value.openForCreate(activeBatch.value, activeBatch.value?.regionCode || activeRegionCode.value);
+}
+function openIssuerSurvey(row) { if (!activeBatch.value) return; issuerSurveyDialog.value.openForEdit(activeBatch.value, row); }
+function onIssuerSaved() { loadBatchDetail(); }
+
+function openMergeIssuer() {
+  if (!activeBatch.value || selectedIssuerRows.value.length < 2) return;
+  mergeIssuerDialog.value.open();
+}
+function onIssuersMerged() {
+  // 合并后被合并方已删除，清掉勾选再整表重查
+  selectedIssuerRows.value = [];
+  issuerTableRef.value?.clearSelection();
+  loadBatchDetail();
+}
+
+function onIssuersImported() {
+  // Excel 导入后新增/更新/删除都可能发生，清掉勾选再整表重查（含统计卡片）
+  selectedIssuerRows.value = [];
+  issuerTableRef.value?.clearSelection();
+  loadBatchDetail();
+}
+
+// ---- 发包方删除 ----
+// 前端预检（relatedContractorCount）只是 UX 快路；真正的闸门在后端 delete_issuer，
+// 两边判据同源（都是 cbdkxx 里挂在 fbfbm 下的承包方数）。
+async function deleteIssuerRow(row) {
+  if (!activeBatch.value) return;
+  const contractorCount = Number(row.relatedContractorCount || 0);
+  if (contractorCount > 0) {
+    ElMessage.warning(`发包方「${row.name}」下存在 ${contractorCount} 个承包方，不允许删除`);
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定删除发包方「${row.name}」（${row.code}）吗？删除后不可恢复。`,
+      "删除发包方",
+      { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" },
+    );
+  } catch {
+    return; // 用户取消
+  }
+  try {
+    await deleteSurveyIssuer(activeBatch.value.id, row.issuerUid);
+    ElMessage.success("发包方已删除");
+    selectedIssuerRows.value = selectedIssuerRows.value.filter((item) => item.issuerUid !== row.issuerUid);
+    loadBatchDetail();
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || "删除发包方失败");
+  }
+}
+
 async function handleEnterTask() {
   if (!activeBatch.value) return;
   enteringTask.value = true;
@@ -443,61 +548,6 @@ onMounted(async () => {
   max-width: 300px;
   min-height: 0;
   padding: 14px;
-}
-
-.survey-work-panel {
-  display: flex;
-  flex: 1 1 auto;
-  margin-top: 0;
-  min-width: 0;
-  min-height: 0;
-}
-
-.survey-work-tabs {
-  display: flex;
-  flex: 1 1 auto;
-  min-height: 0;
-  min-width: 0;
-}
-
-.survey-work-tabs :deep(.el-tabs__content) {
-  display: flex;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-.survey-work-tabs :deep(.el-tab-pane) {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.survey-work-panel :deep(.el-table) {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-.survey-work-panel :deep(.survey-action-column .cell) {
-  white-space: nowrap;
-}
-
-.survey-row-actions {
-  align-items: center;
-  display: inline-flex;
-  flex-wrap: nowrap;
-  gap: 10px;
-  justify-content: center;
-  white-space: nowrap;
-}
-
-.survey-row-actions :deep(.el-button) {
-  margin-left: 0;
-}
-
-.survey-assignee {
-  color: var(--el-color-primary);
-  cursor: default;
 }
 
 .batch-panel-header,
@@ -648,13 +698,6 @@ onMounted(async () => {
   padding: 0 6px;
 }
 
-.batch-footer-actions {
-  border-top: 1px solid #e2e8f0;
-  flex-shrink: 0;
-  margin-top: 12px;
-  padding-top: 12px;
-}
-
 .batch-tooltip-content {
   display: grid;
   gap: 6px;
@@ -754,6 +797,24 @@ onMounted(async () => {
   flex-direction: column;
   gap: 10px;
   min-height: 0;
+}
+
+/* 发包方行内操作列（编辑 / 删除） */
+.survey-action-column .cell {
+  white-space: nowrap;
+}
+
+.survey-row-actions {
+  align-items: center;
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 10px;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.survey-row-actions :deep(.el-button) {
+  margin-left: 0;
 }
 
 .batch-selected-hint {

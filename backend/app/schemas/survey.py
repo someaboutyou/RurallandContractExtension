@@ -139,6 +139,26 @@ class SurveyIssuerCreate(BaseModel):
     remark: str | None = None
 
 
+class SurveyIssuerMergeRequest(BaseModel):
+    """合并发包方：keep = 保留方；mergeIssuerUids = 被合并方（至少 1 个）。"""
+    keepIssuerUid: str = Field(min_length=1)
+    mergeIssuerUids: list[str] = Field(min_length=1)
+
+
+class SurveyIssuerMergedItem(BaseModel):
+    issuerUid: str
+    code: str
+    name: str
+
+
+class SurveyIssuerMergeResult(BaseModel):
+    keepIssuer: SurveyIssuerRowRead
+    mergedIssuers: list[SurveyIssuerMergedItem]
+    movedParcelCount: int = 0
+    movedContractorCount: int = 0
+    movedContractCount: int = 0
+
+
 class SurveyChangeRecordRead(BaseModel):
     id: int
     changeNo: str
@@ -773,3 +793,12 @@ class ParcelSurveyExportRequest(BaseModel):
 
 class SurveyCurrentBatchUpdate(BaseModel):
     batchId: int
+
+
+# ── 数据质检 ─────────────────────────────────────────────────
+
+
+class SurveyQualityCheckStart(BaseModel):
+    """启动批次数据质检：items 为质检项开关（缺省全开）。"""
+
+    items: dict[str, bool] = Field(default_factory=dict)

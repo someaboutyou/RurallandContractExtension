@@ -411,6 +411,36 @@ class SurveyDkResult(TenantScopedMixin, TimestampMixin, Base):
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class SurveyQualityCheckRecord(TenantScopedMixin, TimestampMixin, Base):
+    """数据质检记录表。
+
+    存储一次质检运行（``run_id``）里产生的**逐条问题日志**；运行本身不建表，
+    由 ``check_item == "summary"`` 的一行作为运行汇总（计数与检查项配置存
+    ``message`` 的 JSON 里），历史记录列表直接查汇总行。
+
+    ``check_item`` 取值与质检项一一对应：``card_no``（证件号码重复）／
+    ``fbf``（发包方）／``cbf``（承包方）／``land``（承包地块）／
+    ``contract``（合同与权证）＋ ``summary``（运行汇总）。
+    ``severity``：``error``（错误，阻断成果导出口径）／``warn``（警告）／
+    ``info``（提示）／``summary``。
+    """
+
+    __tablename__ = "survey_quality_check_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    run_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    batch_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    batch_no: Mapped[str] = mapped_column(String(32), nullable=False)
+    check_item: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    severity: Mapped[str] = mapped_column(String(8), nullable=False)
+    cbfbm: Mapped[str | None] = mapped_column(String(18), nullable=True, index=True)
+    # cbfbm/cbfmc 为定位列：cbf/land/contract 行存承包方编码/名称，fbf 行存发包方编码/名称
+    cbfmc: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    dkbm: Mapped[str | None] = mapped_column(String(19), nullable=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
 class SurveyChangeRecord(TenantScopedMixin, TimestampMixin, Base):
     __tablename__ = "survey_change_records"
 

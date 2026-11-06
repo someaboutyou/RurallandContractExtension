@@ -23,6 +23,7 @@ from app.models.survey import (
     SurveyDkResult,
     SurveyFbfBase,
     SurveyFbfResult,
+    SurveyQualityCheckRecord,
 )
 from app.models.survey_sheet import (
     SurveyCbfMemberChangeSheet,
@@ -62,5 +63,6 @@ __all__ = [
     "SurveyCbdkxxResult",
     "SurveyDkBase",
     "SurveyDkResult",
+    "SurveyQualityCheckRecord",
     "SurveyCbfMemberChangeSheet",
 ]

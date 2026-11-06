@@ -85,6 +85,55 @@ export function getXlsImportJob(batchId, jobId) {
   return http.get(`/surveys/batches/${batchId}/contractors-xls/import-jobs/${jobId}`);
 }
 
+// ── 发包方调查表 Excel 导出 / 导入（同步接口：一个批次的发包方数量很少）──────
+
+/** 发包方调查表 Excel 导出（模板同 datas/发包方/*-发包方调查表.xls）。 */
+export function exportIssuerSurveyXls(batchId) {
+  return http.get(`/surveys/batches/${batchId}/issuers-xls`, { responseType: "blob" });
+}
+
+/** 发包方调查表 Excel 导入预览：上传文件，返回逐行校验报告（不落库）。 */
+export function previewIssuerSurveyXls(batchId, formData) {
+  return http.post(`/surveys/batches/${batchId}/issuers-xls/preview`, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    timeout: 120000,
+  });
+}
+
+/** 发包方调查表 Excel 导入：逐行验证、导入（复用页面新增/编辑/删除同源逻辑）。 */
+export function importIssuerSurveyXls(batchId, formData) {
+  return http.post(`/surveys/batches/${batchId}/issuers-xls/import`, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    timeout: 300000,
+  });
+}
+
+// ── 数据质检（迁移自原延包工具「检查数据库数据」）──────────────────
+// 三段式：启动任务 → 轮询进度 → 看结果（结果与历史落 survey_quality_check_records 表）
+
+export function startQualityCheckJob(batchId, items) {
+  return http.post(`/surveys/batches/${batchId}/quality-checks`, { items: items || {} }, { timeout: 30000 });
+}
+
+export function getQualityCheckJob(batchId, jobId) {
+  return http.get(`/surveys/batches/${batchId}/quality-checks/jobs/${jobId}`);
+}
+
+export function fetchQualityCheckRuns(batchId, params) {
+  return http.get(`/surveys/batches/${batchId}/quality-checks/runs`, { params });
+}
+
+export function fetchQualityCheckRecords(batchId, runId, params) {
+  return http.get(`/surveys/batches/${batchId}/quality-checks/runs/${runId}/records`, { params });
+}
+
+export function exportQualityCheckRecords(batchId, runId, params) {
+  return http.get(`/surveys/batches/${batchId}/quality-checks/runs/${runId}/records/export`, {
+    params,
+    responseType: "blob",
+  });
+}
+
 
 export function fetchSurveyTasks(batchId, params) {
   return http.get(`/surveys/batches/${batchId}/tasks`, { params });
@@ -137,6 +186,14 @@ export function fetchSurveyIssuer(batchId, issuerUid) {
 
 export function updateSurveyIssuer(batchId, issuerUid, payload) {
   return http.put(`/surveys/batches/${batchId}/issuers/${issuerUid}`, payload);
+}
+
+export function deleteSurveyIssuer(batchId, issuerUid) {
+  return http.delete(`/surveys/batches/${batchId}/issuers/${issuerUid}`);
+}
+
+export function mergeSurveyIssuers(batchId, payload) {
+  return http.post(`/surveys/batches/${batchId}/issuers/merge`, payload);
 }
 
 export function skipSurveyTask(batchId, contractorUid, payload) {

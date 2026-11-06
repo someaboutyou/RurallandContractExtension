@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
+from app.models.cbht import Cbht
 from app.models.survey import (
     SurveyCbfBase,
     SurveyCbdkxxResult,
@@ -184,6 +185,171 @@ class SurveyServiceIssuerMixin:
         db.add(base)
         db.commit()
         return self._serialize_issuer_row(result, batch_id, 0)
+
+
+    def _ensure_issuer_code_in_batch_region(self, batch, code: str) -> None:
+        """发包方编码与批次区域的隶属校验 —— 从 create/update 里提炼的同一口径。"""
+        region_code = batch.region_code
+        if not region_code:
+            return
+        if len(region_code) >= 14 and code != region_code[:14]:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="issuer code must equal the 14-digit batch region code")
+        if len(region_code) < 14 and not code.startswith(region_code):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="issuer code is outside the batch region")
+
+
+    def _issuer_contractor_codes(self, db: Session, tenant_code: str, fbfbm: str) -> set[str]:
+        """该发包方名下的承包方编码全集（删除闸门口径）。
+
+        两条关联链取并集：
+          ① 地块关联 —— survey_cbdkxx_result.fbfbm（与 list_issuers 的展示计数同源）；
+          ② 合同关联 —— cbht.fbfbm（地块关联可能已被 remove_parcel 移走，
+             但合同还挂在这个发包方编码上；漏查会删出孤儿合同）。
+        """
+        parcel_codes = set(
+            db.scalars(
+                select(SurveyCbdkxxResult.cbfbm)
+                .where(
+                    SurveyCbdkxxResult.tenant_code == tenant_code,
+                    SurveyCbdkxxResult.fbfbm == fbfbm,
+                )
+                .execution_options(skip_tenant_scope=True)
+            ).all()
+        )
+        contract_codes = set(
+            db.scalars(
+                select(Cbht.cbfbm)
+                .where(
+                    Cbht.tenant_code == tenant_code,
+                    Cbht.fbfbm == fbfbm,
+                    Cbht.cbfbm.is_not(None),
+                )
+                .execution_options(skip_tenant_scope=True)
+            ).all()
+        )
+        return parcel_codes | contract_codes
+
+
+    def _delete_issuer_rows(self, db: Session, issuer: SurveyFbfResult) -> None:
+        """删除一个发包方的快照行（survey_fbf_base）+ 成果行（survey_fbf_result）。"""
+        bases = db.scalars(
+            select(SurveyFbfBase)
+            .where(
+                SurveyFbfBase.tenant_code == issuer.tenant_code,
+                SurveyFbfBase.result_id == issuer.id,
+            )
+            .execution_options(skip_tenant_scope=True)
+        ).all()
+        for base_row in bases:
+            db.delete(base_row)
+        db.delete(issuer)
+
+
+    def delete_issuer(self, db: Session, batch_id: int, issuer_uid: str, current_user: User) -> None:
+        """删除发包方调查成果。
+
+        ⛔ 闸门在**服务端**：名下还有承包方（cbdkxx 里有挂在该 fbfbm 下的记录）就不许删 ——
+        前端的 relatedContractorCount 预检只是 UX，接口必须自己拦（与权限同源原则一致）。
+        """
+        batch = self._ensure_batch(db, batch_id)
+        if batch.status == "finished":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="调查批次已结束，不能删除发包方")
+        issuer = self._get_issuer(db, batch_id, issuer_uid)
+        data_access_service.ensure_code_in_scope(current_user, issuer.fbfbm, detail="发包方不在当前数据权限范围内")
+        # ⛔ 闸门用承包方**全集**（地块关联 ∪ 合同关联），不只看地块：
+        #    地块全被移走但合同（cbht.fbfbm）还挂着的发包方，删了会留下孤儿合同。
+        contractor_codes = self._issuer_contractor_codes(db, issuer.tenant_code, issuer.fbfbm)
+        if contractor_codes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"该发包方下存在 {len(contractor_codes)} 个承包方，不允许删除",
+            )
+        self._delete_issuer_rows(db, issuer)
+        db.commit()
+
+
+    def merge_issuers(self, db: Session, batch_id: int, payload: dict, current_user: User) -> dict:
+        """合并发包方：把被合并方的地块/承包方等关联信息刷成保留方的编码，随后删除被合并方。
+
+        刷写范围（按「承包方编码 + 发包方」关联逐表收口）：
+          ① survey_cbdkxx_result.fbfbm —— 地块/承包方关联（GIS、地块列表、导出、出表都读这里）；
+          ② cbht.fbfbm —— 合同表。⛔ 必须刷：延包合同生成时 `_contract_issuer_code`
+             **优先取原合同行的 fbfbm**，漏刷会让后续生成的合同写回已删除的发包方编码；
+          ③ survey_cbdkxx_base.fbfbm —— **不动**（导入快照代表原貌，与 update_issuer 改码口径一致）；
+          ④ fbf / issuer 主表 —— **不动**（调查域不写主数据）。
+
+        被合并方的快照行（survey_fbf_base）与成果行（survey_fbf_result）删除。
+        """
+        batch = self._ensure_batch(db, batch_id)
+        if batch.status == "finished":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="调查批次已结束，不能合并发包方")
+        keep_uid = str(payload.get("keepIssuerUid") or "").strip()
+        merge_uids = [str(u).strip() for u in (payload.get("mergeIssuerUids") or []) if str(u).strip()]
+        if not keep_uid:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请选择要保留的发包方")
+        if not merge_uids:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请选择要合并的发包方")
+        if keep_uid in merge_uids:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="保留的发包方不能同时出现在合并列表中")
+        if len(set(merge_uids)) != len(merge_uids):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="合并列表中存在重复的发包方")
+
+        keep = self._get_issuer(db, batch_id, keep_uid)
+        merged_rows = [self._get_issuer(db, batch_id, uid) for uid in merge_uids]
+        for item in [keep, *merged_rows]:
+            data_access_service.ensure_code_in_scope(current_user, item.fbfbm, detail="发包方不在当前数据权限范围内")
+            self._ensure_issuer_code_in_batch_region(batch, item.fbfbm)
+
+        moved_parcel_count = 0
+        moved_contract_count = 0
+        moved_contractor_codes: set[str] = set()
+        for merged in merged_rows:
+            relations = db.scalars(
+                select(SurveyCbdkxxResult)
+                .where(
+                    SurveyCbdkxxResult.tenant_code == keep.tenant_code,
+                    SurveyCbdkxxResult.fbfbm == merged.fbfbm,
+                )
+                .execution_options(skip_tenant_scope=True)
+            ).all()
+            moved_parcel_count += len(relations)
+            moved_contractor_codes.update(rel.cbfbm for rel in relations)
+            if relations:
+                db.execute(
+                    update(SurveyCbdkxxResult)
+                    .where(
+                        SurveyCbdkxxResult.tenant_code == keep.tenant_code,
+                        SurveyCbdkxxResult.fbfbm == merged.fbfbm,
+                    )
+                    .values(fbfbm=keep.fbfbm)
+                    .execution_options(skip_tenant_scope=True, synchronize_session=False)
+                )
+            # 合同关联一并划转（合同可能是导入的原始合同，也可能带 survey_batch_id；
+            # 发包方编码租户内唯一，这里按租户全量刷，与调查成果行的租户级唯一口径一致）
+            contract_result = db.execute(
+                update(Cbht)
+                .where(
+                    Cbht.tenant_code == keep.tenant_code,
+                    Cbht.fbfbm == merged.fbfbm,
+                )
+                .values(fbfbm=keep.fbfbm)
+                .execution_options(skip_tenant_scope=True, synchronize_session=False)
+            )
+            moved_contract_count += contract_result.rowcount or 0
+            self._delete_issuer_rows(db, merged)
+        db.commit()
+
+        keep_contractor_count = len(self._issuer_contractor_codes(db, keep.tenant_code, keep.fbfbm))
+        return {
+            "keepIssuer": self._serialize_issuer_row(keep, batch_id, keep_contractor_count),
+            "mergedIssuers": [
+                {"issuerUid": merged.issuer_uid, "code": merged.fbfbm, "name": merged.fbfmc}
+                for merged in merged_rows
+            ],
+            "movedParcelCount": moved_parcel_count,
+            "movedContractorCount": len(moved_contractor_codes),
+            "movedContractCount": moved_contract_count,
+        }
 
 
     def get_issuer(self, db: Session, batch_id: int, issuer_uid: str, current_user: User) -> dict:

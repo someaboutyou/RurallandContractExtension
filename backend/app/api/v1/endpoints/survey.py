@@ -36,6 +36,8 @@ from app.schemas.survey import (
     SurveyContractGenerate,
     SurveyContractPrint,
     SurveyIssuerCreate,
+    SurveyIssuerMergeRequest,
+    SurveyIssuerMergeResult,
     SurveyIssuerRead,
     SurveyIssuerRowRead,
     SurveyIssuerUpdate,
@@ -64,6 +66,7 @@ from app.schemas.survey import (
     SurveyParcelBoundaryRead,
     SurveyParcelBoundaryUpdate,
     SurveyPendingOperation,
+    SurveyQualityCheckStart,
 )
 from app.services.contract_template_service import contract_template_service
 from app.services.dictionary_service import (
@@ -353,6 +356,16 @@ def create_survey_issuer(
     return {"data": survey_service.create_issuer(db, batch_id, payload.model_dump(), current_user)}
 
 
+@router.post("/batches/{batch_id}/issuers/merge", response_model=ApiResponse[SurveyIssuerMergeResult])
+def merge_survey_issuers(
+    batch_id: int,
+    payload: SurveyIssuerMergeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    return {"data": survey_service.merge_issuers(db, batch_id, payload.model_dump(), current_user)}
+
+
 @router.get("/batches/{batch_id}/issuers/{issuer_uid}", response_model=ApiResponse[SurveyIssuerRead])
 def get_survey_issuer(
     batch_id: int,
@@ -372,6 +385,17 @@ def update_survey_issuer(
     current_user: User = Depends(require_permission("contractors.manage")),
 ):
     return {"data": survey_service.update_issuer(db, batch_id, issuer_uid, payload.model_dump(), current_user)}
+
+
+@router.delete("/batches/{batch_id}/issuers/{issuer_uid}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_survey_issuer(
+    batch_id: int,
+    issuer_uid: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    survey_service.delete_issuer(db, batch_id, issuer_uid, current_user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/batches/{batch_id}/results/{contractor_uid}", response_model=ApiResponse[SurveyContractorRead])
@@ -940,6 +964,47 @@ async def import_contractor_survey_xls(
 
 
 # ── 后台任务版导出 / 导入（大数据量不超时，前端轮询进度）──────────────────
+
+@router.get("/batches/{batch_id}/issuers-xls")
+def export_issuer_survey_xls(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """发包方调查表 Excel 导出（同步：一个批次的发包方数量很少）。"""
+    from urllib.parse import quote
+
+    filename, content = survey_service.export_issuers_xls(db, batch_id, current_user)
+    return Response(
+        content=content,
+        media_type="application/vnd.ms-excel",
+        headers={
+            "Content-Disposition": f"attachment; filename=\"issuer_survey.xls\"; filename*=UTF-8''{quote(filename)}",
+        },
+    )
+
+
+@router.post("/batches/{batch_id}/issuers-xls/preview")
+async def preview_issuer_survey_xls(
+    batch_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    content = await file.read()
+    return {"data": survey_service.preview_issuers_xls_import(db, batch_id, current_user, content)}
+
+
+@router.post("/batches/{batch_id}/issuers-xls/import")
+async def import_issuer_survey_xls(
+    batch_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    content = await file.read()
+    return {"data": survey_service.import_issuers_xls(db, batch_id, current_user, content)}
+
 
 @router.post("/batches/{batch_id}/contractors-xls/export-jobs")
 def start_contractor_xls_export_job(
@@ -1776,3 +1841,119 @@ def finish_survey_batch(
     current_user: User = Depends(require_permission("contractors.manage")),
 ):
     return {"data": survey_service.finish_batch(db, batch_id, current_user)}
+
+
+# ── 数据质检（迁移自原延包工具「检查数据库数据」）──────────────────
+
+
+@router.post("/batches/{batch_id}/quality-checks", response_model=ApiResponse[dict])
+def start_survey_quality_check(
+    batch_id: int,
+    payload: SurveyQualityCheckStart,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    batch = survey_service._ensure_batch(db, batch_id)
+    from app.services.data_access_service import data_access_service
+
+    data_access_service.ensure_region_filter_in_scope(
+        current_user, batch.region_code, detail="当前批次区域不在质检范围内"
+    )
+    from app.services.survey import quality_check
+
+    job = quality_check.start_quality_check_job(batch_id, current_user.id, payload.items)
+    return {"data": {"jobId": job["id"], "runId": job["runId"]}}
+
+
+@router.get("/batches/{batch_id}/quality-checks/jobs/{job_id}", response_model=ApiResponse[dict])
+def get_survey_quality_check_job(
+    batch_id: int,
+    job_id: str,
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    from app.services.survey import quality_check
+
+    job = quality_check.get_job(job_id)
+    if job is None or job["batchId"] != batch_id:
+        raise HTTPException(status_code=404, detail="质检任务不存在或已过期")
+    return {"data": quality_check.job_public_view(job)}
+
+
+@router.get("/batches/{batch_id}/quality-checks/runs", response_model=ApiResponse[dict])
+def list_survey_quality_check_runs(
+    batch_id: int,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100, alias="pageSize"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    batch = survey_service._ensure_batch(db, batch_id)
+    from app.services.data_access_service import data_access_service
+
+    data_access_service.ensure_region_filter_in_scope(
+        current_user, batch.region_code, detail="当前批次区域不在质检范围内"
+    )
+    from app.services.survey import quality_check
+
+    return {"data": quality_check.list_runs(db, batch_id, page, page_size)}
+
+
+@router.get("/batches/{batch_id}/quality-checks/runs/{run_id}/records", response_model=ApiResponse[dict])
+def list_survey_quality_check_records(
+    batch_id: int,
+    run_id: str,
+    severity: str | None = Query(default=None),
+    check_item: str | None = Query(default=None, alias="checkItem"),
+    keyword: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200, alias="pageSize"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    batch = survey_service._ensure_batch(db, batch_id)
+    from app.services.data_access_service import data_access_service
+
+    data_access_service.ensure_region_filter_in_scope(
+        current_user, batch.region_code, detail="当前批次区域不在质检范围内"
+    )
+    from app.services.survey import quality_check
+
+    return {
+        "data": quality_check.list_records(
+            db, batch_id, run_id, severity=severity, check_item=check_item,
+            keyword=keyword, page=page, page_size=page_size,
+        )
+    }
+
+
+@router.get("/batches/{batch_id}/quality-checks/runs/{run_id}/records/export")
+def export_survey_quality_check_records(
+    batch_id: int,
+    run_id: str,
+    severity: str | None = Query(default=None),
+    check_item: str | None = Query(default=None, alias="checkItem"),
+    keyword: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """导出一次质检运行的问题明细为 Excel（.xls），筛选条件与明细查询一致。"""
+    from urllib.parse import quote
+
+    batch = survey_service._ensure_batch(db, batch_id)
+    from app.services.data_access_service import data_access_service
+
+    data_access_service.ensure_region_filter_in_scope(
+        current_user, batch.region_code, detail="当前批次区域不在质检范围内"
+    )
+    from app.services.survey import quality_check
+
+    filename, content = quality_check.build_records_export(
+        db, batch_id, run_id, severity=severity, check_item=check_item, keyword=keyword,
+    )
+    return Response(
+        content=content,
+        media_type="application/vnd.ms-excel",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+        },
+    )
