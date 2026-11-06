@@ -24,9 +24,9 @@ from app.models.user import User
 from app.services.data_access_service import data_access_service
 from app.services.issuer_service import issuer_service
 from app.services.survey.issuer_excel_transfer import (
-    _DEFAULT_ID_TYPE,
+    DEFAULT_ID_TYPE,
     ISSUER_ID_TYPE_LABELS,
-    SurveyServiceIssuerExcelTransferMixin,
+    IssuerXlsTemplate,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ class IssuerExcelTransferService:
             )
         issuers = list(db.scalars(stmt.order_by(Fbf.fbfbm.asc())).all())
         rows = [self._export_row(item) for item in issuers]
-        workbook = SurveyServiceIssuerExcelTransferMixin._build_issuer_workbook(rows)
+        workbook = IssuerXlsTemplate.build_workbook(rows)
         buffer = io.BytesIO()
         workbook.save(buffer)
 
@@ -112,12 +112,12 @@ class IssuerExcelTransferService:
         current_user: User,
         content: bytes,
     ) -> dict:
-        rows, warnings = SurveyServiceIssuerExcelTransferMixin.parse_issuers_xls(content)
+        rows, warnings = IssuerXlsTemplate.parse(content)
         plans: list[dict] = []
         summary = {"create": 0, "update": 0, "no_change": 0, "delete": 0, "error": 0}
 
         for row in rows:
-            data, errors = SurveyServiceIssuerExcelTransferMixin._normalize_issuer_row(row)
+            data, errors = IssuerXlsTemplate.normalize_row(row)
             if data is None:
                 plan = self._error_plan(row, errors)
             else:
@@ -234,7 +234,7 @@ class IssuerExcelTransferService:
             "code": data["code"],
             "name": data["name"],
             "ownerName": data["responsibleName"],
-            "ownerIdType": data["responsibleIdType"] or _DEFAULT_ID_TYPE,
+            "ownerIdType": data["responsibleIdType"] or DEFAULT_ID_TYPE,
             "ownerIdNo": data["responsibleIdNo"],
             "mobile": data.get("phone") or None,
             "address": data["address"],
@@ -269,7 +269,7 @@ class IssuerExcelTransferService:
         current_user: User,
         content: bytes,
     ) -> dict:
-        rows, warnings = SurveyServiceIssuerExcelTransferMixin.parse_issuers_xls(content)
+        rows, warnings = IssuerXlsTemplate.parse(content)
         results: list[dict] = []
         summary = {
             "created": 0,
@@ -286,7 +286,7 @@ class IssuerExcelTransferService:
                 "rowIndex": row.get("rowIndex"),
             }
             try:
-                data, errors = SurveyServiceIssuerExcelTransferMixin._normalize_issuer_row(row)
+                data, errors = IssuerXlsTemplate.normalize_row(row)
                 if data is None:
                     raise HTTPException(status_code=400, detail="；".join(errors))
                 data_access_service.ensure_code_in_scope(

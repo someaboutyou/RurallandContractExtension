@@ -1184,47 +1184,6 @@ async def import_parcels(
 
 # ── 后台任务版导出 / 导入（大数据量不超时，前端轮询进度）──────────────────
 
-@router.get("/batches/{batch_id}/issuers-xls")
-def export_issuer_survey_xls(
-    batch_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("contractors.view")),
-):
-    """发包方调查表 Excel 导出（同步：一个批次的发包方数量很少）。"""
-    from urllib.parse import quote
-
-    filename, content = survey_service.export_issuers_xls(db, batch_id, current_user)
-    return Response(
-        content=content,
-        media_type="application/vnd.ms-excel",
-        headers={
-            "Content-Disposition": f"attachment; filename=\"issuer_survey.xls\"; filename*=UTF-8''{quote(filename)}",
-        },
-    )
-
-
-@router.post("/batches/{batch_id}/issuers-xls/preview")
-async def preview_issuer_survey_xls(
-    batch_id: int,
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("contractors.manage")),
-):
-    content = await file.read()
-    return {"data": survey_service.preview_issuers_xls_import(db, batch_id, current_user, content)}
-
-
-@router.post("/batches/{batch_id}/issuers-xls/import")
-async def import_issuer_survey_xls(
-    batch_id: int,
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("contractors.manage")),
-):
-    content = await file.read()
-    return {"data": survey_service.import_issuers_xls(db, batch_id, current_user, content)}
-
-
 @router.post("/batches/{batch_id}/contractors-xls/export-jobs")
 def start_contractor_xls_export_job(
     batch_id: int,

@@ -21,7 +21,6 @@ from app.services.survey.attachments import SurveyServiceAttachmentsMixin
 from app.services.survey.contract import SurveyServiceContractMixin
 from app.services.survey.exports import SurveyServiceExportsMixin
 from app.services.survey.excel_transfer import SurveyServiceExcelTransferMixin
-from app.services.survey.issuer_excel_transfer import SurveyServiceIssuerExcelTransferMixin
 from app.services.survey.parcel_ops import SurveyServiceParcelOpsMixin
 from app.services.survey.parcel_geometry import SurveyServiceParcelGeometryMixin
 from app.services.survey.household import SurveyServiceHouseholdMixin
@@ -43,7 +42,6 @@ class SurveyService(
     SurveyServiceContractMixin,
     SurveyServiceExportsMixin,
     SurveyServiceExcelTransferMixin,
-    SurveyServiceIssuerExcelTransferMixin,
     SurveyServiceParcelOpsMixin,
     SurveyServiceParcelGeometryMixin,
     SurveyServiceHouseholdMixin,
