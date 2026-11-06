@@ -149,7 +149,6 @@
           <div class="toolbar-actions">
             <el-input v-model="issuerKeyword" clearable placeholder="搜索发包方" style="width: 220px" @keyup.enter="loadIssuerRows" @clear="loadIssuerRows" />
             <el-button :icon="Search" plain @click="loadIssuerRows">查询</el-button>
-            <el-button plain @click="issuerXlsExportVisible = true">发包方导出</el-button>
             <template v-if="canManage">
               <el-button
                 :disabled="activeBatch?.status === 'finished' || selectedIssuerRows.length < 2"
@@ -158,7 +157,6 @@
                 @click="openMergeIssuer"
               >合并</el-button>
               <el-button :disabled="activeBatch?.status === 'finished'" :icon="Plus" type="primary" @click="openCreateIssuer">新增</el-button>
-              <el-button :disabled="activeBatch?.status === 'finished'" plain @click="issuerXlsImportVisible = true">发包方导入</el-button>
             </template>
             <span class="batch-selected-hint">已选 {{ selectedIssuerRows.length }} 个发包方</span>
           </div>
@@ -180,34 +178,7 @@
           <el-table-column prop="responsibleName" label="负责人" width="110" />
           <el-table-column prop="phone" label="联系电话" width="130" />
           <el-table-column prop="address" label="地址" min-width="200" show-overflow-tooltip />
-          <el-table-column label="操作" width="120" fixed="right" class-name="survey-action-column">
-            <template #default="{ row }">
-              <div class="survey-row-actions">
-                <el-button link type="primary" @click="openIssuerSurvey(row)">编辑</el-button>
-                <el-button
-                  v-if="canManage && activeBatch?.status !== 'finished'"
-                  link
-                  type="danger"
-                  @click="deleteIssuerRow(row)"
-                >删除</el-button>
-              </div>
-            </template>
-          </el-table-column>
         </el-table>
-      </div>
-
-      <div class="batch-export-bar">
-        <el-checkbox v-model="formChecks.issuer">发包方调查表</el-checkbox>
-        <el-checkbox v-model="formChecks.contractor">承包方调查表</el-checkbox>
-        <el-checkbox v-model="formChecks.parcel">地块调查表</el-checkbox>
-        <el-button
-          type="primary"
-          :disabled="!selectedIssuerRows.length || !hasCheckedForm || batchExporting"
-          :loading="batchExporting"
-          @click="handleBatchFormExport"
-        >
-          导出
-        </el-button>
       </div>
     </section>
     <section v-else class="panel table-page">
@@ -218,8 +189,6 @@
     <IssuerSurveyDialog ref="issuerSurveyDialog" v-model="issuerSurveyVisible" :active-batch="activeBatch" :can-manage="canManage" @saved="onIssuerSaved" />
     <MergeIssuerDialog ref="mergeIssuerDialog" v-model="mergeIssuerVisible" :active-batch="activeBatch" :rows="selectedIssuerRows" @merged="onIssuersMerged" />
     <QualityCheckDialog v-model="qualityCheckVisible" :batch="activeBatch" />
-    <IssuerXlsExportDialog v-model="issuerXlsExportVisible" :batch="activeBatch" />
-    <IssuerXlsImportDialog v-model="issuerXlsImportVisible" :batch="activeBatch" @imported="onIssuersImported" />
   </div>
 </template>
 
@@ -233,11 +202,8 @@ import BatchCreateDialog from "../components/survey/view/BatchCreateDialog.vue";
 import IssuerSurveyDialog from "../components/survey/view/IssuerSurveyDialog.vue";
 import MergeIssuerDialog from "../components/survey/view/MergeIssuerDialog.vue";
 import QualityCheckDialog from "../components/survey/QualityCheckDialog.vue";
-import IssuerXlsExportDialog from "../components/survey/IssuerXlsExportDialog.vue";
-import IssuerXlsImportDialog from "../components/survey/IssuerXlsImportDialog.vue";
 
 import {
-  deleteSurveyIssuer,
   exportSurveyResults,
   fetchSurveyAssignees,
   fetchSurveyBatchStats,
@@ -285,9 +251,6 @@ const issuerLoading = ref(false);
 const issuerRows = ref([]);
 const issuerKeyword = ref("");
 const selectedIssuerRows = ref([]);
-const formChecks = reactive({ issuer: false, contractor: false, parcel: false });
-const hasCheckedForm = computed(() => formChecks.issuer || formChecks.contractor || formChecks.parcel);
-const batchExporting = ref(false);
 const enteringTask = ref(false);
 
 // ---- 发包方维护（新增 / 编辑 / 合并 / 删除）----
@@ -296,9 +259,6 @@ const issuerSurveyDialog = ref(null);
 const issuerSurveyVisible = ref(false);
 const mergeIssuerDialog = ref(null);
 const mergeIssuerVisible = ref(false);
-// ---- 发包方调查表 Excel 导出 / 导入 ----
-const issuerXlsExportVisible = ref(false);
-const issuerXlsImportVisible = ref(false);
 // ---- 数据质检 ----
 const qualityCheckVisible = ref(false);
 
@@ -430,7 +390,6 @@ function openCreateIssuer() {
   if (!activeBatch.value || activeBatch.value?.status === "finished") return;
   issuerSurveyDialog.value.openForCreate(activeBatch.value, activeBatch.value?.regionCode || activeRegionCode.value);
 }
-function openIssuerSurvey(row) { if (!activeBatch.value) return; issuerSurveyDialog.value.openForEdit(activeBatch.value, row); }
 function onIssuerSaved() { loadBatchDetail(); }
 
 function openMergeIssuer() {
@@ -444,42 +403,6 @@ function onIssuersMerged() {
   loadBatchDetail();
 }
 
-function onIssuersImported() {
-  // Excel 导入后新增/更新/删除都可能发生，清掉勾选再整表重查（含统计卡片）
-  selectedIssuerRows.value = [];
-  issuerTableRef.value?.clearSelection();
-  loadBatchDetail();
-}
-
-// ---- 发包方删除 ----
-// 前端预检（relatedContractorCount）只是 UX 快路；真正的闸门在后端 delete_issuer，
-// 两边判据同源（都是 cbdkxx 里挂在 fbfbm 下的承包方数）。
-async function deleteIssuerRow(row) {
-  if (!activeBatch.value) return;
-  const contractorCount = Number(row.relatedContractorCount || 0);
-  if (contractorCount > 0) {
-    ElMessage.warning(`发包方「${row.name}」下存在 ${contractorCount} 个承包方，不允许删除`);
-    return;
-  }
-  try {
-    await ElMessageBox.confirm(
-      `确定删除发包方「${row.name}」（${row.code}）吗？删除后不可恢复。`,
-      "删除发包方",
-      { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" },
-    );
-  } catch {
-    return; // 用户取消
-  }
-  try {
-    await deleteSurveyIssuer(activeBatch.value.id, row.issuerUid);
-    ElMessage.success("发包方已删除");
-    selectedIssuerRows.value = selectedIssuerRows.value.filter((item) => item.issuerUid !== row.issuerUid);
-    loadBatchDetail();
-  } catch (error) {
-    ElMessage.error(error.response?.data?.detail || "删除发包方失败");
-  }
-}
-
 async function handleEnterTask() {
   if (!activeBatch.value) return;
   enteringTask.value = true;
@@ -490,16 +413,6 @@ async function handleEnterTask() {
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || "进入任务失败");
   } finally { enteringTask.value = false; }
-}
-
-async function handleBatchFormExport() {
-  if (!selectedIssuerRows.value.length) { ElMessage.warning("请先勾选发包方"); return; }
-  if (!hasCheckedForm.value) { ElMessage.warning("请至少勾选一种调查表"); return; }
-  batchExporting.value = true;
-  try {
-    // 具体导出逻辑后续在发包方/承包方/地块管理导出功能中实现后，这里直接复用为按勾选发包方的批量导出。
-    ElMessage.info("批量导出逻辑将在对应管理功能的导出实现后接入");
-  } finally { batchExporting.value = false; }
 }
 
 function openCreateBatch() { batchCreateDialog.value.open(activeRegionCode.value, activeRegionLabel.value); }
@@ -799,39 +712,10 @@ onMounted(async () => {
   min-height: 0;
 }
 
-/* 发包方行内操作列（编辑 / 删除） */
-.survey-action-column .cell {
-  white-space: nowrap;
-}
-
-.survey-row-actions {
-  align-items: center;
-  display: inline-flex;
-  flex-wrap: nowrap;
-  gap: 10px;
-  justify-content: center;
-  white-space: nowrap;
-}
-
-.survey-row-actions :deep(.el-button) {
-  margin-left: 0;
-}
-
 .batch-selected-hint {
   color: var(--el-text-color-secondary);
   font-size: 13px;
   white-space: nowrap;
-}
-
-.batch-export-bar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 18px;
-  padding: 12px 16px;
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 6px;
-  background: var(--el-fill-color-lighter);
 }
 
 @media (max-width: 1280px) {

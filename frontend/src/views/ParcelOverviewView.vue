@@ -3,14 +3,6 @@
     <div class="toolbar">
       <div class="panel-title">承包地块管理</div>
       <div class="toolbar-actions">
-        <el-select v-model="batchId" placeholder="选择调查批次" style="width: 220px">
-          <el-option
-            v-for="batch in batches"
-            :key="batch.id"
-            :label="`${batch.batchNo} ${batch.batchName}`"
-            :value="batch.id"
-          />
-        </el-select>
         <el-input
           v-model="keyword"
           clearable
@@ -21,6 +13,7 @@
         />
         <el-button plain @click="handleSearch">查询</el-button>
         <el-button plain @click="load">刷新</el-button>
+        <el-button v-if="canManage" plain :disabled="!batchId" @click="importVisible = true">导入</el-button>
         <el-button v-if="canManage" plain :disabled="!batchId" @click="handleAdd">添加</el-button>
         <el-button
           v-if="canManage"
@@ -126,6 +119,12 @@
       :active-region-label="selectedBatch?.regionName || ''"
       @saved="load"
     />
+
+    <ParcelImportDialog
+      v-model="importVisible"
+      :batch="selectedBatch"
+      @imported="load"
+    />
   </section>
 </template>
 
@@ -134,6 +133,7 @@ import { computed, nextTick, onMounted, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
 import AddParcelDialog from "../components/survey/AddParcelDialog.vue";
+import ParcelImportDialog from "../components/survey/ParcelImportDialog.vue";
 import ContractorResultDialog from "../components/survey/view/ContractorResultDialog.vue";
 import {
   exportParcelSketchPdf,
@@ -167,6 +167,7 @@ const currentRow = ref(null);
 
 const batches = ref([]);
 const batchId = ref(null);
+const importVisible = ref(false);
 const selectedBatch = computed(
   () => batches.value.find((batch) => batch.id === batchId.value) || null
 );

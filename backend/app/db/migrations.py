@@ -62,6 +62,7 @@ def upgrade_schema(engine: Engine) -> None:
     _upgrade_spatial_tables(engine)
     _upgrade_survey_base_result_refactor(engine)
     _upgrade_survey_cbf_base_task_columns(engine)
+    _upgrade_survey_contractor_lock(engine)
     _upgrade_survey_parcel_uniqueness(engine)
     _upgrade_survey_boundary_uniqueness(engine)
     _upgrade_cbht_contract_columns(engine)
@@ -1953,6 +1954,22 @@ def _upgrade_survey_base_result_refactor(engine: Engine) -> None:
         if inspector.has_table("survey_contractor_tasks"):
             connection.exec_driver_sql("DROP TABLE survey_contractor_tasks")
             print("  Dropped survey_contractor_tasks")
+
+
+def _upgrade_survey_contractor_lock(engine: Engine) -> None:
+    """锁户标记：承包方成果表增加 is_locked（CS 版锁定/解锁户）。"""
+    inspector = inspect(engine)
+    if not inspector.has_table("survey_cbf_result"):
+        return
+    with engine.begin() as connection:
+        columns = {column["name"] for column in inspector.get_columns("survey_cbf_result")}
+        _add_column_if_missing(
+            connection,
+            columns,
+            "survey_cbf_result",
+            "is_locked",
+            "BOOLEAN NOT NULL DEFAULT FALSE",
+        )
 
 
 def _upgrade_survey_cbf_base_task_columns(engine: Engine) -> None:

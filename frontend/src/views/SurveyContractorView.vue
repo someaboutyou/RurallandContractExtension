@@ -7,36 +7,36 @@
         <div class="panel-title">承包方管理</div>
         <div class="toolbar-actions">
           <el-input v-model="taskKeyword" :disabled="!activeBatch" clearable placeholder="搜索承包方" style="width: 220px" @keyup.enter="loadTasks" />
-          <el-select v-model="taskStatus" :disabled="!activeBatch" clearable placeholder="调查状态" style="width: 160px" @change="loadTasks">
-            <el-option label="未调查" value="not_started" />
-            <el-option label="已调查" value="surveyed" />
-            <el-option label="已确认" value="confirmed" />
-            <el-option label="已跳过" value="skipped" />
-          </el-select>
-          <el-checkbox v-model="onlyMine" :disabled="!activeBatch" @change="loadTasks">只看我的</el-checkbox>
           <el-button :disabled="!activeBatch" :icon="Search" plain @click="loadTasks">查询</el-button>
           <el-button v-if="canManage" :disabled="!activeBatch || activeBatch?.status === 'finished'" :icon="Plus" type="primary" @click="openCreateContractor">新增</el-button>
-          <el-tooltip placement="top" content="先在上表勾选承包方，再点此分配调查员" :disabled="Boolean(selectedTasks.length)">
-            <el-button v-if="canManage" :disabled="assignDisabled" :icon="UserFilled" plain type="warning" @click="openAssign">
-              分配任务<template v-if="selectedTasks.length">（{{ selectedTasks.length }}）</template>
-            </el-button>
-          </el-tooltip>
-          <el-button :disabled="!activeBatch" plain @click="openDeregisteredDialog">已注销的承包方</el-button>
-          <el-button :disabled="!activeBatch" plain @click="xlsExportVisible = true">承包户导出</el-button>
+          <el-button :disabled="!activeBatch || !selectedTasks.length" plain @click="exportDialogVisible = true">导出</el-button>
+          <el-button v-if="canManage" :disabled="!activeBatch || !selectedTasks.length" plain @click="lockDialogVisible = true">锁定/解锁</el-button>
           <el-button v-if="canManage" :disabled="!activeBatch || activeBatch?.status === 'finished'" plain @click="xlsImportVisible = true">承包户导入</el-button>
+          <el-button v-if="canManage" :disabled="!activeBatch" plain @click="relationDialogVisible = true">家庭关系处理</el-button>
         </div>
       </div>
 
-      <el-table ref="taskTableRef" v-loading="taskLoading" :data="tasks" border stripe size="small" class="survey-table" @selection-change="handleSelectionChange">
-        <el-table-column v-if="canManage" type="selection" width="44" fixed="left" :selectable="isTaskSelectable" />
+      <el-table
+        ref="taskTableRef"
+        v-loading="taskLoading"
+        :data="tasks"
+        border
+        stripe
+        size="small"
+        class="survey-table"
+        @selection-change="handleSelectionChange"
+      >
+        <el-table-column type="selection" width="40" fixed="left" />
         <el-table-column prop="cbfbm" label="泗洪承包方编码" width="160" show-overflow-tooltip />
-        <el-table-column prop="cbfmc" label="承包方姓名" min-width="120" show-overflow-tooltip />
+        <el-table-column prop="cbfmc" label="承包方姓名" min-width="120" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span>{{ row.cbfmc }}</span>
+            <el-tag v-if="row.isLocked" class="lock-tag" type="info" size="small" effect="plain">已锁定</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="cbfdz" label="承包方地址" min-width="160" show-overflow-tooltip />
         <el-table-column prop="cbfcysl" label="成员数量" width="80" align="center" />
         <el-table-column prop="lxdh" label="联系电话" width="120" />
-        <el-table-column label="调查状态" width="100">
-          <template #default="{ row }"><el-tag :type="surveyStatusTagType(row.taskStatus)" size="small">{{ taskStatusLabel(row.taskStatus) }}</el-tag></template>
-        </el-table-column>
         <el-table-column label="调查员" width="130" show-overflow-tooltip>
           <template #default="{ row }">
             <el-tooltip v-if="row.assignedToName" placement="top" :content="assigneeTooltip(row)">
@@ -51,12 +51,16 @@
         <el-table-column label="操作" width="260" fixed="right" class-name="survey-action-column">
           <template #default="{ row }">
             <div class="survey-row-actions">
-              <el-tooltip v-if="row.canWrite === false" placement="top" :content="row.assignedToName ? `已分配给${row.assignedToName}，只能查看详细信息` : '尚未分配调查员，只能查看详细信息；请先分配调查员后再录入'">
+              <el-tooltip v-if="isResultReadOnly(row)" placement="top" :content="readOnlyReason(row)">
                 <el-button link type="warning" @click="openResult(row)">查看详情</el-button>
               </el-tooltip>
-              <el-button v-else link type="primary" @click="openResult(row)">调查录入</el-button>
-              <el-button v-if="canManage && CONFIRMABLE_SURVEY_STATUSES.includes(row.taskStatus)" link type="success" @click="handleConfirmTask(row)">确认</el-button>
-              <el-button v-if="canManage && row.canWrite !== false && activeBatch?.status !== 'finished' && !TERMINAL_SURVEY_STATUSES.includes(row.taskStatus)" link type="warning" @click="handleSkipTask(row)">跳过</el-button>
+              <el-button v-else link type="primary" @click="openResult(row)">编辑</el-button>
+              <el-button
+                v-if="canManage && row.canWrite !== false && activeBatch?.status !== 'finished'"
+                link
+                type="danger"
+                @click="handleDeleteTask(row)"
+              >删除</el-button>
             </div>
           </template>
         </el-table-column>
@@ -76,32 +80,44 @@
       @confirmed="onResultSaved"
       @open-contractor="onOpenCreatedContractor"
     />
-    <DeregisteredContractorsDialog ref="deregisteredDialog" :active-batch="activeBatch" :can-manage="canManage" @restored="onResultSaved" />
-    <TaskAssignDialog ref="taskAssignDialog" :active-batch="activeBatch" @assigned="onTasksAssigned" />
     <ContractorXlsImportDialog v-model="xlsImportVisible" :batch="activeBatch" @imported="loadTasks" />
-    <ContractorXlsExportDialog v-model="xlsExportVisible" :batch="activeBatch" />
+    <ContractorExportDialog
+      v-model="exportDialogVisible"
+      :batch="activeBatch"
+      :contractor-uids="selectedTasks.map((row) => row.contractorUid)"
+    />
+    <ContractorLockDialog
+      v-model="lockDialogVisible"
+      :batch="activeBatch"
+      :contractors="selectedTasks"
+      @locked="onLocked"
+    />
+    <ContractorRelationDialog
+      v-model="relationDialogVisible"
+      :batch="activeBatch"
+      @replaced="loadTasks"
+      @repaired="loadTasks"
+    />
   </section>
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Plus, Search, UserFilled } from "@element-plus/icons-vue";
+import { Plus, Search } from "@element-plus/icons-vue";
 
 import ContractorResultDialog from "../components/survey/view/ContractorResultDialog.vue";
-import DeregisteredContractorsDialog from "../components/survey/view/DeregisteredContractorsDialog.vue";
-import TaskAssignDialog from "../components/survey/view/TaskAssignDialog.vue";
 import ContractorXlsImportDialog from "../components/survey/ContractorXlsImportDialog.vue";
-import ContractorXlsExportDialog from "../components/survey/ContractorXlsExportDialog.vue";
+import ContractorExportDialog from "../components/survey/ContractorExportDialog.vue";
+import ContractorLockDialog from "../components/survey/ContractorLockDialog.vue";
+import ContractorRelationDialog from "../components/survey/ContractorRelationDialog.vue";
 
 import {
-  confirmSurveyResult,
+  deleteSurveyContractor,
   fetchCurrentSurveyBatch,
   fetchSurveyBatches,
   fetchSurveyTasks,
-  skipSurveyTask,
 } from "../api/survey";
-import { CONFIRMABLE_SURVEY_STATUSES, TERMINAL_SURVEY_STATUSES } from "../config/surveyStatus";
 import { useAuthStore } from "../stores/auth";
 
 const authStore = useAuthStore();
@@ -114,29 +130,20 @@ const activeBatch = ref(null);
 const taskLoading = ref(false);
 const tasks = ref([]);
 const taskKeyword = ref("");
-const taskStatus = ref("");
-const onlyMine = ref(false);
 const selectedTasks = ref([]);
 const taskTableRef = ref(null);
-
 const resultVisible = ref(false);
 const activeTaskCanWrite = ref(true);
 const contractorResultDialog = ref(null);
-const deregisteredDialog = ref(null);
-const taskAssignDialog = ref(null);
 const xlsImportVisible = ref(false);
-const xlsExportVisible = ref(false);
+const exportDialogVisible = ref(false);
+const lockDialogVisible = ref(false);
+const relationDialogVisible = ref(false);
 
 const activeRegionCode = computed(() => activeBatch.value?.regionCode || "");
 const activeRegionLabel = computed(() => activeBatch.value?.regionName || "");
-const assignDisabled = computed(
-  () => !activeBatch.value || activeBatch.value.status === "finished" || !selectedTasks.value.length,
-);
 
 function formatDateTime(value) { if (!value) return "-"; return String(value).replace("T", " ").slice(0, 19); }
-function taskStatusLabel(value) { return { not_started: "未调查", not_surveyed: "未调查", in_progress: "调查中", surveyed: "已调查", changed: "有变化", unchanged: "无变化", confirmed: "已确认", skipped: "已跳过", deregistered: "已注销" }[value] || value; }
-function surveyStatusTagType(value) { return { not_started: "info", not_surveyed: "info", surveyed: "success", confirmed: "primary", skipped: "warning", deregistered: "danger" }[value] || "info"; }
-function isTaskSelectable(row) { return !["confirmed", "deregistered"].includes(row?.taskStatus); }
 function assigneeTooltip(row) {
   const parts = [];
   if (row?.assignedAt) parts.push(`分配时间：${formatDateTime(row.assignedAt)}`);
@@ -177,25 +184,40 @@ async function loadTasks() {
       page: 1,
       page_size: 100,
       keyword: taskKeyword.value || undefined,
-      taskStatus: taskStatus.value || undefined,
-      mine: onlyMine.value ? 1 : undefined,
       ...buildRegionParams(),
     });
     tasks.value = data.data.items || [];
+    selectedTasks.value = [];
+    taskTableRef.value?.clearSelection();
   } finally { taskLoading.value = false; }
 }
 
-function handleSelectionChange(rows) { selectedTasks.value = rows || []; }
-function openAssign() { if (!activeBatch.value || !selectedTasks.value.length) return; taskAssignDialog.value.open(selectedTasks.value); }
-function onTasksAssigned() { selectedTasks.value = []; taskTableRef.value?.clearSelection(); loadTasks(); }
+function handleSelectionChange(rows) {
+  selectedTasks.value = rows || [];
+}
+
+function isResultReadOnly(row) {
+  return row?.canWrite === false || row?.isLocked || row?.taskStatus === "confirmed";
+}
+
+function readOnlyReason(row) {
+  if (row?.isLocked) return "该承包方已锁定，请先解锁后再编辑";
+  if (row?.taskStatus === "confirmed") return "该承包方调查结果已确认，请先撤回确认后再编辑";
+  if (row?.assignedToName) return `已分配给${row.assignedToName}，只能查看详细信息`;
+  return "尚未分配调查员，只能查看详细信息";
+}
 
 function openResult(row) {
   activeTaskCanWrite.value = row?.canWrite !== false;
   contractorResultDialog.value.openForResult(activeBatch.value, row);
 }
 function openCreateContractor() { if (!activeBatch.value) return; activeTaskCanWrite.value = true; contractorResultDialog.value.openForCreate(activeBatch.value); }
-function openDeregisteredDialog() { if (!activeBatch.value) return; deregisteredDialog.value.open(); }
 function onResultSaved() { loadTasks(); }
+function onLocked() {
+  selectedTasks.value = [];
+  taskTableRef.value?.clearSelection();
+  loadTasks();
+}
 
 async function onOpenCreatedContractor(target) {
   if (!activeBatch.value || !target) return;
@@ -213,16 +235,33 @@ async function onOpenCreatedContractor(target) {
   ElMessage.warning(`新承包方「${target.cbfmc || target.cbfbm || ""}」已生成，但不在当前任务列表筛选结果中，请按编码 ${target.cbfbm || ""} 搜索。`);
 }
 
-async function handleConfirmTask(row) {
-  try { await confirmSurveyResult(row.batchId, row.contractorUid); ElMessage.success("调查结果已确认"); await loadTasks(); } catch (error) { ElMessage.error(error.response?.data?.detail || "确认失败"); }
-}
-
-async function handleSkipTask(row) {
+async function handleDeleteTask(row) {
+  if (!activeBatch.value || !row?.contractorUid) return;
+  // 与 CS 版一致：删除按钮常显，但已锁定/已确认的承包方点击后拦截。
+  if (row.isLocked) {
+    ElMessage.warning("承包方已锁定，请先解锁后再删除");
+    return;
+  }
+  if (row.taskStatus === "confirmed") {
+    ElMessage.warning("承包方已确认（锁定），请先在编辑中撤回确认后再删除");
+    return;
+  }
   try {
-    const { value } = await ElMessageBox.prompt("请输入跳过原因", "跳过调查任务", { inputType: "textarea", inputPlaceholder: "例如：本轮调查无需处理、非本区域调查对象等", inputValidator: (text) => Boolean(text?.trim()) || "请输入跳过原因", confirmButtonText: "跳过", cancelButtonText: "取消", type: "warning" });
-    await skipSurveyTask(row.batchId, row.contractorUid, { skipReason: value.trim() });
-    ElMessage.success("调查任务已跳过"); await loadTasks();
-  } catch (error) { if (error !== "cancel" && error !== "close") ElMessage.error(error.response?.data?.detail || "跳过失败"); }
+    await ElMessageBox.confirm(
+      `删除承包方「${row.cbfmc || row.cbfbm || ""}」会关联删除成员、地块、合同等信息，确定删除？`,
+      "删除承包方",
+      { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" },
+    );
+  } catch {
+    return; // 用户取消
+  }
+  try {
+    await deleteSurveyContractor(activeBatch.value.id, row.contractorUid);
+    ElMessage.success("承包方已删除");
+    await loadTasks();
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || "删除承包方失败");
+  }
 }
 
 onMounted(loadBatches);
@@ -231,5 +270,9 @@ onMounted(loadBatches);
 <style scoped>
 .survey-contractor-page {
   min-height: 0;
+}
+
+.lock-tag {
+  margin-left: 6px;
 }
 </style>

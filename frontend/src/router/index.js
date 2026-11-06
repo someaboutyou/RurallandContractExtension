@@ -20,6 +20,7 @@ const DataImportView = () => import("../views/DataImportView.vue");
 const DataExportView = () => import("../views/DataExportView.vue");
 const SurveyView = () => import("../views/SurveyView.vue");
 const SurveyContractorView = () => import("../views/SurveyContractorView.vue");
+const SurveyTemplateView = () => import("../views/SurveyTemplateView.vue");
 const GisView = () => import("../views/GisView.vue");
 const RequestView = () => import("../views/RequestView.vue");
 const RequestAttachmentTemplateView = () => import("../views/RequestAttachmentTemplateView.vue");
@@ -37,6 +38,7 @@ const REQUEST_MODULE_PERMISSIONS = [
 const appChildren = [
   { path: "gis", name: "gis", component: GisView, meta: { requiresAuth: true, permissions: ["dashboard.view"] } },
   { path: "issuers", name: "issuers", component: IssuerView, meta: { requiresAuth: true, permissions: ["issuers.view"] } },
+  { path: "survey-templates", name: "survey-templates", component: SurveyTemplateView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
   { path: "contractors", name: "contractors", component: ContractorView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
   { path: "parcels", name: "parcels", component: ParcelOverviewView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
   { path: "data-imports", name: "data-imports", component: DataImportView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },

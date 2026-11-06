@@ -46,7 +46,7 @@ class SurveyServiceParcelGeometryMixin:
         if batch.status == "finished":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid operation")
         result = self._get_result(db, batch_id, contractor_uid)
-        if result.survey_status == "confirmed":
+        if result.survey_status == "confirmed" or getattr(result, "is_locked", False):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid operation")
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
 
@@ -98,7 +98,7 @@ class SurveyServiceParcelGeometryMixin:
         if batch.status == "finished":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid operation")
         result = self._get_result(db, batch_id, contractor_uid)
-        if result.survey_status == "confirmed":
+        if result.survey_status == "confirmed" or getattr(result, "is_locked", False):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid operation")
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
 
@@ -143,7 +143,7 @@ class SurveyServiceParcelGeometryMixin:
         if batch.status == "finished":
             raise HTTPException(400, "invalid operation")
         result = self._get_result(db, batch_id, contractor_uid)
-        if result.survey_status == "confirmed":
+        if result.survey_status == "confirmed" or getattr(result, "is_locked", False):
             raise HTTPException(400, "invalid operation")
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
 

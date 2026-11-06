@@ -54,3 +54,12 @@ class IssuerContractorRead(BaseModel):
     surveyDate: str | None = None
     surveyorName: str | None = None
     groupRegionName: str | None = None
+
+
+class IssuerMergeRequest(BaseModel):
+    keepCode: str = Field(min_length=1, max_length=14)
+    mergeCodes: list[str] = Field(min_length=1)
+
+
+class IssuerDocxExportRequest(BaseModel):
+    codes: list[str] = Field(min_length=1, max_length=500)

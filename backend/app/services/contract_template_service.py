@@ -682,6 +682,8 @@ class ContractTemplateService:
         packets: list[dict],
         *,
         parcel_only: bool = False,
+        issuer_only: bool = False,
+        contractor_only: bool = False,
         include_point_sheets: bool = True,
     ) -> str:
         template = self._env.get_template("cadastral_survey.html")
@@ -694,6 +696,8 @@ class ContractTemplateService:
             member_min_rows=CADASTRAL_MEMBER_MIN_ROWS,
             points_per_page=CADASTRAL_POINTS_PER_PAGE,
             parcel_only=parcel_only,
+            issuer_only=issuer_only,
+            contractor_only=contractor_only,
             include_point_sheets=include_point_sheets,
         )
 
@@ -729,6 +733,69 @@ class ContractTemplateService:
                 include_point_sheets=include_point_sheets,
             ),
             packet,
+        )
+
+    def build_issuer_survey_html(
+        self,
+        db: Session,
+        *,
+        fbfbm: str,
+        batch_id: int | None = None,
+    ) -> tuple[str, dict]:
+        """只渲染一个发包方的《发包方调查表》（Word 导出用）。"""
+        source = _one(
+            db,
+            select(SurveyFbfResult)
+            .where(SurveyFbfResult.fbfbm == fbfbm)
+            .order_by(SurveyFbfResult.id.desc()),
+        ) or _one(db, select(Fbf).where(Fbf.fbfbm == fbfbm))
+        if source is None:
+            raise ValueError(f"发包方不存在：{fbfbm}")
+
+        options = self._cadastral_options(db)
+        id_type_options = options["nyt2539_c15_id_document_type"]
+        id_type_code = getattr(source, "fzrzjlx", "") or ""
+        survey_date = getattr(source, "fbfdcrq", None)
+        issuer = {
+            "name": getattr(source, "fbfmc", "") or "",
+            "code": getattr(source, "fbfbm", "") or fbfbm,
+            "head": getattr(source, "fbffzrxm", "") or "",
+            "head_id_type": id_type_options.get(id_type_code, id_type_code),
+            "head_id_no": getattr(source, "fzrzjhm", "") or "",
+            "head_phone": getattr(source, "lxdh", "") or "",
+            "address": getattr(source, "fbfdz", "") or "",
+            "postcode": getattr(source, "yzbm", "") or "",
+            "survey_note": _cadastral_survey_note(
+                getattr(source, "fbfdcjs", None),
+                getattr(source, "fbfdcy", None),
+                survey_date,
+                include_change=False,
+            ),
+            "audit_note": "合格。",
+            "auditor": getattr(source, "fbfdcy", "") or "",
+            "audit_date_text": _fmt_date_cn(survey_date),
+        }
+        packet = {"issuer": issuer, "contractor": {}, "parcels": []}
+        return (
+            self._render_cadastral_html(db, [packet], issuer_only=True),
+            issuer,
+        )
+
+    def build_contractor_survey_html(
+        self,
+        db: Session,
+        *,
+        cbfbm: str,
+        batch_id: int | None = None,
+    ) -> tuple[str, dict]:
+        """只渲染一个承包方的《承包方调查表》（Word 导出用）。"""
+        options = self._cadastral_options(db)
+        packet = self._build_cadastral_packet(
+            db, cbfbm=cbfbm, batch_id=batch_id, options=options,
+        )
+        return (
+            self._render_cadastral_html(db, [packet], contractor_only=True),
+            packet.get("contractor") or {},
         )
 
     def _build_cadastral_packet(

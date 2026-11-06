@@ -119,7 +119,7 @@ class SurveyServiceHouseholdMixin:
         if batch.status == "finished":
             raise HTTPException(400, "invalid operation")
         result = self._get_result(db, batch_id, contractor_uid)
-        if result.survey_status == "confirmed":
+        if result.survey_status == "confirmed" or getattr(result, "is_locked", False):
             raise HTTPException(400, "invalid operation")
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
         # 任务归属：只有名下有这一户的人（或批次创建人 / 管理员）能改。
@@ -191,7 +191,7 @@ class SurveyServiceHouseholdMixin:
         if batch.status == "finished":
             raise HTTPException(400, "invalid operation")
         result = self._get_result(db, batch_id, contractor_uid)
-        if result.survey_status == "confirmed":
+        if result.survey_status == "confirmed" or getattr(result, "is_locked", False):
             raise HTTPException(400, "invalid operation")
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
         # 任务归属：只有名下有这一户的人（或批次创建人 / 管理员）能改。
@@ -359,7 +359,7 @@ class SurveyServiceHouseholdMixin:
         if batch.status == "finished":
             raise HTTPException(400, "invalid operation")
         result = self._get_result(db, batch_id, contractor_uid)
-        if result.survey_status == "confirmed":
+        if result.survey_status == "confirmed" or getattr(result, "is_locked", False):
             raise HTTPException(400, "invalid operation")
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
         # 任务归属：只有名下有这一户的人（或批次创建人 / 管理员）能改。
@@ -678,7 +678,7 @@ class SurveyServiceHouseholdMixin:
         if batch.status == "finished":
             raise HTTPException(400, "invalid operation")
         result = self._get_result(db, batch_id, contractor_uid)
-        if result.survey_status == "confirmed":
+        if result.survey_status == "confirmed" or getattr(result, "is_locked", False):
             raise HTTPException(400, "invalid operation")
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
         # 任务归属：只有名下有这一户的人（或批次创建人 / 管理员）能改。

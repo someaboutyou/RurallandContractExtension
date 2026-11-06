@@ -595,6 +595,7 @@ class SurveyServiceBoundaryMixin:
             "cordSystem": srid_display_name(get_target_srid()),
             "editable": not (
                 result.survey_status == "confirmed"
+                or bool(getattr(result, "is_locked", False))
                 or result.result_status in {"cancelled", "extinct"}
             ),
             "options": boundary_options(db),
@@ -614,9 +615,9 @@ class SurveyServiceBoundaryMixin:
         """
         context = self._ensure_parcel_in_batch(db, batch_id, contractor_uid, dkbm)
         result = context["result"]
-        if result.survey_status == "confirmed":
+        if result.survey_status == "confirmed" or getattr(result, "is_locked", False):
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="调查成果已确认，不能继续编辑"
+                status_code=status.HTTP_400_BAD_REQUEST, detail="承包方已确认或已锁定，不能继续编辑"
             )
         if result.result_status in {"cancelled", "extinct"}:
             raise HTTPException(

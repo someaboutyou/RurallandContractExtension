@@ -186,7 +186,12 @@ class SurveyServiceExcelTransferMixin:
     # ── 导出 ────────────────────────────────────────────────────────────────
 
     def export_contractors_xls(
-        self, db: Session, batch_id: int, current_user: User, progress_cb=None
+        self,
+        db: Session,
+        batch_id: int,
+        current_user: User,
+        progress_cb=None,
+        contractor_uids: list[str] | None = None,
     ) -> tuple[str, bytes]:
         """progress_cb(done, total, phase, current="")：后台任务上报进度用，可空。"""
         batch = self._ensure_batch(db, batch_id)
@@ -203,6 +208,8 @@ class SurveyServiceExcelTransferMixin:
 
         task_filters = self._tenant_filters(SurveyCbfBase, current_user)
         task_filters.append(SurveyCbfBase.batch_id == batch_id)
+        if contractor_uids:
+            task_filters.append(SurveyCbfBase.contractor_uid.in_(contractor_uids))
         tasks = db.scalars(
             select(SurveyCbfBase)
             .where(*task_filters)

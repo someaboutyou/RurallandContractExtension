@@ -398,6 +398,7 @@
 {% set contractor = packet.contractor %}
 
 {% if not parcel_only %}
+{% if not issuer_only and not contractor_only %}
 <!-- ①② 封面 -->
 <div class="page pg-portrait cover">
   <div class="cover-head"></div>
@@ -409,7 +410,9 @@
     <div>调查时间：{{ packet.survey_date_text or '　　　　年　　月　　日' }}</div>
   </div>
 </div>
+{% endif %}
 
+{% if not contractor_only %}
 <!-- ③ 发包方调查表 -->
 <div class="page pg-portrait">
   <h1 class="form-title">发包方调查表</h1>
@@ -459,7 +462,9 @@
     </tr>
   </table>
 </div>
+{% endif %}
 
+{% if not issuer_only %}
 <!-- ④ 承包方调查表 -->
 <div class="page pg-portrait">
   <h1 class="form-title">承包方调查表</h1>
@@ -572,7 +577,9 @@
   </table>
 </div>
 {% endif %}
+{% endif %}
 
+{% if not issuer_only and not contractor_only %}
 {# ⑤⑥ 一个地块一套表：承包地块调查表 + 界址点坐标成果表 #}
 {% for parcel in packet.parcels %}
 <div class="page pg-landscape">
@@ -757,6 +764,7 @@
     该承包方名下暂无承包地块，无可打印的地块调查表与界址点坐标成果表。
   </p>
 </div>
+{% endif %}
 {% endif %}
 
 {% endfor %}

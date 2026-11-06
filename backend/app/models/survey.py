@@ -108,6 +108,8 @@ class SurveyCbfResult(TenantScopedMixin, TimestampMixin, Base):
     generated_request_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     generated_request_no: Mapped[str | None] = mapped_column(String(64), nullable=True)
     generated_request_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: 锁户标记：锁定后不允许修改、删除该承包方（CS 版「锁定/解锁户」）。
+    is_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     source_import_batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_import_row_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_import_batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True)

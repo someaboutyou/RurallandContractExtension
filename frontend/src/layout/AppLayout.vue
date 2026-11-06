@@ -191,6 +191,7 @@ const navItems = [
       { to: "/issuers", label: "发包方管理", permissions: ["issuers.view"] },
       { to: "/survey-contractors", label: "承包方管理", permissions: ["contractors.view"] },
       { to: "/parcels", label: "承包地块管理", permissions: ["contractors.view"] },
+      { to: "/survey-templates", label: "模板管理", permissions: ["contractors.view"] },
       { to: "/requests", label: "业务申请", permissions: REQUEST_MODULE_PERMISSIONS },
     ],
   },

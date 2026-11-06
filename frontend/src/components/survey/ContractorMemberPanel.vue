@@ -68,18 +68,13 @@
             <el-input v-model="result.mobile" placeholder="联系电话" maxlength="20" />
           </div>
         </el-form-item>
-        <el-form-item label="承包方成员数量" :class="changedClass('memberCount')">
-          <div class="diff-trigger" @mouseenter="showDiffTooltip(isContractorFieldChanged('memberCount'), beforeValueText('memberCount'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
-            <el-input :model-value="currentMemberCount" readonly />
-          </div>
-        </el-form-item>
       </div>
       <el-form-item class="form-span-3" label="承包方地址" required :class="changedClass('address')">
         <div class="diff-trigger" @mouseenter="showDiffTooltip(isContractorFieldChanged('address'), beforeValueText('address'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
           <el-input v-model="result.address" placeholder="详细地址" maxlength="100" />
         </div>
       </el-form-item>
-      <div class="form-grid-2">
+      <div class="form-grid-3 form-grid-info">
         <el-form-item label="邮政编码" required :class="changedClass('postcode')">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isContractorFieldChanged('postcode'), beforeValueText('postcode'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
             <el-input v-model="result.postcode" placeholder="6位邮编" maxlength="6" />
@@ -88,6 +83,11 @@
         <el-form-item label="村民小组" :class="changedClass('groupRegionName')">
           <div class="diff-trigger" @mouseenter="showDiffTooltip(isContractorFieldChanged('groupRegionName'), beforeValueText('groupRegionName'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
             <el-input v-model="result.groupRegionName" placeholder="村民小组" maxlength="120" />
+          </div>
+        </el-form-item>
+        <el-form-item label="承包方成员数量" :class="changedClass('memberCount')">
+          <div class="diff-trigger" @mouseenter="showDiffTooltip(isContractorFieldChanged('memberCount'), beforeValueText('memberCount'), $event)" @mousemove="moveDiffTooltip" @mouseleave="hideDiffTooltip">
+            <el-input :model-value="currentMemberCount" readonly />
           </div>
         </el-form-item>
       </div>
@@ -352,19 +352,19 @@
       </el-table-column>
 
       <!-- 操作 -->
-      <el-table-column label="操作" width="180" fixed="right">
+      <el-table-column label="操作" width="200" fixed="right">
         <template #default="{ row }">
           <el-button
+            v-if="!readonly && !row._deleted && !isMemberHead(row)"
             link
-            type="primary"
+            type="success"
             size="small"
-            :disabled="row._deleted"
-            @click="openSheetDialog(row)"
+            @click="handleSetAsHead(row)"
           >
-            摸底
+            承包方代表
           </el-button>
           <el-button
-            v-if="!readonly && !row._deleted && !row.isHouseholdHead"
+            v-if="!readonly && !row._deleted && !isMemberHead(row)"
             link
             type="danger"
             size="small"
@@ -505,7 +505,7 @@
 
 <script setup>
 import { computed, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import ChangeDiffViewer from "./ChangeDiffViewer.vue";
 import { useDictionary } from "../../composables/useDictionary";
 import { evaluateIdNoIssue, ID_NO_MAX_LENGTH } from "../../utils/validators";
@@ -744,20 +744,48 @@ function handleCivilServantChange(value) {
 }
 
 function setAsHead(row) {
-  // 取消所有成员的户主标记
+  // 与 CS 版 SetMainPerson 一致：
+  // 1) 原户主取消户主标记，关系码清空（CS 写空字符串）；
+  // 2) 目标成员设为户主（关系码 "02"），并设为共有人；
+  // 3) 承包方名称、证件类型、证件号码随新户主更新。
   for (const m of props.result.familyMembers) {
-    m.isHouseholdHead = false;
+    if (m === row) continue;
+    if (m.isHouseholdHead || isHeadRelation(m.relationToHead)) {
+      m.isHouseholdHead = false;
+      m.relationToHead = "";
+    }
   }
-  // 设置目标为户主
   row.isHouseholdHead = true;
-  // ⛔ 户主的关系码是字典里的 "02"（户主），不是 "01"（本人）。
-  // 旧实现写 "01"，与存量户的 "02" 并存 ⇒ 一个户里出现两个"户主"（2026-09-25 修）。
-  // 注：本函数同时用于「点选 设为户主」与「关系下拉选到户主类码」两条路径。
   row.relationToHead = "02";
-  // 承包方名称默认随户主名称
+  row.isCoOwner = "1";
   if (row.name) {
     props.result.name = row.name;
   }
+  if (row.idType) {
+    props.result.idType = row.idType;
+  }
+  if (row.idNo) {
+    props.result.idNo = row.idNo;
+  }
+}
+
+function isMemberHead(row) {
+  return Boolean(row?.isHouseholdHead) || isHeadRelation(row?.relationToHead);
+}
+
+async function handleSetAsHead(row) {
+  if (!row || isMemberHead(row)) return;
+  try {
+    await ElMessageBox.confirm(
+      `确定将「${row.name || "该成员"}」设置为承包方代表（户主）吗？`,
+      "承包方代表",
+      { type: "warning", confirmButtonText: "确定", cancelButtonText: "取消" },
+    );
+  } catch {
+    return;
+  }
+  setAsHead(row);
+  ElMessage.success("已设置为承包方代表");
 }
 
 function isHeadRelation(value) {
@@ -933,8 +961,8 @@ defineExpose({ getValidMembers, validateIdNos });
 </script>
 
 <style scoped>
-.contractor-member-panel { min-height: 200px; }
-.change-alert { margin-bottom: 12px; }
+.contractor-member-panel { min-height: 160px; }
+.change-alert { margin-bottom: 8px; }
 
 /* 必填标记：与 el-form-item 的 required 星号同色（Element Plus 默认 #f56c6c）。
    el-table-column 没有 required 属性，列头只能靠 #header 插槽自渲染。 */
@@ -948,13 +976,13 @@ defineExpose({ getValidMembers, validateIdNos });
   font-size: 14px;
   font-weight: 600;
   color: #303133;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 .section-heading {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 .section-heading .section-title {
   margin-bottom: 0;
@@ -966,7 +994,7 @@ defineExpose({ getValidMembers, validateIdNos });
   font-size: 13px;
   font-weight: 600;
   color: #606266;
-  margin: 4px 0 8px;
+  margin: 2px 0 6px;
 }
 .section-header {
   display: flex;
@@ -981,12 +1009,12 @@ defineExpose({ getValidMembers, validateIdNos });
 }
 .contractor-form :deep(.el-form-item) {
   min-width: 0;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   align-items: center;
 }
 .contractor-form :deep(.el-form-item__label) {
-  height: 34px;
-  line-height: 34px;
+  height: 32px;
+  line-height: 32px;
   justify-content: flex-start;
   padding-right: 10px;
   color: #606266;
@@ -1020,14 +1048,17 @@ defineExpose({ getValidMembers, validateIdNos });
 .form-grid-3 {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0 18px;
+  gap: 0 14px;
   align-items: start;
 }
 .form-grid-2 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 18px;
+  gap: 0 14px;
   align-items: start;
+}
+.form-grid-info {
+  grid-template-columns: 0.75fr 1.6fr 0.75fr;
 }
 .form-span-2 {
   grid-column: span 2;
@@ -1037,6 +1068,19 @@ defineExpose({ getValidMembers, validateIdNos });
 }
 
 .member-table { margin-top: 0; }
+
+.contractor-member-panel :deep(.el-divider--horizontal) {
+  margin: 10px 0;
+}
+
+.member-table :deep(.el-table__cell) {
+  padding: 4px 0;
+}
+
+.member-table :deep(.el-table__cell .cell) {
+  padding: 0 6px;
+  line-height: 1.4;
+}
 
 /* 成员摸底信息弹窗（2026-10-15 重构：顶部标签 + 两列网格，杜绝标签溢出换行） */
 .sheet-section {
@@ -1141,7 +1185,7 @@ defineExpose({ getValidMembers, validateIdNos });
   border-radius: 4px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
 }
-@media (max-width: 1180px) {
+@media (max-width: 1000px) {
   .form-grid-3 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

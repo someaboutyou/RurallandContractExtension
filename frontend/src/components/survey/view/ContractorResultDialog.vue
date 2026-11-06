@@ -1,5 +1,5 @@
 ﻿<template>
-  <el-dialog :model-value="modelValue" :title="resultDialogTitle" width="92vw" top="3vh" destroy-on-close @update:model-value="$emit('update:modelValue', $event)">
+  <el-dialog :model-value="modelValue" :title="resultDialogTitle" width="96vw" top="2vh" class="contractor-result-dialog" append-to-body destroy-on-close @update:model-value="$emit('update:modelValue', $event)">
     <div v-if="!isCreatingContractorResult" class="survey-toolbar">
       <el-button type="danger" plain size="small" :disabled="dataReadOnly" @click="handleOpDeregister">注销承包方</el-button>
       <el-button plain size="small" :disabled="dataReadOnly" @click="handleOpSplitHousehold">分户</el-button>
@@ -11,7 +11,7 @@
         <el-button type="primary" plain size="small" :loading="printingLandSheet" :disabled="isCreatingContractorResult" @click="handlePrintLandSheet">生成承包地变化摸底表</el-button>
         <el-button type="primary" plain size="small" :loading="printingMemberSheet" :disabled="isCreatingContractorResult" @click="handlePrintMemberSheet">生成成员变化摸底表</el-button>
       </span>
-      <span v-if="dataReadOnly" class="toolbar-lock-hint">（当前为只读模式，只能查看详细信息）</span>
+      <span v-if="dataReadOnly" class="toolbar-lock-hint">（{{ readOnlyHint }}）</span>
     </div>
     <el-alert v-if="pendingOperations.length" type="warning" :closable="false" show-icon class="pending-operation-alert" :title="`当前有 ${pendingOperations.length} 项操作尚未保存，请点击保存调查结果统一提交。`" />
     <div v-if="pendingOperations.length" class="pending-operation-list">
@@ -25,8 +25,9 @@
         v-for="panel in panelButtons"
         :key="panel.name"
         size="small"
-        :type="activePanel === panel.name ? 'primary' : ''"
-        :plain="activePanel !== panel.name"
+        class="panel-tab"
+        :class="{ 'is-active': activePanel === panel.name }"
+        :title="panel.label"
         :disabled="panel.disabled"
         @click="switchPanel(panel.name)"
       >
@@ -277,7 +278,7 @@ const authorizationUploadTarget = ref(null);
 const resultForm = reactive(createEmptyResult());
 
 // ---- Computed ----
-const isResultLocked = computed(() => props.activeBatch?.status === "finished" || (!isCreatingContractorResult.value && resultForm.surveyStatus === "confirmed"));
+const isResultLocked = computed(() => props.activeBatch?.status === "finished" || (!isCreatingContractorResult.value && (resultForm.surveyStatus === "confirmed" || resultForm.isLocked)));
 // 撤回确认权限：当前用户是否持有 survey_result.unconfirm（默认仅平台管理员）。
 // 与后端端点 require_permission("survey_result.unconfirm") 同源。
 const canUnconfirm = computed(() => authStore.hasPermission("survey_result.unconfirm"));
@@ -292,6 +293,17 @@ const savedTerminated = computed(() => !isCreatingContractorResult.value && Bool
 // 最后一条（2026-09-23 加）就是「未分配或已分给他人的户只能看详细信息」：
 // 界面照旧，但不给编辑、不给功能按钮。
 const dataReadOnly = computed(() => !props.canManage || !props.canWrite || isResultLocked.value || Boolean(terminalPendingOperation.value) || savedTerminated.value);
+
+const readOnlyHint = computed(() => {
+  if (!props.canManage) return "当前账号无编辑权限，只能查看详细信息";
+  if (props.activeBatch?.status === "finished") return "调查批次已结束，只能查看详细信息";
+  if (props.canWrite === false) return "该承包方未分配给你，只能查看详细信息";
+  if (resultForm.isLocked) return "承包方已锁定，只能查看详细信息";
+  if (resultForm.surveyStatus === "confirmed") return "调查结果已确认，只能查看详细信息";
+  if (savedTerminated.value) return "该承包方已注销或已分户/合户，只能查看详细信息";
+  if (terminalPendingOperation.value) return "存在未保存的终结操作，只能查看详细信息";
+  return "当前为只读模式，只能查看详细信息";
+});
 const hasPendingOperations = computed(() => pendingOperations.value.length > 0);
 const canRollbackSavedParcelChange = computed(() => props.canManage && props.canWrite && !isResultLocked.value && !hasPendingOperations.value);
 const canRollbackSplitHousehold = computed(() => props.canManage && props.canWrite && props.activeBatch?.status !== "finished" && resultForm.resultStatus === "cancelled" && resultForm.changeType === "split_household" && !hasPendingOperations.value);
@@ -402,7 +414,7 @@ const parcelsForPanel = computed(() => {
 
 // ---- Factories ----
 function createEmptyResult() {
-  return { contractorUid: "", code: "", typeCode: "1", name: "", idType: "1", idNo: "", address: "", postcode: "000000", mobile: "", memberCount: 0, groupRegionCode: "", groupRegionName: "", surveyDate: "", surveyorName: "", surveyNote: "", publicNoticeNote: "", publicNoticeRecorder: "", publicNoticeReviewDate: "", publicNoticeReviewer: "", surveyStatus: "surveyed", resultStatus: "normal", changeType: "none", changeReason: "", policyBasis: "", evidenceSummary: "", remark: "", isTerminal: false, baseContractor: null, issuer: null, baseIssuer: null, familyMembers: [], generatedRequestId: null, generatedRequestNo: "" };
+  return { contractorUid: "", code: "", typeCode: "1", name: "", idType: "1", idNo: "", address: "", postcode: "000000", mobile: "", memberCount: 0, groupRegionCode: "", groupRegionName: "", surveyDate: "", surveyorName: "", surveyNote: "", publicNoticeNote: "", publicNoticeRecorder: "", publicNoticeReviewDate: "", publicNoticeReviewer: "", surveyStatus: "surveyed", resultStatus: "normal", isLocked: false, changeType: "none", changeReason: "", policyBasis: "", evidenceSummary: "", remark: "", isTerminal: false, baseContractor: null, issuer: null, baseIssuer: null, familyMembers: [], generatedRequestId: null, generatedRequestNo: "" };
 }
 function createEmptyRestructure() {
   return { restructureType: "split", sourceContractorUid: "", sourceCbfbm: "", sourceCbfmc: "", targetContractorUid: "", targetCbfbm: "", targetCbfmc: "", newCbfbm: "", newCbfmc: "", status: "draft", reason: "", policyBasis: "", rightsSummary: "", contractDisposition: "", certificateDisposition: "", remark: "", members: [] };
@@ -1156,17 +1168,39 @@ defineExpose({ openForResult, openForCreate });
 </script>
 
 <style scoped>
-.survey-toolbar { display: flex; align-items: center; flex-wrap: wrap; row-gap: 8px; margin-bottom: 12px; }
-.toolbar-print { margin-left: auto; }
+/* 调查详情弹窗：压缩头/尾/正文留白，正文内部滚动，避免整页被弹窗撑高。 */
+:global(.contractor-result-dialog .el-dialog__header) {
+  padding: 12px 18px 8px;
+  margin-right: 0;
+}
+
+:global(.contractor-result-dialog .el-dialog__title) {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+:global(.contractor-result-dialog .el-dialog__body) {
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  padding: 8px 18px 4px;
+}
+
+:global(.contractor-result-dialog .el-dialog__footer) {
+  padding: 8px 18px 12px;
+  border-top: 1px solid var(--line);
+}
+
+.survey-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-bottom: 8px; }
+.toolbar-print { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
 .survey-dialog-form { margin-top: 16px; }
 .snapshot-member-title { color: #334155; font-size: 14px; font-weight: 700; margin: 16px 0 10px; }
 .snapshot-changed-value { background: #fef3c7; border: 1px solid #f59e0b; border-radius: 4px; color: #92400e; display: inline-block; font-weight: 600; line-height: 1.5; padding: 0 6px; }
-.phase2-actions, .phase2-upload { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
-.phase2-form { margin: 14px 0; }
-.phase2-submit { margin-top: 12px; }
-.pending-operation-alert { margin-bottom: 12px; }
-.pending-operation-list { display: flex; flex-direction: column; gap: 8px; margin: -4px 0 12px; }
-.pending-operation-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border: 1px solid #f3d19e; border-radius: 8px; background: #fdf6ec; }
+.phase2-actions, .phase2-upload { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.phase2-form { margin: 10px 0; }
+.phase2-submit { margin-top: 10px; }
+.pending-operation-alert { margin-bottom: 8px; }
+.pending-operation-list { display: flex; flex-direction: column; gap: 6px; margin: -2px 0 8px; }
+.pending-operation-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 10px; border: 1px solid #f3d19e; border-radius: 6px; background: #fdf6ec; }
 .pending-operation-text { color: #8a5a12; font-size: 13px; }
 
 /* ---- 折叠面板：主数据区与「调查附件」区共用同一套样式，卡片式、与正文明确分区 ---- */
@@ -1234,20 +1268,58 @@ defineExpose({ openForResult, openForCreate });
 /* 附属区与主数据区同一套样式，只在间距上留一道分隔；不另设配色，保持两处观感一致。 */
 .survey-collapse--aux { margin-top: 6px; }
 
-/* ---- 按钮式面板切换 ---- */
+/* ---- 按钮式面板切换：横向铺满，淡色标签 ---- */
 .survey-panel-switch {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 12px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  width: 100%;
+  margin-bottom: 8px;
 }
 
 .survey-panel-switch :deep(.el-button) {
+  width: 100%;
+  height: 30px;
+  min-width: 0;
   margin-left: 0;
+  padding: 5px 10px;
+  overflow: hidden;
+  color: #60758d;
+  background: #f6f9fd;
+  border: 1px solid #dce7f3;
+  border-radius: 5px;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.survey-panel-switch :deep(.el-button:hover) {
+  color: #2f7fd8;
+  background: #eef6ff;
+  border-color: #b8d7f7;
+}
+
+.survey-panel-switch :deep(.el-button.is-active) {
+  color: #2f7fd8;
+  background: #e5f1ff;
+  border-color: #9dc8f5;
+  font-weight: 600;
+}
+
+.survey-panel-switch :deep(.el-button.is-disabled) {
+  color: #a5b4c5;
+  background: #f8fafc;
+  border-color: #e7eef6;
 }
 
 .survey-panel-body {
-  min-height: 240px;
+  min-height: 180px;
+}
+
+@media (max-width: 860px) {
+  .survey-panel-switch {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .survey-panel-section {

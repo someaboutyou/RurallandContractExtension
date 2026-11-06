@@ -41,6 +41,54 @@ export function exportContractorSurveyXls(batchId) {
   return http.get(`/surveys/batches/${batchId}/contractors-xls`, { responseType: "blob" });
 }
 
+/** 按勾选的承包方批量导出调查表/声明书/测绘申请书。 */
+export function exportContractorDocuments(batchId, payload) {
+  return http.post(`/surveys/batches/${batchId}/contractors-export`, payload, {
+    responseType: "blob",
+    timeout: 300000,
+  });
+}
+
+/** 批量锁定/解锁承包方。 */
+export function lockSurveyContractors(batchId, payload) {
+  return http.post(`/surveys/batches/${batchId}/contractors-lock`, payload);
+}
+
+/** 家庭关系检查。 */
+export function checkContractorRelations(batchId) {
+  return http.get(`/surveys/batches/${batchId}/contractor-relations/check`, {
+    timeout: 120000,
+  });
+}
+
+/** 家庭关系批量替换。 */
+export function replaceContractorRelations(batchId, payload) {
+  return http.post(`/surveys/batches/${batchId}/contractor-relations/replace`, payload, {
+    timeout: 120000,
+  });
+}
+
+/** 承包地块导入预览：地块调查表 / 摸底核实表 / 矢量图斑。 */
+export function previewParcelImport(batchId, formData) {
+  return http.post(`/surveys/batches/${batchId}/parcel-imports/preview`, formData, {
+    timeout: 300000,
+  });
+}
+
+/** 承包地块导入提交。 */
+export function importParcels(batchId, formData) {
+  return http.post(`/surveys/batches/${batchId}/parcel-imports`, formData, {
+    timeout: 600000,
+  });
+}
+
+/** 家庭成员关联修复。 */
+export function repairContractorMembers(batchId) {
+  return http.post(`/surveys/batches/${batchId}/contractor-relations/repair-members`, {}, {
+    timeout: 120000,
+  });
+}
+
 /** 承包方调查表 Excel 导入预览：上传文件，返回逐户校验报告（不落库）。 */
 export function previewContractorSurveyXls(batchId, formData) {
   return http.post(`/surveys/batches/${batchId}/contractors-xls/preview`, formData, {
@@ -176,6 +224,22 @@ export function fetchSurveyIssuers(batchId, params) {
   return http.get(`/surveys/batches/${batchId}/issuers`, { params });
 }
 
+/** 单个发包方的《发包方调查表》Word。 */
+export function exportIssuerSurveyDocx(batchId, issuerUid) {
+  return http.get(`/surveys/batches/${batchId}/issuers/${issuerUid}/survey-docx`, {
+    responseType: "blob",
+    timeout: 120000,
+  });
+}
+
+/** 选中的发包方批量导出《发包方调查表》Word（单个 docx / 多个 zip）。 */
+export function exportIssuerSurveyDocxBulk(batchId, payload) {
+  return http.post(`/surveys/batches/${batchId}/issuers/export-docx`, payload, {
+    responseType: "blob",
+    timeout: 300000,
+  });
+}
+
 export function createSurveyIssuer(batchId, payload) {
   return http.post(`/surveys/batches/${batchId}/issuers`, payload);
 }
@@ -190,6 +254,10 @@ export function updateSurveyIssuer(batchId, issuerUid, payload) {
 
 export function deleteSurveyIssuer(batchId, issuerUid) {
   return http.delete(`/surveys/batches/${batchId}/issuers/${issuerUid}`);
+}
+
+export function deleteSurveyContractor(batchId, contractorUid) {
+  return http.delete(`/surveys/batches/${batchId}/results/${contractorUid}`);
 }
 
 export function mergeSurveyIssuers(batchId, payload) {

@@ -52,6 +52,10 @@ from app.schemas.survey import (
     SurveySplitHouseholdRequest,
     SurveyMergeHouseholdRequest,
     SurveyCurrentBatchUpdate,
+    ContractorDocumentExportRequest,
+    ContractorLockRequest,
+    ContractorRelationReplaceRequest,
+    IssuerSurveyDocxExportRequest,
     ParcelSurveyExportRequest,
     SurveyGenerateRequest,
     SurveyPlotSketchMapRead,
@@ -364,6 +368,87 @@ def merge_survey_issuers(
     current_user: User = Depends(require_permission("contractors.manage")),
 ):
     return {"data": survey_service.merge_issuers(db, batch_id, payload.model_dump(), current_user)}
+
+
+@router.post("/batches/{batch_id}/issuers/export-docx")
+def export_issuers_survey_docx(
+    batch_id: int,
+    payload: IssuerSurveyDocxExportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """按选中的发包方批量导出《发包方调查表》Word（单个 docx / 多个 zip）。"""
+    from app.services.issuer_survey_docx_service import (
+        DOCX_MEDIA_TYPE,
+        issuer_survey_docx_service,
+    )
+
+    files: list[tuple[str, bytes]] = []
+    seen: set[str] = set()
+    for raw_uid in payload.issuerUids:
+        issuer_uid = str(raw_uid or "").strip()
+        if not issuer_uid or issuer_uid in seen:
+            continue
+        seen.add(issuer_uid)
+        issuer = survey_service.get_issuer(db, batch_id, issuer_uid, current_user)
+        content, filename = issuer_survey_docx_service.render(
+            db, fbfbm=issuer["code"], batch_id=batch_id
+        )
+        files.append((filename, content))
+
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="未找到可导出的发包方调查表"
+        )
+
+    if len(files) == 1:
+        filename, content = files[0]
+        return Response(
+            content=content,
+            media_type=DOCX_MEDIA_TYPE,
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"
+            },
+        )
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for filename, content in files:
+            archive.writestr(filename, content)
+    zip_name = "发包方调查表.zip"
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(zip_name)}"
+        },
+    )
+
+
+@router.get("/batches/{batch_id}/issuers/{issuer_uid}/survey-docx")
+def export_issuer_survey_docx(
+    batch_id: int,
+    issuer_uid: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """导出一个发包方的《发包方调查表》Word。"""
+    from app.services.issuer_survey_docx_service import (
+        DOCX_MEDIA_TYPE,
+        issuer_survey_docx_service,
+    )
+
+    issuer = survey_service.get_issuer(db, batch_id, issuer_uid, current_user)
+    content, filename = issuer_survey_docx_service.render(
+        db, fbfbm=issuer["code"], batch_id=batch_id
+    )
+    return Response(
+        content=content,
+        media_type=DOCX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"
+        },
+    )
 
 
 @router.get("/batches/{batch_id}/issuers/{issuer_uid}", response_model=ApiResponse[SurveyIssuerRead])
@@ -963,6 +1048,140 @@ async def import_contractor_survey_xls(
     return {"data": survey_service.import_contractors_xls(db, batch_id, current_user, content)}
 
 
+@router.post("/batches/{batch_id}/contractors-export")
+def export_contractor_documents(
+    batch_id: int,
+    payload: ContractorDocumentExportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """按勾选的承包方批量导出调查表、声明书与测绘申请书。"""
+    from urllib.parse import quote
+
+    from app.services.contractor_document_export_service import (
+        contractor_document_export_service,
+    )
+
+    filename, content, media_type = contractor_document_export_service.export(
+        db,
+        batch_id,
+        payload.contractorUids,
+        payload.documents,
+        current_user,
+    )
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"
+        },
+    )
+
+
+@router.post("/batches/{batch_id}/contractors-lock", response_model=ApiResponse[dict])
+def lock_contractors(
+    batch_id: int,
+    payload: ContractorLockRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """批量锁定/解锁承包方（CS 版锁户）。"""
+    return {
+        "data": survey_service.set_result_locks(
+            db,
+            batch_id,
+            [item.model_dump() for item in payload.items],
+            current_user,
+        )
+    }
+
+
+@router.get("/batches/{batch_id}/contractor-relations/check", response_model=ApiResponse[dict])
+def check_contractor_relations(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """家庭关系检查（对齐 CS 版家庭关系处理）。"""
+    from app.services.contractor_relation_service import contractor_relation_service
+
+    return {"data": contractor_relation_service.check(db, batch_id, current_user)}
+
+
+@router.post("/batches/{batch_id}/contractor-relations/replace", response_model=ApiResponse[dict])
+def replace_contractor_relations(
+    batch_id: int,
+    payload: ContractorRelationReplaceRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """批量替换家庭关系（对齐 CS 版家庭关系处理）。"""
+    from app.services.contractor_relation_service import contractor_relation_service
+
+    return {
+        "data": contractor_relation_service.replace(
+            db,
+            batch_id,
+            payload.fromRelation,
+            payload.toRelation,
+            current_user,
+        )
+    }
+
+
+@router.post("/batches/{batch_id}/contractor-relations/repair-members", response_model=ApiResponse[dict])
+def repair_contractor_members(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """家庭成员关联修复（对齐 CS 版数据修复-家庭成员修复）。"""
+    from app.services.contractor_relation_service import contractor_relation_service
+
+    return {"data": contractor_relation_service.repair_members(db, batch_id, current_user)}
+
+
+# ── 承包地块导入：地块调查表 / 摸底核实表 / 矢量图斑 ────────────────────────
+
+
+@router.post("/batches/{batch_id}/parcel-imports/preview", response_model=ApiResponse[dict])
+async def preview_parcel_import(
+    batch_id: int,
+    importType: str = Form(...),
+    mode: str = Form("merge"),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    from app.services.parcel_import_service import parcel_import_service
+
+    content = await file.read()
+    return {
+        "data": parcel_import_service.preview(
+            db, batch_id, importType, content, mode, current_user
+        )
+    }
+
+
+@router.post("/batches/{batch_id}/parcel-imports", response_model=ApiResponse[dict])
+async def import_parcels(
+    batch_id: int,
+    importType: str = Form(...),
+    mode: str = Form("merge"),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    from app.services.parcel_import_service import parcel_import_service
+
+    content = await file.read()
+    return {
+        "data": parcel_import_service.import_data(
+            db, batch_id, importType, content, mode, current_user
+        )
+    }
+
+
 # ── 后台任务版导出 / 导入（大数据量不超时，前端轮询进度）──────────────────
 
 @router.get("/batches/{batch_id}/issuers-xls")
@@ -1118,6 +1337,18 @@ def update_survey_result(
     current_user: User = Depends(require_permission("contractors.manage")),
 ):
     return {"data": survey_service.update_result(db, batch_id, contractor_uid, payload.model_dump(), current_user)}
+
+
+@router.delete("/batches/{batch_id}/results/{contractor_uid}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_survey_result(
+    batch_id: int,
+    contractor_uid: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """删除调查承包方（连带成员、地块、合同等派生数据）。"""
+    survey_service.delete_result(db, batch_id, contractor_uid, current_user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/batches/{batch_id}/results/{contractor_uid}/confirm", response_model=ApiResponse[SurveyContractorRead])

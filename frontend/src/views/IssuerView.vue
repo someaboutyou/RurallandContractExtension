@@ -16,29 +16,62 @@
         <el-button plain @click="handleSearch">查询</el-button>
         <el-button plain @click="resetFilters">重置</el-button>
         <el-button plain @click="loadData">刷新</el-button>
+        <el-button plain :loading="exporting" @click="handleExportIssuerXls">导出发包方清单</el-button>
+        <el-button
+          plain
+          type="primary"
+          :disabled="!selectedRows.length"
+          @click="handleExportSelectedIssuerWord"
+        >
+          导出调查表{{ selectedRows.length ? `(${selectedRows.length})` : "" }}
+        </el-button>
+        <el-button v-if="canManage" plain @click="issuerXlsImportVisible = true">导入调查表</el-button>
         <el-button v-if="canManage" type="success" @click="openCreateDialog">新增发包方</el-button>
+        <el-button
+          v-if="canManage"
+          plain
+          type="primary"
+          :disabled="selectedRows.length < 2"
+          @click="openMergeDialog"
+        >
+          合并{{ selectedRows.length ? `(${selectedRows.length})` : "" }}
+        </el-button>
       </div>
     </div>
 
     <div class="table-shell">
       <div class="table-scroll">
-        <el-table v-loading="loading" :data="rows" border>
-          <el-table-column prop="code" label="发包方代码" min-width="180" />
-          <el-table-column prop="name" label="发包方名称" min-width="220" />
-          <el-table-column prop="ownerName" label="负责人" min-width="120" />
-          <el-table-column label="证件类型" min-width="100">
+        <el-table
+          ref="issuerTableRef"
+          v-loading="loading"
+          :data="rows"
+          border
+          :header-cell-style="{ textAlign: 'center' }"
+          @selection-change="handleSelectionChange"
+        >
+          <el-table-column type="selection" width="40" />
+          <el-table-column prop="code" label="发包方代码" min-width="150" show-overflow-tooltip />
+          <el-table-column prop="name" label="发包方名称" min-width="150" show-overflow-tooltip />
+          <el-table-column prop="ownerName" label="负责人" min-width="85" show-overflow-tooltip />
+          <el-table-column label="证件类型" min-width="85">
             <template #default="{ row }">{{ idTypeLabel(row.ownerIdType, row.ownerIdType) }}</template>
           </el-table-column>
-          <el-table-column prop="mobile" label="联系电话" min-width="140" />
-          <el-table-column prop="address" label="发包方地址" min-width="260" />
-          <el-table-column prop="surveyorName" label="调查员" min-width="120" />
-          <el-table-column prop="surveyDate" label="调查日期" min-width="120" />
-          <el-table-column v-if="canManage" label="操作" fixed="right" min-width="160">
+          <el-table-column prop="mobile" label="联系电话" min-width="110" />
+          <el-table-column prop="address" label="发包方地址" min-width="180" show-overflow-tooltip />
+          <el-table-column prop="surveyorName" label="调查员" min-width="85" show-overflow-tooltip />
+          <el-table-column prop="surveyDate" label="调查日期" min-width="100" />
+          <el-table-column v-if="canManage" label="操作" fixed="right" min-width="150">
             <template #default="{ row }">
               <div class="table-actions">
+                <el-button link type="primary" @click="handleExportIssuerWord(row)">导出</el-button>
                 <el-button link type="primary" @click="openEditDialog(row)">编辑</el-button>
                 <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
               </div>
+            </template>
+          </el-table-column>
+          <el-table-column v-else label="操作" fixed="right" min-width="70">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="handleExportIssuerWord(row)">导出</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -69,8 +102,8 @@
   >
     <el-tabs v-model="activeMainTab" class="compact-dialog-tabs">
       <el-tab-pane label="发包方信息" name="base">
-        <el-form ref="formRef" :model="form" :rules="rules" class="compact-form" label-position="top" status-icon>
-          <div class="form-grid">
+        <el-form ref="formRef" :model="form" :rules="rules" class="compact-form issuer-form" label-position="top" status-icon>
+          <div class="issuer-form-grid">
             <el-form-item label="发包方代码" prop="code">
               <el-input v-model="form.code" placeholder="请输入发包方代码" />
             </el-form-item>
@@ -104,11 +137,11 @@
                 placeholder="请选择调查日期"
               />
             </el-form-item>
-            <el-form-item class="form-span-2" label="发包方地址" prop="address">
+            <el-form-item class="issuer-span-3" label="发包方地址" prop="address">
               <el-input v-model="form.address" placeholder="请输入发包方地址" />
             </el-form-item>
-            <el-form-item class="form-span-2" label="调查记事" prop="notes">
-              <el-input v-model="form.notes" type="textarea" :rows="4" placeholder="请输入调查记事" />
+            <el-form-item class="issuer-span-3" label="调查记事" prop="notes">
+              <el-input v-model="form.notes" type="textarea" :rows="2" placeholder="请输入调查记事" />
             </el-form-item>
           </div>
         </el-form>
@@ -215,6 +248,18 @@
       <el-button :loading="submitting" type="success" @click="handleSubmit">保存</el-button>
     </template>
   </el-dialog>
+
+  <MergeIssuerDialog
+    ref="mergeIssuerDialog"
+    v-model="mergeVisible"
+    :rows="selectedRows"
+    @merged="onMerged"
+  />
+
+  <IssuerXlsImportDialog
+    v-model="issuerXlsImportVisible"
+    @imported="onIssuersImported"
+  />
 </template>
 
 <script setup>
@@ -225,6 +270,9 @@ import { Loading } from "@element-plus/icons-vue";
 import {
   createIssuer,
   deleteIssuer,
+  exportIssuerSurveyDocx,
+  exportIssuerSurveyDocxBulk,
+  exportIssuerXls,
   fetchIssuerContractors,
   fetchIssuerParcels,
   fetchIssuers,
@@ -232,6 +280,8 @@ import {
 } from "../api/issuer";
 import { useDialogMap } from "../composables/useDialogMap";
 import DictionarySelect from "../components/DictionarySelect.vue";
+import IssuerXlsImportDialog from "../components/issuers/IssuerXlsImportDialog.vue";
+import MergeIssuerDialog from "../components/issuers/MergeIssuerDialog.vue";
 import { useDictionary } from "../composables/useDictionary";
 import { useAuthStore } from "../stores/auth";
 import { validateChinaId, validateMobile, validatePostcode } from "../utils/validators";
@@ -250,6 +300,13 @@ const pageSize = ref(20);
 const keyword = ref("");
 const formRef = ref();
 const activeMainTab = ref("base");
+
+const issuerTableRef = ref(null);
+const selectedRows = ref([]);
+const mergeIssuerDialog = ref(null);
+const mergeVisible = ref(false);
+const issuerXlsImportVisible = ref(false);
+const exporting = ref(false);
 
 const issuerContractors = ref([]);
 const issuerContractorsLoading = ref(false);
@@ -583,5 +640,177 @@ async function handleDelete(row) {
   }
 }
 
+function handleSelectionChange(selection) {
+  selectedRows.value = selection || [];
+}
+
+function openMergeDialog() {
+  if (selectedRows.value.length < 2) {
+    ElMessage.warning("请至少勾选两个发包方");
+    return;
+  }
+  mergeIssuerDialog.value?.open();
+}
+
+function onMerged() {
+  selectedRows.value = [];
+  issuerTableRef.value?.clearSelection();
+  loadData();
+}
+
+// ---- 发包方调查表导入 / 导出（与 CS 版发包方管理同口径） ----
+function downloadBlob(data, filename) {
+  const url = URL.createObjectURL(data);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function filenameFromDisposition(disposition, fallback) {
+  const match = /filename\*=UTF-8''([^;]+)/i.exec(disposition || "");
+  return match ? decodeURIComponent(match[1]) : fallback;
+}
+
+async function handleExportIssuerXls() {
+  exporting.value = true;
+  try {
+    const { data, headers } = await exportIssuerXls({
+      keyword: keyword.value.trim() || undefined,
+    });
+    downloadBlob(
+      data,
+      filenameFromDisposition(headers?.["content-disposition"], "发包方调查表.xls"),
+    );
+    ElMessage.success("发包方清单已导出");
+  } catch {
+    ElMessage.error("导出发包方清单失败");
+  } finally {
+    exporting.value = false;
+  }
+}
+
+async function handleExportIssuerWord(row) {
+  if (!row?.code) return;
+  try {
+    const { data, headers } = await exportIssuerSurveyDocx(row.code);
+    downloadBlob(
+      data,
+      filenameFromDisposition(
+        headers?.["content-disposition"],
+        `${row.code}${row.name || ""}发包方调查表.docx`,
+      ),
+    );
+  } catch {
+    ElMessage.error("导出发包方调查表失败");
+  }
+}
+
+async function handleExportSelectedIssuerWord() {
+  if (!selectedRows.value.length) {
+    ElMessage.warning("请先勾选发包方");
+    return;
+  }
+  try {
+    const { data, headers } = await exportIssuerSurveyDocxBulk({
+      codes: selectedRows.value.map((row) => row.code),
+    });
+    const isZip = String(data?.type || "").includes("zip");
+    downloadBlob(
+      data,
+      isZip
+        ? "发包方调查表.zip"
+        : filenameFromDisposition(headers?.["content-disposition"], "发包方调查表.docx"),
+    );
+    ElMessage.success(`已导出 ${selectedRows.value.length} 个发包方调查表`);
+  } catch {
+    ElMessage.error("导出发包方调查表失败");
+  }
+}
+
+function onIssuersImported() {
+  selectedRows.value = [];
+  issuerTableRef.value?.clearSelection();
+  loadData();
+}
+
 loadData();
 </script>
+
+<style scoped>
+/* 发包方信息：按屏幕尺寸自适应列数并压缩行高，尽量一屏展示、不出现纵向滚动。 */
+.issuer-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 14px;
+}
+
+.issuer-form-grid :deep(.el-form-item) {
+  margin-bottom: 0;
+}
+
+.issuer-form-grid :deep(.el-form-item__label) {
+  padding-bottom: 2px;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.issuer-form-grid :deep(.el-input__wrapper),
+.issuer-form-grid :deep(.el-select__wrapper),
+.issuer-form-grid :deep(.el-date-editor.el-input),
+.issuer-form-grid :deep(.el-date-editor.el-input__wrapper) {
+  min-height: 34px;
+}
+
+.issuer-form-grid :deep(.el-textarea__inner) {
+  min-height: 52px !important;
+}
+
+.issuer-form-grid .issuer-span-3 {
+  grid-column: span 3;
+}
+
+@media (max-width: 1400px) {
+  .issuer-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .issuer-form-grid .issuer-span-3 {
+    grid-column: span 2;
+  }
+}
+
+@media (max-height: 760px) {
+  .issuer-form-grid {
+    gap: 6px 12px;
+  }
+
+  .issuer-form-grid :deep(.el-form-item__label) {
+    font-size: 12px;
+  }
+
+  .issuer-form-grid :deep(.el-input__wrapper),
+  .issuer-form-grid :deep(.el-select__wrapper),
+  .issuer-form-grid :deep(.el-date-editor.el-input),
+  .issuer-form-grid :deep(.el-date-editor.el-input__wrapper) {
+    min-height: 30px;
+  }
+
+  .issuer-form-grid :deep(.el-textarea__inner) {
+    min-height: 40px !important;
+  }
+}
+
+@media (max-width: 560px) {
+  .issuer-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .issuer-form-grid .issuer-span-3 {
+    grid-column: span 1;
+  }
+}
+</style>

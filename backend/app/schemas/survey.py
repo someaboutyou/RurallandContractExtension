@@ -72,6 +72,8 @@ class SurveyTaskRead(BaseModel):
     # 前端据此把「调查录入」降级成「查看详情」并把对话框切只读；
     # 默认 False 是安全方向：调用方忘传时就当只读，而不是当可写。
     canWrite: bool = False
+    # 锁户标记：锁定后只读，且不能删除。
+    isLocked: bool = False
 
 
 class SurveyDeregisteredContractorRead(BaseModel):
@@ -773,6 +775,7 @@ class SurveyContractorRead(BaseModel):
     familyMembers: list[SurveyMemberRead]
     generatedRequestId: int | None = None
     generatedRequestNo: str | None = None
+    isLocked: bool = False
 
 
 # ── 摸底表（2026-10-09 礼泉试点；2026-10-10 简化）──────────────────────────
@@ -793,6 +796,29 @@ class ParcelSurveyExportRequest(BaseModel):
 
 class SurveyCurrentBatchUpdate(BaseModel):
     batchId: int
+
+
+class IssuerSurveyDocxExportRequest(BaseModel):
+    issuerUids: list[str] = Field(min_length=1, max_length=500)
+
+
+class ContractorDocumentExportRequest(BaseModel):
+    contractorUids: list[str] = Field(min_length=1, max_length=500)
+    documents: list[str] = Field(min_length=1, max_length=10)
+
+
+class ContractorLockItem(BaseModel):
+    contractorUid: str = Field(min_length=1, max_length=36)
+    locked: bool
+
+
+class ContractorLockRequest(BaseModel):
+    items: list[ContractorLockItem] = Field(min_length=1, max_length=500)
+
+
+class ContractorRelationReplaceRequest(BaseModel):
+    fromRelation: str = Field(min_length=1, max_length=8)
+    toRelation: str = Field(min_length=1, max_length=8)
 
 
 # ── 数据质检 ─────────────────────────────────────────────────

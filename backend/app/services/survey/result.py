@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
+from app.models.cbht import Cbht
 from app.models.survey import (
     SurveyCbfBase,
     SurveyCbfJtcyBase,
@@ -17,6 +18,7 @@ from app.models.survey import (
     SurveyFbfResult,
 )
 from app.models.user import User
+from app.repositories.contractor_repository import contractor_repository
 from app.services.data_access_service import data_access_service
 
 logger = logging.getLogger(__name__)
@@ -75,6 +77,8 @@ class SurveyServiceResultMixin:
         result = self._get_result(db, batch_id, contractor_uid)
         if result.survey_status in self.locked_survey_statuses:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="调查成果已确认，不能继续编辑")
+        if bool(getattr(result, "is_locked", False)):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="承包方已锁定，不能继续编辑")
         if self.is_terminal_result(result):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该承包户已注销，撤回注销、分户或合并操作后才能修改")
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
@@ -392,6 +396,128 @@ class SurveyServiceResultMixin:
         return self.get_result(db, batch_id, contractor_uid, current_user)
 
 
+    def delete_result(self, db: Session, batch_id: int, contractor_uid: str, current_user: User) -> None:
+        """删除一户调查成果。
+
+        口径对齐 CS 版「删除承包方」：确认后连带删除该户的成员、地块关联、
+        合同等派生数据；已确认（锁定）的承包方与已结束批次不允许删除。
+        """
+        batch = self._ensure_batch(db, batch_id)
+        # 先按批次定位任务快照，再通过 base.result_id 精确取该户成果：
+        # 不能只按 contractor_uid 取最新结果，避免同名户跨批次时删错。
+        base = db.scalars(
+            select(SurveyCbfBase)
+            .where(
+                SurveyCbfBase.tenant_code == batch.tenant_code,
+                SurveyCbfBase.batch_id == batch_id,
+                SurveyCbfBase.contractor_uid == contractor_uid,
+            )
+            .order_by(SurveyCbfBase.id.desc())
+            .execution_options(skip_tenant_scope=True)
+        ).first()
+        result = db.get(SurveyCbfResult, base.result_id) if base is not None and base.result_id else None
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="承包方不存在"
+            )
+        data_access_service.ensure_code_in_scope(
+            current_user, result.cbfbm, detail="承包方不在当前数据权限范围内"
+        )
+        self._ensure_batch_editable_status(batch, action="删除承包方")
+        if result.survey_status == "confirmed":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="承包方已确认，不能删除",
+            )
+        if bool(getattr(result, "is_locked", False)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="承包方已锁定，不能删除",
+            )
+        # 与录入同源：只能删除自己有写权限的户（管理员豁免）。
+        self.ensure_task_write_permission(db, batch, result, current_user)
+
+        try:
+            # CS 版删除承包方会关联删除合同；先删合同再走成果级联删除，
+            # 两者在同一事务里由 repository 统一提交。
+            db.execute(
+                delete(Cbht).where(
+                    Cbht.tenant_code == result.tenant_code,
+                    Cbht.cbfbm == result.cbfbm,
+                )
+            )
+            contractor_repository.delete_contractor(db, result)
+        except Exception:
+            db.rollback()
+            raise
+
+    def set_result_locks(
+        self,
+        db: Session,
+        batch_id: int,
+        items: list[dict],
+        current_user: User,
+    ) -> dict:
+        """批量锁定/解锁承包方（CS 版「锁定/解锁户」）。
+
+        锁定是独立于确认状态的保护标记：锁定后不能修改、删除该户。
+        """
+        batch = self._ensure_batch(db, batch_id)
+        wanted: dict[str, bool] = {}
+        for item in items or []:
+            uid = str(item.get("contractorUid") or "").strip()
+            if uid:
+                wanted[uid] = bool(item.get("locked"))
+        if not wanted:
+            raise HTTPException(status_code=400, detail="请先选择承包方")
+
+        bases = db.scalars(
+            select(SurveyCbfBase)
+            .where(
+                SurveyCbfBase.tenant_code == batch.tenant_code,
+                SurveyCbfBase.batch_id == batch_id,
+                SurveyCbfBase.contractor_uid.in_(list(wanted)),
+            )
+            .execution_options(skip_tenant_scope=True)
+        ).all()
+        result_ids = [base.result_id for base in bases if base.result_id]
+        results = (
+            db.scalars(
+                select(SurveyCbfResult)
+                .where(SurveyCbfResult.id.in_(result_ids))
+                .execution_options(skip_tenant_scope=True)
+            ).all()
+            if result_ids
+            else []
+        )
+
+        updated = locked_count = unlocked_count = 0
+        for result in results:
+            target = wanted.get(result.contractor_uid)
+            if target is None:
+                continue
+            data_access_service.ensure_code_in_scope(
+                current_user, result.cbfbm, detail="承包方不在当前数据权限范围内"
+            )
+            if bool(result.is_locked) != target:
+                result.is_locked = target
+                updated += 1
+            if target:
+                locked_count += 1
+            else:
+                unlocked_count += 1
+        db.commit()
+        logger.info(
+            "承包方锁户 batch_id=%s 提交=%s 变更=%s 锁定=%s 解锁=%s 操作人=%s",
+            batch_id, len(wanted), updated, locked_count, unlocked_count,
+            getattr(current_user, "username", None),
+        )
+        return {
+            "updated": updated,
+            "locked": locked_count,
+            "unlocked": unlocked_count,
+        }
+
     def get_phase2_context(self, db: Session, batch_id: int, contractor_uid: str, current_user: User) -> dict:
         result = self._get_result(db, batch_id, contractor_uid)
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="survey result out of scope")
@@ -643,6 +769,7 @@ class SurveyServiceResultMixin:
             "groupRegionName": item.group_region_name,
             "surveyStatus": item.survey_status,
             "resultStatus": item.result_status,
+            "isLocked": bool(item.is_locked),
             "isChanged": item.is_changed,
             "changeType": item.change_type,
             "changeReason": item.change_reason,

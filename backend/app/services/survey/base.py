@@ -250,6 +250,8 @@ class SurveyServiceBase:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="调查批次已结束，不能继续编辑")
         if result.survey_status == "confirmed":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="调查成果已确认，不能继续编辑")
+        if bool(getattr(result, "is_locked", False)):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="承包方已锁定，不能继续编辑")
         if current_user is not None and batch is not None:
             self.ensure_task_write_permission(db, batch, result, current_user)
 

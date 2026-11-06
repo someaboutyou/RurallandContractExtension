@@ -329,6 +329,8 @@ class SurveyServiceTaskMixin:
         self.ensure_task_write_permission(db, batch, result, current_user)
         if result.survey_status in self.locked_survey_statuses:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="调查成果已确认，不能跳过")
+        if bool(getattr(result, "is_locked", False)):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="承包方已锁定，不能跳过")
         now = datetime.now(timezone.utc)
         result.survey_status = "skipped"
         result.result_status = "normal"
@@ -376,6 +378,8 @@ class SurveyServiceTaskMixin:
         self._ensure_batch_editable_status(batch, action="继续确认")
         result = self._get_result(db, batch_id, contractor_uid)
         data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
+        if bool(getattr(result, "is_locked", False)):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="承包方已锁定，不能确认")
         # 注意：确认是「复核」动作，语义上不属于「修改调查数据」，
         # 因此这里刻意不做任务归属校验——区域审核人仍可确认归属他人的户。
         # ⛔ 准入集合的唯一来源：`base.py::confirmable_survey_statuses`。
@@ -556,7 +560,8 @@ class SurveyServiceTaskMixin:
             "assignedToName": item.assigned_to_name,
             "assignedAt": item.assigned_at,
             "investigatorName": result.investigator_name if result else None,
-            "canWrite": can_write,
+            "isLocked": bool(result.is_locked) if result is not None else False,
+            "canWrite": can_write and not (bool(result.is_locked) if result is not None else False),
         }
 
 
@@ -593,7 +598,8 @@ class SurveyServiceTaskMixin:
             "assignedToName": task.assigned_to_name if task else None,
             "assignedAt": task.assigned_at if task else None,
             "investigatorName": result.investigator_name,
-            "canWrite": can_write,
+            "isLocked": bool(result.is_locked),
+            "canWrite": can_write and not bool(result.is_locked),
         }
 
 
@@ -630,7 +636,8 @@ class SurveyServiceTaskMixin:
             "assignedToName": task.assigned_to_name if task else None,
             "assignedAt": task.assigned_at if task else None,
             "investigatorName": result.investigator_name if result else None,
-            "canWrite": can_write,
+            "isLocked": bool(result.is_locked) if result is not None else False,
+            "canWrite": can_write and not (bool(result.is_locked) if result is not None else False),
         }
 
 
