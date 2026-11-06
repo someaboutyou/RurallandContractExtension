@@ -24,6 +24,7 @@ from app.models.user import User
 from app.services.data_access_service import data_access_service
 from app.services.issuer_service import issuer_service
 from app.services.survey.issuer_excel_transfer import (
+    _DEFAULT_ID_TYPE,
     ISSUER_ID_TYPE_LABELS,
     SurveyServiceIssuerExcelTransferMixin,
 )
@@ -233,7 +234,7 @@ class IssuerExcelTransferService:
             "code": data["code"],
             "name": data["name"],
             "ownerName": data["responsibleName"],
-            "ownerIdType": data["responsibleIdType"],
+            "ownerIdType": data["responsibleIdType"] or _DEFAULT_ID_TYPE,
             "ownerIdNo": data["responsibleIdNo"],
             "mobile": data.get("phone") or None,
             "address": data["address"],

@@ -302,8 +302,9 @@ class SurveyServiceIssuerExcelTransferMixin:
 
         id_type_raw = (row.get("id_type_raw") or "").strip()
         id_type = ISSUER_ID_TYPE_CODES.get(id_type_raw) or (id_type_raw if id_type_raw in ISSUER_ID_TYPE_LABELS else "")
-        if not id_type:
-            id_type = _DEFAULT_ID_TYPE
+        # ⛔ 空证件类型保持为空：缺省值「1」只允许在**新增落库**时兜底。
+        # 若在这里默认成「1」，更新行会把库内的组织机构代码等类型误判为变更
+        # 并悄悄覆盖（导出→原样回传也会整批误判，2026-11-06 审计发现）。
 
         data = {
             "rowIndex": row.get("rowIndex"),
@@ -451,6 +452,9 @@ class SurveyServiceIssuerExcelTransferMixin:
                 payload[payload_key] = value
         if data.get("surveyDate"):
             payload["surveyDate"] = data["surveyDate"]
+        if existing is None and "responsibleIdType" not in payload:
+            # 新增行证件类型留空 → 兜底「1」居民身份证（更新行留空 = 保留库值）
+            payload["responsibleIdType"] = _DEFAULT_ID_TYPE
         if existing is not None:
             # 更新时回填既有的簿记字段：页面编辑也是整体回传这些值，
             # 导入不该把 change_type / result_status 冲掉
