@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     :model-value="modelValue"
-    title="导入发包方调查表（Excel）"
+    title="导入发包方清单（Excel）"
     width="860px"
     :close-on-click-modal="false"
     @update:model-value="emit('update:modelValue', $event)"

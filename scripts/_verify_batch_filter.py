@@ -1,4 +1,4 @@
-"""离线验证：发包方 / 承包方管理的批次过滤（batchId）逻辑。
+﻿"""离线验证：发包方 / 承包方管理的批次过滤（batchId）逻辑。
 
 只读不写库。取库里一个真实批次，分别对比：
   1. batch_issuer_codes / batch_contractor_uids 能取到成员；
@@ -91,3 +91,16 @@ if contractor_uids:
     batch_uid_set = set(contractor_uids)
     assert ov_batch["total"] <= ov_all["total"]
 print("PARCEL OVERVIEW CHECK PASSED")
+
+# ---- 追加：批次全量导出取数口径（batchId → batch codes ∩ 数据权限范围）----
+from sqlalchemy import select  # noqa: E402
+from app.models.fbf import Fbf  # noqa: E402
+from app.services.data_access_service import data_access_service  # noqa: E402
+
+batch_codes = issuer_service.batch_issuer_codes(db, batch.id)
+scope_filters = data_access_service.build_code_scope_filters(Fbf.fbfbm, user)
+scoped = set(db.scalars(select(Fbf.fbfbm).where(Fbf.fbfbm.in_(batch_codes), *scope_filters)).all())
+resolved = [c for c in batch_codes if c in scoped]
+print(f"批次全量导出: 快照 {len(batch_codes)} → 权限内 {len(resolved)}")
+assert len(resolved) <= len(batch_codes)
+print("BATCH EXPORT RESOLVE CHECK PASSED")

@@ -54,6 +54,7 @@ const props = defineProps({
   modelValue: { type: Boolean, default: false },
   kind: { type: String, default: "survey" }, // survey=发包方调查表 | publicity=村组公示签字表
   codes: { type: Array, default: () => [] },
+  batchId: { type: Number, default: null }, // 未勾选时按批次导出全部
 });
 const emit = defineEmits(["update:modelValue"]);
 
@@ -87,7 +88,10 @@ function start() {
   job.value = { message: "正在创建导出任务…" };
   jobStatus.value = "running";
   autoDownloaded.value = false;
-  startIssuerExportJob({ kind: props.kind, codes: props.codes })
+  const payload = props.codes.length
+    ? { kind: props.kind, codes: props.codes }
+    : { kind: props.kind, batchId: props.batchId };
+  startIssuerExportJob(payload)
     .then(({ data }) => {
       const taskId = data?.data?.taskId;
       if (!taskId) throw new Error("no taskId");

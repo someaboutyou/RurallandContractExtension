@@ -68,7 +68,12 @@ class IssuerDocxExportRequest(BaseModel):
 
 
 class IssuerExportJobRequest(BaseModel):
-    """批量导出后台任务：kind=survey(发包方调查表) | publicity(村组公示签字表)。"""
+    """批量导出后台任务：kind=survey(发包方调查表) | publicity=村组公示签字表。
+
+    导出范围二选一：``codes``（勾选的发包方）或 ``batchId``（导出该批次全部
+    可见发包方，数据范围仍按当前用户权限收敛）。
+    """
 
     kind: Literal["survey", "publicity"]
-    codes: list[str] = Field(min_length=1, max_length=500)
+    codes: list[str] | None = Field(default=None, max_length=500)
+    batchId: int | None = None

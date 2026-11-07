@@ -262,20 +262,34 @@ def create_issuer_export_job(
 
     kind：``survey`` = 发包方调查表（Word，多个 zip）；``publicity`` = 村组公示签字表
     （一个发包方一个 sheet，合并为一个 xls）。
+    导出范围：``codes``（勾选清单）或 ``batchId``（当前批次全部，仍按数据权限收敛）。
     """
+    from sqlalchemy import select
+
     from app.services.issuer_export_task_service import issuer_export_task_service
 
     # 数据范围在创建任务时一次性校验（端点会话里有 current_user），
     # 后台线程只渲染已通过校验的编码清单。
     codes: list[str] = []
     seen: set[str] = set()
-    for raw_code in payload.codes:
-        code = str(raw_code or "").strip()
-        if not code or code in seen:
-            continue
-        seen.add(code)
-        _ensure_issuer_exportable(db, code, current_user)
-        codes.append(code)
+    if payload.codes:
+        for raw_code in payload.codes:
+            code = str(raw_code or "").strip()
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            _ensure_issuer_exportable(db, code, current_user)
+            codes.append(code)
+    elif payload.batchId is not None:
+        # 未勾选时导出当前批次全部：批次快照 ∩ 当前用户数据权限范围。
+        batch_codes = issuer_service.batch_issuer_codes(db, payload.batchId)
+        scope_filters = data_access_service.build_code_scope_filters(Fbf.fbfbm, current_user)
+        scoped = set(
+            db.scalars(
+                select(Fbf.fbfbm).where(Fbf.fbfbm.in_(batch_codes), *scope_filters)
+            ).all()
+        )
+        codes = [code for code in batch_codes if code in scoped]
     if not codes:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未找到可导出的发包方")
 

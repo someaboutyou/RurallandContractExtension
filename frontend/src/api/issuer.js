@@ -1,4 +1,4 @@
-import http from "./http";
+﻿import http from "./http";
 
 export function fetchIssuers(params) {
   return http.get("/issuers", { params });
@@ -42,7 +42,7 @@ export function previewIssuerXls(formData) {
   return http.post("/issuers/xls/preview", formData, { timeout: 120000 });
 }
 
-/** 导入发包方调查表 Excel。 */
+/** 导入发包方清单 Excel。 */
 export function importIssuerXls(formData) {
   return http.post("/issuers/xls/import", formData, { timeout: 300000 });
 }

@@ -20,20 +20,18 @@
         <el-button
           plain
           type="primary"
-          :disabled="!selectedRows.length"
           @click="openBatchExport('survey')"
         >
-          导出调查表{{ selectedRows.length ? `(${selectedRows.length})` : "" }}
+          导出调查表{{ selectedRows.length ? `(${selectedRows.length})` : "(全部)" }}
         </el-button>
         <el-button
           plain
           type="primary"
-          :disabled="!selectedRows.length"
           @click="openBatchExport('publicity')"
         >
-          导出公示签字表{{ selectedRows.length ? `(${selectedRows.length})` : "" }}
+          导出公示签字表{{ selectedRows.length ? `(${selectedRows.length})` : "(全部)" }}
         </el-button>
-        <el-button v-if="canManage" plain @click="issuerXlsImportVisible = true">导入调查表</el-button>
+        <el-button v-if="canManage" plain @click="issuerXlsImportVisible = true">导入发包方清单</el-button>
         <el-button v-if="canManage" type="success" @click="openCreateDialog">新增发包方</el-button>
         <el-button
           v-if="canManage"
@@ -299,6 +297,7 @@
     v-model="exportDialogVisible"
     :kind="exportKind"
     :codes="exportCodes"
+    :batch-id="exportBatchId"
   />
 </template>
 
@@ -771,14 +770,21 @@ function handleRowExport(command, row) {
 const exportDialogVisible = ref(false);
 const exportKind = ref("survey"); // survey=发包方调查表 | publicity=村组公示签字表
 const exportCodes = ref([]);
+const exportBatchId = ref(null);
 
 function openBatchExport(kind) {
-  if (!selectedRows.value.length) {
-    ElMessage.warning("请先勾选发包方");
+  exportKind.value = kind;
+  if (selectedRows.value.length) {
+    // 勾选了导出勾选清单；没勾选则导出当前批次全部（批次也没选则提示）。
+    exportCodes.value = selectedRows.value.map((row) => row.code);
+    exportBatchId.value = null;
+  } else if (activeBatch.value?.id) {
+    exportCodes.value = [];
+    exportBatchId.value = activeBatch.value.id;
+  } else {
+    ElMessage.warning("请先勾选发包方，或在左侧选择一个调查批次");
     return;
   }
-  exportKind.value = kind;
-  exportCodes.value = selectedRows.value.map((row) => row.code);
   exportDialogVisible.value = true;
 }
 
