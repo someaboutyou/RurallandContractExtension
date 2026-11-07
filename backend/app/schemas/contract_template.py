@@ -20,3 +20,16 @@ class ContractTemplatePreviewRequest(BaseModel):
 
 class ContractTemplatePreviewRead(BaseModel):
     renderedHtml: str
+
+
+class PrintTemplateListItem(BaseModel):
+    """打印模板管理页左侧清单条目。"""
+
+    key: str
+    title: str
+    group: str
+    filename: str
+    note: str | None = None
+    updatedAt: str | None = None
+    size: int = 0
+    available: bool = True

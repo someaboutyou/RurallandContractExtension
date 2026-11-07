@@ -132,16 +132,9 @@ const REQUEST_MODULE_PERMISSIONS = [
 const PRINT_TEMPLATE_NAV_ITEM = {
   key: "print-templates",
   label: "打印模板管理",
-  to: "/print-templates/contract",
+  to: "/print-templates",
   activePrefix: "/print-templates",
   permissions: ["contract_templates.manage"],
-  children: [
-    { to: "/print-templates/contract", label: "合同模板", permissions: ["contract_templates.manage"] },
-    { to: "/print-templates/plot-sketch-map", label: "承包地块示意图模板", permissions: ["contract_templates.manage"] },
-    { to: "/print-templates/registration-application", label: "不动产登记申请书模板", permissions: ["contract_templates.manage"] },
-    { to: "/print-templates/cadastral-survey", label: "地籍调查表模板", permissions: ["contract_templates.manage"] },
-    { to: "/print-templates/issuer-survey", label: "发包方调查表模板", permissions: ["contract_templates.manage"] },
-  ],
 };
 
 const route = useRoute();
@@ -191,7 +184,7 @@ const navItems = [
       { to: "/issuers", label: "发包方管理", permissions: ["issuers.view"] },
       { to: "/survey-contractors", label: "承包方管理", permissions: ["contractors.view"] },
       { to: "/parcels", label: "承包地块管理", permissions: ["contractors.view"] },
-      { to: "/survey-templates", label: "模板管理", permissions: ["contractors.view"] },
+      { to: "/survey-templates", label: "空白模板下载", permissions: ["contractors.view"] },
       { to: "/requests", label: "业务申请", permissions: REQUEST_MODULE_PERMISSIONS },
     ],
   },
@@ -261,8 +254,9 @@ const activeTopItem = computed(() =>
 );
 
 const secondaryNavItems = computed(() => {
+  // 打印模板管理是单页（模板清单在页面左侧面板内），不显示任何二级菜单。
   if (isRoutePrefixActive(PRINT_TEMPLATE_NAV_ITEM.activePrefix)) {
-    return PRINT_TEMPLATE_NAV_ITEM.children.filter((child) => authStore.hasAnyPermission(child.permissions));
+    return [];
   }
   return activeTopItem.value?.children || [];
 });

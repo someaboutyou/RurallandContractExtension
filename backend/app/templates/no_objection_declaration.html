@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>公示无异议声明书</title>
+<style>
+  /* 《公示无异议声明书》空白母版 —— 版式复刻自 survey_forms/公示无异议声明书.dot：
+     A4 纵向，页边距上下 25.4mm、左右 31.75mm；
+     标题黑体 24pt、行距 500 twips = 25pt（exact），标题前约 25mm 留白；
+     正文仿宋_GB2312 14pt（四号），行距 1.5 倍，首行缩进约 2 字符。 */
+  @page { size: A4 portrait; margin: 0; }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    color: #000;
+    background: #f2f3f5;
+    font-family: "SimSun", "宋体", serif;
+    font-size: 14pt;
+  }
+
+  .page {
+    width: 210mm;
+    height: 297mm;
+    margin: 0 auto;
+    padding: 25.4mm 31.75mm;
+    background: #fff;
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .page:last-child { page-break-after: auto; break-after: auto; }
+
+  .title {
+    margin: 25.3mm 0 2.8mm 0;
+    text-align: center;
+    font-family: "SimHei", "黑体", serif;
+    font-size: 24pt;
+    line-height: 25pt;
+  }
+
+  .body {
+    margin: 0;
+    font-family: "仿宋_GB2312", "仿宋", "FangSong", "SimSun", serif;
+    font-size: 14pt;
+    line-height: 1.5;
+  }
+
+  .indent { text-indent: 9.9mm; }
+
+  /* 四条声明项：原文悬挂缩进（首行 10.2mm、续行 20.4mm），此处按首行缩进近似 */
+  .item { text-indent: 10.2mm; }
+
+  .coda { text-indent: 14.8mm; }
+
+  /* 落款按原 .dot 的 firstLine 5169 twips ≈ 91.2mm 定位 */
+  .sign { text-indent: 91.2mm; }
+
+  .fill { text-decoration: underline; }
+</style>
+</head>
+<body>
+<section class="page">
+  <p class="title">公示无异议声明书</p>
+  <p class="body">本人<span class="fill">　　　　</span>系<span class="fill">　　　　　</span>村民，性别：<span class="fill">　　　</span>，身份证号：<span class="fill">　　　　　　　　　</span></p>
+  <p class="body" style="margin-top: 2.8mm;">我已对<span class="fill">　　　　</span>于<span class="fill">　　</span>年<span class="fill">　　</span>月<span class="fill">　　</span>日就农村土地承包经营权确权登记公示结果进行了认真核实，经全体家庭成员确认，特作如下声明：</p>
+  <p class="body item">户主（权利人）签字无异议；</p>
+  <p class="body item">本户家庭成员人口数无异议；</p>
+  <p class="body item">本户承包地田块分布位置和登记面积无异议；</p>
+  <p class="body item">本户对本组公示的集体经济组织成员名单无异议；</p>
+  <p class="body coda" style="margin-top: 5.6mm;">特此声明</p>
+  <p class="body sign" style="margin-top: 10.6mm;">声明人：<span class="fill">　　　　</span></p>
+  <p class="body sign"><span class="fill">　　　　</span>年<span class="fill">　　</span>月<span class="fill">　　</span>日</p>
+</section>
+</body>
+</html>

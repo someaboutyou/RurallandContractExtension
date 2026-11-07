@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>户主委托书</title>
+<style>
+  /* 《户主委托书》（原「委托代理声明书.dot」）空白母版 —— 版式复刻自
+     survey_forms/委托代理声明书.dot：
+     A4 纵向，页边距上下 25.4mm、左右 31.75mm；
+     标题宋体 24pt 加粗，正文仿宋 16pt（三号）；
+     行距 360/240 = 1.5 倍，首行缩进 640 twips = 11.3mm（2 字符）。
+     勾选框 □ 与 ☑ 铁律同字体：走 .box 指定 MS Gothic。 */
+  @page { size: A4 portrait; margin: 0; }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    color: #000;
+    background: #f2f3f5;
+    font-family: "SimSun", "宋体", serif;
+    font-size: 16pt;
+  }
+
+  .page {
+    width: 210mm;
+    height: 297mm;
+    margin: 0 auto;
+    padding: 25.4mm 31.75mm;
+    background: #fff;
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .page:last-child { page-break-after: auto; break-after: auto; }
+
+  .title {
+    margin: 0;
+    text-align: center;
+    font-weight: bold;
+    font-size: 24pt;
+    line-height: 1.5;
+  }
+
+  .body {
+    margin: 0;
+    font-family: "仿宋", "FangSong", "SimSun", serif;
+    font-size: 16pt;
+    line-height: 1.5;
+  }
+
+  .indent { text-indent: 11.3mm; }
+
+  /* 落款：按原 .dot 的 firstLine 缩进定位 */
+  .sign-name { text-indent: 66.7mm; font-family: "仿宋_GB2312", "仿宋", "FangSong", "SimSun", serif; font-size: 14pt; line-height: 1.5; }
+  .sign-date { margin-left: 59.3mm; text-indent: 7.4mm; font-family: "仿宋_GB2312", "仿宋", "FangSong", "SimSun", serif; font-size: 14pt; line-height: 1.5; }
+
+  /* 勾选框：MS Gothic（☑/□ 必须同字体，防"框有大有小"） */
+  .box { font-family: "MS Gothic", "SimSun", serif; }
+
+  /* 横线填值：全角空格 + 下划线 */
+  .fill { text-decoration: underline; }
+</style>
+</head>
+<body>
+<section class="page">
+  <p class="title">第二轮土地承包到期后再延长三十年</p>
+  <p class="title">户主委托书</p>
+  <p class="body indent" style="margin-top: 10.6mm;">委托人：<span class="fill">　　　　　</span>性别：<span class="fill">　　</span>年龄：<span class="fill">　　　</span>身份证号码：<span class="fill">　　　　　　　　　</span>承包地地址：<span class="fill">　　　　　　</span>，联系电话：<span class="fill">　　　　　　　</span>。</p>
+  <p class="body">　　代理人：<span class="fill">　　　　　</span>与委托人关系：<span class="fill">　　　　　</span>性别：<span class="fill">　　　</span>年龄：<span class="fill">　　　</span>身份证号码：<span class="fill">　　　　　　　　　　　　　　</span></p>
+  <p class="body">住址：<span class="fill">　　　　　　　　　　</span>联系电话：<span class="fill">　　　　　　　</span>。</p>
+  <p class="body">　　因委托人（<span class="box">□</span>外出/<span class="box">□</span>身体欠佳/<span class="box">□</span>文化水平有限/<span class="box">□</span>其他原因<span class="fill">　　　　　　</span>），特委托<span class="fill">　　　　　　</span>作为我在办理第二轮土地承包到期后再延长三十年事宜中的代理人，其代理权限如下：</p>
+  <p class="body indent">1、代表委托人在《农村土地（耕地）承包合同（家庭承包方式）》上签字。</p>
+  <p class="body indent">2、代表委托人在本次第二轮土地承包到期后再延长三十年过程中签收相关法律文书。</p>
+  <p class="sign-name" style="margin-top: 10.6mm;">委托人（签字按印）：</p>
+  <p class="sign-date">委托日期：<span class="fill">　　</span>年<span class="fill">　　</span>月<span class="fill">　　</span>日</p>
+</section>
+</body>
+</html>

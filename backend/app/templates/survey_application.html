@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>测绘申请书</title>
+<style>
+  /* 《测绘申请书》空白母版 —— 版式复刻自 survey_forms/测绘申请书.dot：
+     A4 纵向，页边距上下 25.4mm、左右 31.75mm；
+     标题黑体 24pt、行距 720 twips = 36pt（exact），标题后空一行；
+     正文仿宋_GB2312 14pt（四号），行距 500 twips = 25pt（exact），
+     首行缩进 560 twips = 9.9mm（2 字符）。 */
+  @page { size: A4 portrait; margin: 0; }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    color: #000;
+    background: #f2f3f5;
+    font-family: "SimSun", "宋体", serif;
+    font-size: 14pt;
+  }
+
+  .page {
+    width: 210mm;
+    height: 297mm;
+    margin: 0 auto;
+    padding: 25.4mm 31.75mm;
+    background: #fff;
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .page:last-child { page-break-after: auto; break-after: auto; }
+
+  .title {
+    margin: 0 0 12.7mm 0;
+    text-align: center;
+    font-family: "SimHei", "黑体", serif;
+    font-size: 24pt;
+    line-height: 36pt;
+  }
+
+  .body {
+    margin: 0;
+    font-family: "仿宋_GB2312", "仿宋", "FangSong", "SimSun", serif;
+    font-size: 14pt;
+    line-height: 25pt;
+  }
+
+  .indent { text-indent: 9.9mm; }
+
+  /* 落款按原 .dot 的 firstLine 缩进定位 */
+  .sign-name { text-indent: 56.8mm; }
+  .sign-date { text-indent: 51.9mm; }
+
+  .fill { text-decoration: underline; }
+</style>
+</head>
+<body>
+<section class="page">
+  <p class="title">测 绘 申 请 书</p>
+  <p class="body"><span class="fill">　　　　　　</span><strong>人民政府：</strong></p>
+  <p class="body" style="margin-top: 8.8mm;">在农村土地承包经营权确权登记工作中，为办理农村土地相关权证，经我户所有家庭成员一致商定同意，自愿申请由农村土地承包经营权确权登记工作的相关测绘作业单位或队伍按照有关规定和程序，对我户相关宗地的权利人、四至、面积进行调查和测绘，并对测绘结果进行认定。</p>
+  <p class="body indent" style="margin-top: 17.6mm;">特此申请</p>
+  <p class="body sign-name" style="margin-top: 26.4mm;">申请人（户主）：<span class="fill">　　　　　　　　</span></p>
+  <p class="body sign-date" style="margin-top: 8.8mm;">时间：<span class="fill">　　　　　　　　</span></p>
+</section>
+</body>
+</html>

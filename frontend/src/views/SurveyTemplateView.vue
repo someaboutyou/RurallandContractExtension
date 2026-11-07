@@ -2,9 +2,9 @@
   <section class="panel template-page">
     <div class="toolbar template-toolbar">
       <div>
-        <div class="panel-title">模板管理</div>
+        <div class="panel-title">空白模板下载</div>
         <div class="template-subtitle">
-          下载调查建库所需的调查表、声明书与申请书模板，模板格式与 CS 版建库系统一致。
+          下载建库所需的空白 Word 模板（由打印模板 HTML 母版渲染生成，版式与 CS 版一致），打印后即可手工填写。
         </div>
       </div>
       <div class="toolbar-actions">
@@ -15,7 +15,7 @@
     <div v-loading="loading" class="template-scroll">
       <el-empty
         v-if="!loading && !templates.length"
-        description="暂无可下载的模板文件"
+        description="暂无可下载的空白模板"
       />
 
       <section v-for="group in groups" :key="group.name" class="template-group">
@@ -24,18 +24,11 @@
           <article v-for="item in group.items" :key="item.key" class="template-card">
             <div class="template-card-head">
               <span class="template-card-title">{{ item.label }}</span>
-              <el-tag
-                :type="item.format === 'Excel' ? 'success' : 'primary'"
-                effect="plain"
-                size="small"
-              >
-                {{ item.format }}
-              </el-tag>
+              <el-tag type="primary" effect="plain" size="small">{{ item.format }}</el-tag>
             </div>
             <p class="template-card-desc">{{ item.description || "—" }}</p>
             <div class="template-card-meta">
               <span class="template-card-file" :title="item.filename">{{ item.filename }}</span>
-              <span>{{ formatSize(item.size) }}</span>
             </div>
             <div class="template-card-actions">
               <el-button
@@ -44,7 +37,7 @@
                 type="primary"
                 @click="handleDownload(item)"
               >
-                {{ item.available ? "下载模板" : "文件缺失" }}
+                {{ item.available ? "下载空白模板" : "模板缺失" }}
               </el-button>
             </div>
           </article>
@@ -74,14 +67,6 @@ const groups = computed(() => {
   return Array.from(buckets, ([name, items]) => ({ name, items }));
 });
 
-function formatSize(size) {
-  const value = Number(size) || 0;
-  if (!value) return "—";
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / 1024 / 1024).toFixed(2)} MB`;
-}
-
 async function loadTemplates() {
   loading.value = true;
   try {
@@ -107,7 +92,7 @@ async function handleDownload(item) {
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-    ElMessage.success(`已下载：${item.label}（${item.format}）`);
+    ElMessage.success(`已下载：${item.label}（空白 Word）`);
   } catch {
     ElMessage.error("下载模板失败");
   } finally {

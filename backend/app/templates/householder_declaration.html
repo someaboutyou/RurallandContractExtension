@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>户主声明书</title>
+<style>
+  /* 《户主声明书》空白母版 —— 版式复刻自 survey_forms/户主代表声明书.dot：
+     A4 纵向，页边距上下 25.4mm、左右 31.75mm；
+     标题方正小标宋简体 18pt（缺字体回退黑体），正文仿宋 16pt（三号）；
+     行距 600 twips = 30pt（exact），首行缩进 640 twips = 11.3mm（2 字符）。 */
+  @page { size: A4 portrait; margin: 0; }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    color: #000;
+    background: #f2f3f5;
+    font-family: "SimSun", "宋体", serif;
+    font-size: 16pt;
+  }
+
+  .page {
+    width: 210mm;
+    height: 297mm;
+    margin: 0 auto;
+    padding: 25.4mm 31.75mm;
+    background: #fff;
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .page:last-child { page-break-after: auto; break-after: auto; }
+
+  .title {
+    margin: 0;
+    text-align: center;
+    font-family: "方正小标宋简体", "SimHei", "黑体", serif;
+    font-size: 18pt;
+    line-height: 30pt;
+  }
+
+  .body {
+    margin: 0;
+    text-indent: 11.3mm;
+    font-family: "仿宋", "FangSong", "仿宋_GB2312", "SimSun", serif;
+    font-size: 16pt;
+    line-height: 30pt;
+  }
+
+  .sign {
+    margin: 0;
+    text-align: center;
+    font-family: "仿宋", "FangSong", "仿宋_GB2312", "SimSun", serif;
+    font-size: 16pt;
+    line-height: 30pt;
+  }
+
+  /* 横线填值：全角空格 + 下划线（html_docx → w:u），打印后手工填写 */
+  .fill {
+    text-decoration: underline;
+  }
+</style>
+</head>
+<body>
+<section class="page">
+  <p class="title">第二轮土地承包到期后再延长三十年</p>
+  <p class="title">户主声明书</p>
+  <p class="body" style="margin-top: 10.6mm;">声明人：<span class="fill">　　　　　　</span>，性别<span class="fill">　　</span>，系<span class="fill">　　　　　　</span>村民，身份证号码：<span class="fill">　　　　　　　　　　　　　　</span>。</p>
+  <p class="body">为配合办理<span class="fill">　　　</span>第二轮土地承包到期后再延长三十年的相关事宜，本人作如下声明：</p>
+  <p class="body">1、我户有家庭成员人：<span class="fill">　　　</span>共计<span class="fill">　　</span>人；</p>
+  <p class="body">2、本人有权代表本户所涉及的全部家庭成员在本次第二轮土地承包到期后再延长三十年过程中签收相关法律文书；</p>
+  <p class="body">3、本人有权委托他人办理前述两条事宜。</p>
+  <p class="body">前述声明内容是家庭全体成员自愿、真实的意思表示，本人承诺对此承担法律责任。本声明不可撤销，自签字时生效。</p>
+  <p class="body">特此声明</p>
+  <p class="sign" style="margin-top: 21.2mm;">声明人（签字摁印）：</p>
+  <p class="sign">　　　　　　年　　月　　日</p>
+</section>
+</body>
+</html>

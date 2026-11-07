@@ -77,45 +77,19 @@ const appChildren = [
   {
     path: "contract-templates",
     name: "contract-templates",
-    redirect: { name: "print-template-contract" },
+    redirect: { name: "print-templates" },
     meta: { requiresAuth: true, permissions: ["contract_templates.manage"] },
   },
   {
+    // 统一设计（2026-11-06）：单页左右结构 —— 左侧模板清单、右侧编辑，
+    // 选中哪个模板是页面内部状态，不再按子路由拆分。
     path: "print-templates",
     name: "print-templates",
-    redirect: { name: "print-template-contract" },
+    component: ContractTemplateManagementView,
     meta: { requiresAuth: true, permissions: ["contract_templates.manage"] },
   },
-  {
-    path: "print-templates/contract",
-    name: "print-template-contract",
-    component: ContractTemplateManagementView,
-    meta: { requiresAuth: true, permissions: ["contract_templates.manage"], templateKey: "contract" },
-  },
-  {
-    path: "print-templates/plot-sketch-map",
-    name: "print-template-plot-sketch-map",
-    component: ContractTemplateManagementView,
-    meta: { requiresAuth: true, permissions: ["contract_templates.manage"], templateKey: "plot-sketch-map" },
-  },
-  {
-    path: "print-templates/registration-application",
-    name: "print-template-registration-application",
-    component: ContractTemplateManagementView,
-    meta: { requiresAuth: true, permissions: ["contract_templates.manage"], templateKey: "registration-application" },
-  },
-  {
-    path: "print-templates/cadastral-survey",
-    name: "print-template-cadastral-survey",
-    component: ContractTemplateManagementView,
-    meta: { requiresAuth: true, permissions: ["contract_templates.manage"], templateKey: "cadastral-survey" },
-  },
-  {
-    path: "print-templates/issuer-survey",
-    name: "print-template-issuer-survey",
-    component: ContractTemplateManagementView,
-    meta: { requiresAuth: true, permissions: ["contract_templates.manage"], templateKey: "issuer-survey" },
-  },
+  // 旧子路径（按模板拆路由时期）全部兼容重定向
+  { path: "print-templates/:templateKey", redirect: { name: "print-templates" } },
 ];
 
 const routes = [

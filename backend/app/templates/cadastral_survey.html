@@ -456,8 +456,8 @@
     </tr>
     <tr class="h-7268">
       <td class="lbl">审核意见</td>
-      <td class="note" colspan="4">{{ issuer.audit_note }}
-审核人：{{ issuer.auditor }}
+      <td class="note" colspan="4">{% if issuer.audit_note %}{{ issuer.audit_note }}
+{% endif %}审核人：{{ issuer.auditor }}
 日期：{{ issuer.audit_date_text or '　　　　年　　月　　日' }}</td>
     </tr>
   </table>
@@ -508,7 +508,7 @@
       <td class="lbl">有无承包合同</td>
       <td>
         <span class="cb">{{ box(contractor.has_contract) }}</span>有
-        <span class="cb">{{ box(not contractor.has_contract) }}</span>无
+        <span class="cb">{{ box(contractor.has_contract is not none and not contractor.has_contract) }}</span>无
       </td>
       <td class="lbl">承包合同编号</td>
       <td class="val" colspan="3">{{ contractor.contract_code }}</td>
@@ -527,7 +527,7 @@
       <td class="lbl">有无经营权证</td>
       <td>
         <span class="cb">{{ box(contractor.has_cert) }}</span>有
-        <span class="cb">{{ box(not contractor.has_cert) }}</span>无
+        <span class="cb">{{ box(contractor.has_cert is not none and not contractor.has_cert) }}</span>无
       </td>
       <td class="lbl">经营权证编号</td>
       <td class="val" colspan="3">{{ contractor.cert_code }}</td>
@@ -570,8 +570,8 @@
     </tr>
     <tr class="h-2974">
       <td class="lbl">审核<br>意见</td>
-      <td class="note" colspan="7">{{ contractor.audit_note }}
-审核人：{{ contractor.auditor }}
+      <td class="note" colspan="7">{% if contractor.audit_note %}{{ contractor.audit_note }}
+{% endif %}审核人：{{ contractor.auditor }}
 日期：{{ contractor.audit_date_text or '　　　　年　　月　　日' }}</td>
     </tr>
   </table>
@@ -708,8 +708,8 @@
     </tr>
     <tr class="h-802">
       <td class="lbl">审核意见</td>
-      <td class="note" colspan="23">{{ parcel.audit_note }}
-审核员：{{ parcel.auditor }}
+      <td class="note" colspan="23">{% if parcel.audit_note %}{{ parcel.audit_note }}
+{% endif %}审核员：{{ parcel.auditor }}
 日期：{{ parcel.audit_date_text or '　　　　年　　月　　日' }}</td>
     </tr>
   </table>

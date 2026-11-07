@@ -43,6 +43,15 @@ FONT_ALIASES = {
     "simhei": "SimHei",
     "黑体": "SimHei",
     "consolas": "Consolas",
+    # 声明书 / 申请书类文书（2026-11-06 从 survey_forms/*.dot 移植）用的字体。
+    # Word 侧的字体名就是中文名（仿宋_GB2312、方正小标宋简体），目标机缺字体时
+    # Word 会自行回退，不会变豆腐块。
+    "仿宋": "仿宋",
+    "fangsong": "仿宋",
+    "仿宋_gb2312": "仿宋_GB2312",
+    "fangsong_gb2312": "仿宋_GB2312",
+    "方正小标宋简体": "方正小标宋简体",
+    "fzxiaobiaosong": "方正小标宋简体",
     # 勾选框字形专用：☑(U+2611)/☐(U+2610)/✓(U+2713) 在宋体、黑体里**都没有字形**
     # （解析 simsun.ttc / simhei.ttf 的 cmap 实测），只有 MS Gothic / Segoe UI Symbol 有。
     # 甲方原件里那个 ☑ 的 run 也正是写死 MS Gothic。
@@ -82,7 +91,12 @@ CJK_FONTS = (
     "kaiti",
     "simkai",
     "fangsong",
+    "仿宋",
     "simfang",
+    "fangsong_gb2312",
+    "仿宋_gb2312",
+    "方正小标宋简体",
+    "fzxiaobiaosong",
     "ms gothic",
     "segoe ui symbol",
 )
@@ -621,8 +635,14 @@ def _block_paragraph(element, styles: StyleResolver, *, default_pt: float) -> et
     if line:
         spacing["line"], spacing["lineRule"] = line
 
+    # 首行缩进（声明书类文书的"首行空两格"）：CSS text-indent → w:ind@firstLine
+    indent_mm = to_mm(decls.get("text-indent"))
+
     return _paragraph(
-        jc=_alignment(decls.get("text-align")), spacing=spacing, runs=runs or None
+        jc=_alignment(decls.get("text-align")),
+        spacing=spacing,
+        ind_first_line=str(_mm_to_twips(indent_mm)) if indent_mm else None,
+        runs=runs or None,
     )
 
 
@@ -986,8 +1006,14 @@ def _section_properties(decls: dict[str, str]) -> tuple[etree._Element, float]:
     return sect, height_mm - pad_top - pad_bottom
 
 
-def _zero_height_section_paragraph(sect_pr: etree._Element) -> etree._Element:
-    """承载分节属性的收尾段落：压到 1 磅，别把内容挤到下一页。"""
+def _zero_height_paragraph() -> etree._Element:
+    """1 磅高的空段。
+
+    用途有二：承载分节属性；以及在**表格收尾**时占位 —— OOXML 不允许表格
+    是节的最后一块内容，Word 打开时会自动补一个默认行高（10.5pt）的空段落，
+    表格恰好占满一页时这个补段会被挤到下一页，凭空多出一页（2026-11-06
+    承包方调查表空白件踩过）。主动放一个零高段落，Word 就不再自己插。
+    """
     para = etree.Element(q("p"))
     ppr = etree.SubElement(para, q("pPr"))
     spacing = etree.SubElement(ppr, q("spacing"))
@@ -999,7 +1025,13 @@ def _zero_height_section_paragraph(sect_pr: etree._Element) -> etree._Element:
     for name in ("sz", "szCs"):
         node = etree.SubElement(rpr, q(name))
         node.set(q("val"), "2")
-    ppr.append(sect_pr)
+    return para
+
+
+def _zero_height_section_paragraph(sect_pr: etree._Element) -> etree._Element:
+    """承载分节属性的收尾段落：压到 1 磅，别把内容挤到下一页。"""
+    para = _zero_height_paragraph()
+    para.find(q("pPr")).append(sect_pr)
     return para
 
 
@@ -1133,6 +1165,9 @@ class HtmlDocxBuilder:
             body.append(_zero_height_section_paragraph(sect_pr))
         last_items, last_sect_pr = sections[-1]
         body.extend(last_items)
+        # OOXML 的表格标签是 w:tbl（不是 w:table）
+        if last_items and last_items[-1].tag == q("tbl"):
+            body.append(_zero_height_paragraph())
         body.append(last_sect_pr)
         return self._package(body)
 
