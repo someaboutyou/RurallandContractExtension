@@ -1,7 +1,7 @@
-<template>
+﻿<template>
   <el-dialog
     :model-value="modelValue"
-    title="导入承包方调查表（Excel）"
+    title="承包户清单导入（Excel）"
     width="920px"
     :close-on-click-modal="false"
     @update:model-value="emit('update:modelValue', $event)"
@@ -13,7 +13,7 @@
       :closable="false"
       show-icon
       :title="`批次「${batch?.batchName || batch?.batchNo || ''}」区域码：${batch?.regionCode || '未配置'}`"
-      description="请使用本系统「承包户导出」生成的 Excel 修改后导入：逐户校验承包方编号（须以批次区域码开头），成员按证件号码对比修改 / 新增；删除成员＝将该成员行的「姓名」单元格填充底色或加删除线；删除整户＝将该户「承包方姓名」单元格填充底色或加删除线（整户注销，底档保留可在注销列表撤回）；其余库内成员原样保留。导入后各户调查状态置为已调查；已确认的户自动跳过。"
+      description="请使用本系统「承包户清单导出」生成的 Excel 修改后导入：逐户校验承包方编号（须以批次区域码开头），成员按证件号码对比修改 / 新增；删除成员＝将该成员行的「姓名」单元格填充底色或加删除线；删除整户＝将该户「承包方姓名」单元格填充底色或加删除线（整户注销，底档保留可在注销列表撤回）；其余库内成员原样保留。导入后各户调查状态置为已调查；已确认的户自动跳过。"
     />
 
     <!-- 第一步：选择文件 -->
@@ -189,7 +189,7 @@ function handleFileChange(event) {
   const selected = event.target.files?.[0];
   if (!selected) return;
   if (!/\.xls$/i.test(selected.name)) {
-    ElMessage.warning("请选择 .xls 文件（承包户导出生成的即为此格式）");
+    ElMessage.warning("请选择 .xls 文件（承包户清单导出生成的即为此格式）");
     event.target.value = "";
     return;
   }

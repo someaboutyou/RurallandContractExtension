@@ -16,7 +16,8 @@
             <el-button v-if="canManage" :disabled="!activeBatch || activeBatch?.status === 'finished'" :icon="Plus" type="primary" @click="openCreateContractor">新增</el-button>
             <el-button :disabled="!activeBatch || !selectedTasks.length" plain @click="exportDialogVisible = true">导出</el-button>
             <el-button v-if="canManage" :disabled="!activeBatch || !selectedTasks.length" plain @click="lockDialogVisible = true">锁定/解锁</el-button>
-            <el-button v-if="canManage" :disabled="!activeBatch || activeBatch?.status === 'finished'" plain @click="xlsImportVisible = true">承包户导入</el-button>
+            <el-button :disabled="!activeBatch" plain @click="xlsExportVisible = true">承包户清单导出</el-button>
+            <el-button v-if="canManage" :disabled="!activeBatch || activeBatch?.status === 'finished'" plain @click="xlsImportVisible = true">承包户清单导入</el-button>
             <el-button v-if="canManage" :disabled="!activeBatch" plain @click="relationDialogVisible = true">家庭关系处理</el-button>
           </div>
         </div>
@@ -87,6 +88,7 @@
       @open-contractor="onOpenCreatedContractor"
     />
     <ContractorXlsImportDialog v-model="xlsImportVisible" :batch="activeBatch" @imported="loadTasks" />
+    <ContractorXlsExportDialog v-model="xlsExportVisible" :batch="activeBatch" />
     <ContractorExportDialog
       v-model="exportDialogVisible"
       :batch="activeBatch"
@@ -114,6 +116,7 @@ import { Plus, Search } from "@element-plus/icons-vue";
 
 import ContractorResultDialog from "../components/survey/view/ContractorResultDialog.vue";
 import ContractorXlsImportDialog from "../components/survey/ContractorXlsImportDialog.vue";
+import ContractorXlsExportDialog from "../components/survey/ContractorXlsExportDialog.vue";
 import ContractorExportDialog from "../components/survey/ContractorExportDialog.vue";
 import ContractorLockDialog from "../components/survey/ContractorLockDialog.vue";
 import ContractorRelationDialog from "../components/survey/ContractorRelationDialog.vue";
@@ -140,6 +143,7 @@ const resultVisible = ref(false);
 const activeTaskCanWrite = ref(true);
 const contractorResultDialog = ref(null);
 const xlsImportVisible = ref(false);
+const xlsExportVisible = ref(false);
 const exportDialogVisible = ref(false);
 const lockDialogVisible = ref(false);
 const relationDialogVisible = ref(false);

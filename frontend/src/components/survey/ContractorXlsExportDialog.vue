@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     :model-value="modelValue"
-    title="承包户导出（Excel）"
+    title="承包户清单导出（Excel）"
     width="520px"
     :close-on-click-modal="false"
     :show-close="jobStatus !== 'running'"
