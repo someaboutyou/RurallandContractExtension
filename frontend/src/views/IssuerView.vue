@@ -14,9 +14,8 @@
           @clear="handleSearch"
         />
         <el-button plain @click="handleSearch">查询</el-button>
-        <el-button plain @click="resetFilters">重置</el-button>
-        <el-button plain @click="loadData">刷新</el-button>
         <el-button plain :loading="exporting" @click="handleExportIssuerXls">导出发包方清单</el-button>
+        <el-button v-if="canManage" plain @click="issuerXlsImportVisible = true">导入发包方清单</el-button>
         <el-button
           plain
           type="primary"
@@ -31,7 +30,6 @@
         >
           导出公示签字表{{ selectedRows.length ? `(${selectedRows.length})` : "(全部)" }}
         </el-button>
-        <el-button v-if="canManage" plain @click="issuerXlsImportVisible = true">导入发包方清单</el-button>
         <el-button v-if="canManage" type="success" @click="openCreateDialog">新增发包方</el-button>
         <el-button
           v-if="canManage"
@@ -40,7 +38,7 @@
           :disabled="selectedRows.length < 2"
           @click="openMergeDialog"
         >
-          合并{{ selectedRows.length ? `(${selectedRows.length})` : "" }}
+          合并发包方{{ selectedRows.length ? `(${selectedRows.length})` : "" }}
         </el-button>
       </div>
     </div>
@@ -578,11 +576,6 @@ async function loadData() {
 function handleSearch() {
   page.value = 1;
   loadData();
-}
-
-function resetFilters() {
-  keyword.value = "";
-  handleSearch();
 }
 
 function handlePageChange(value) {
