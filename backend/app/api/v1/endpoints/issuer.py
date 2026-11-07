@@ -8,6 +8,7 @@ from app.schemas.issuer import (
     IssuerContractorRead,
     IssuerCreate,
     IssuerDocxExportRequest,
+    IssuerExportJobRequest,
     IssuerMergeRequest,
     IssuerRead,
     IssuerUpdate,
@@ -131,6 +132,48 @@ def _ensure_issuer_exportable(db: Session, issuer_code: str, current_user: User)
     return issuer
 
 
+@router.post("/publicity-xls")
+def export_publicity_xls(
+    payload: IssuerDocxExportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("issuers.view")),
+):
+    """按选中的发包方（村组）导出《调查信息公示表》Excel（一个发包方一个 sheet）。"""
+    from urllib.parse import quote
+
+    from app.services.village_publicity_export_service import (
+        village_publicity_export_service,
+    )
+
+    codes: list[str] = []
+    seen: set[str] = set()
+    for raw_code in payload.codes:
+        code = str(raw_code or "").strip()
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        issuer = db.get(Fbf, code)
+        if issuer is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"发包方不存在：{code}"
+            )
+        data_access_service.ensure_code_in_scope(
+            current_user, issuer.fbfbm, detail="发包方不在当前数据权限范围内"
+        )
+        codes.append(code)
+    if not codes:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="未找到可导出的发包方"
+        )
+
+    content, filename = village_publicity_export_service.export(db, codes)
+    return Response(
+        content=content,
+        media_type="application/vnd.ms-excel",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
 @router.post("/export-docx")
 def export_issuers_survey_docx(
     payload: IssuerDocxExportRequest,
@@ -188,6 +231,97 @@ def export_issuers_survey_docx(
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{quote(zip_name)}"
         },
+    )
+
+
+# ── 批量导出后台任务（创建 → 轮询进度 → 下载） ─────────────────────────────
+# 注意：本组路由必须排在 "/{issuer_code}" 系列之前，否则会被路径参数吞掉。
+
+
+def _media_type_for(filename: str) -> str:
+    if filename.lower().endswith(".zip"):
+        return "application/zip"
+    if filename.lower().endswith(".docx"):
+        from app.services.issuer_survey_docx_service import DOCX_MEDIA_TYPE
+
+        return DOCX_MEDIA_TYPE
+    return "application/vnd.ms-excel"
+
+
+@router.post("/export-jobs", response_model=ApiResponse[dict])
+def create_issuer_export_job(
+    payload: IssuerExportJobRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("issuers.view")),
+):
+    """创建发包方批量导出后台任务，立即返回 ``taskId`` 供前端轮询进度。
+
+    kind：``survey`` = 发包方调查表（Word，多个 zip）；``publicity`` = 村组公示表
+    （一个发包方一个 sheet，合并为一个 xls）。
+    """
+    from app.services.issuer_export_task_service import issuer_export_task_service
+
+    # 数据范围在创建任务时一次性校验（端点会话里有 current_user），
+    # 后台线程只渲染已通过校验的编码清单。
+    codes: list[str] = []
+    seen: set[str] = set()
+    for raw_code in payload.codes:
+        code = str(raw_code or "").strip()
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        _ensure_issuer_exportable(db, code, current_user)
+        codes.append(code)
+    if not codes:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未找到可导出的发包方")
+
+    try:
+        task_id = issuer_export_task_service.create_task(
+            kind=payload.kind, codes=codes, user_id=current_user.id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"data": {"taskId": task_id}}
+
+
+@router.get("/export-jobs/{task_id}", response_model=ApiResponse[dict])
+def get_issuer_export_job_progress(
+    task_id: str,
+    current_user: User = Depends(require_permission("issuers.view")),
+):
+    from app.services.issuer_export_task_service import issuer_export_task_service
+
+    try:
+        progress = issuer_export_task_service.get_progress(task_id, current_user)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    if progress is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导出任务不存在")
+    return {"data": progress}
+
+
+@router.get("/export-jobs/{task_id}/download")
+def download_issuer_export_job(
+    task_id: str,
+    current_user: User = Depends(require_permission("issuers.view")),
+):
+    from urllib.parse import quote
+
+    from app.services.issuer_export_task_service import issuer_export_task_service
+
+    try:
+        archive = issuer_export_task_service.get_archive(task_id, current_user)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    if archive is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="导出任务不存在或尚未完成"
+        )
+    filename, payload = archive
+    return Response(
+        content=payload,
+        media_type=_media_type_for(filename),
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
     )
 
 

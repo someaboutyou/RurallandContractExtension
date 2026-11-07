@@ -62,3 +62,31 @@ export function exportIssuerSurveyDocxBulk(payload) {
     timeout: 300000,
   });
 }
+
+/** 按发包方（村组）导出《调查信息公示表》Excel（一个发包方一个 sheet）。 */
+export function exportPublicityXls(payload) {
+  return http.post("/issuers/publicity-xls", payload, {
+    responseType: "blob",
+    timeout: 300000,
+  });
+}
+
+// ── 批量导出后台任务：创建 → 轮询进度 → 下载（kind: survey | publicity）──
+
+/** 创建批量导出任务，立即返回 `{ taskId }`。 */
+export function startIssuerExportJob(payload) {
+  return http.post("/issuers/export-jobs", payload, { timeout: 60000 });
+}
+
+/** 轮询批量导出任务进度。 */
+export function getIssuerExportJob(taskId) {
+  return http.get(`/issuers/export-jobs/${taskId}`);
+}
+
+/** 下载批量导出任务产物（单个 docx/xls，多个 zip）。 */
+export function downloadIssuerExportJob(taskId) {
+  return http.get(`/issuers/export-jobs/${taskId}/download`, {
+    responseType: "blob",
+    timeout: 300000,
+  });
+}

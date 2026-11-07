@@ -21,9 +21,17 @@
           plain
           type="primary"
           :disabled="!selectedRows.length"
-          @click="handleExportSelectedIssuerWord"
+          @click="openBatchExport('survey')"
         >
           导出调查表{{ selectedRows.length ? `(${selectedRows.length})` : "" }}
+        </el-button>
+        <el-button
+          plain
+          type="primary"
+          :disabled="!selectedRows.length"
+          @click="openBatchExport('publicity')"
+        >
+          导出公示表{{ selectedRows.length ? `(${selectedRows.length})` : "" }}
         </el-button>
         <el-button v-if="canManage" plain @click="issuerXlsImportVisible = true">导入调查表</el-button>
         <el-button v-if="canManage" type="success" @click="openCreateDialog">新增发包方</el-button>
@@ -63,15 +71,35 @@
           <el-table-column v-if="canManage" label="操作" fixed="right" min-width="150">
             <template #default="{ row }">
               <div class="table-actions">
-                <el-button link type="primary" @click="handleExportIssuerWord(row)">导出</el-button>
+                <el-dropdown trigger="click" @command="(command) => handleRowExport(command, row)">
+                  <el-button link type="primary">
+                    导出<el-icon class="el-icon--right"><arrow-down /></el-icon>
+                  </el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="publicity">村组公示表</el-dropdown-item>
+                      <el-dropdown-item command="survey">发包方调查表</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
                 <el-button link type="primary" @click="openEditDialog(row)">编辑</el-button>
                 <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
               </div>
             </template>
           </el-table-column>
-          <el-table-column v-else label="操作" fixed="right" min-width="70">
+          <el-table-column v-else label="操作" fixed="right" min-width="110">
             <template #default="{ row }">
-              <el-button link type="primary" @click="handleExportIssuerWord(row)">导出</el-button>
+              <el-dropdown trigger="click" @command="(command) => handleRowExport(command, row)">
+                <el-button link type="primary">
+                  导出<el-icon class="el-icon--right"><arrow-down /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="publicity">村组公示表</el-dropdown-item>
+                    <el-dropdown-item command="survey">发包方调查表</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
             </template>
           </el-table-column>
         </el-table>
@@ -260,19 +288,25 @@
     v-model="issuerXlsImportVisible"
     @imported="onIssuersImported"
   />
+
+  <IssuerExportProgressDialog
+    v-model="exportDialogVisible"
+    :kind="exportKind"
+    :codes="exportCodes"
+  />
 </template>
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Loading } from "@element-plus/icons-vue";
+import { ArrowDown, Loading } from "@element-plus/icons-vue";
 
 import {
   createIssuer,
   deleteIssuer,
   exportIssuerSurveyDocx,
-  exportIssuerSurveyDocxBulk,
   exportIssuerXls,
+  exportPublicityXls,
   fetchIssuerContractors,
   fetchIssuerParcels,
   fetchIssuers,
@@ -280,6 +314,7 @@ import {
 } from "../api/issuer";
 import { useDialogMap } from "../composables/useDialogMap";
 import DictionarySelect from "../components/DictionarySelect.vue";
+import IssuerExportProgressDialog from "../components/issuer/IssuerExportProgressDialog.vue";
 import IssuerXlsImportDialog from "../components/issuers/IssuerXlsImportDialog.vue";
 import MergeIssuerDialog from "../components/issuers/MergeIssuerDialog.vue";
 import { useDictionary } from "../composables/useDictionary";
@@ -709,25 +744,45 @@ async function handleExportIssuerWord(row) {
   }
 }
 
-async function handleExportSelectedIssuerWord() {
+// ---- 行内导出：一个下拉分发两类单村组导出（同步接口，单个生成很快） ----
+function handleRowExport(command, row) {
+  if (!row?.code) return;
+  if (command === "publicity") {
+    handleExportPublicity(row);
+  } else if (command === "survey") {
+    handleExportIssuerWord(row);
+  }
+}
+
+// ---- 批量导出：走后台任务 + 进度弹窗（村组多、耗时长，需要可见进度） ----
+const exportDialogVisible = ref(false);
+const exportKind = ref("survey"); // survey=发包方调查表 | publicity=村组公示表
+const exportCodes = ref([]);
+
+function openBatchExport(kind) {
   if (!selectedRows.value.length) {
     ElMessage.warning("请先勾选发包方");
     return;
   }
+  exportKind.value = kind;
+  exportCodes.value = selectedRows.value.map((row) => row.code);
+  exportDialogVisible.value = true;
+}
+
+// ---- 村组公示表导出（一个发包方一个 sheet，批量合并为一个 xls） ----
+async function handleExportPublicity(row) {
+  if (!row?.code) return;
   try {
-    const { data, headers } = await exportIssuerSurveyDocxBulk({
-      codes: selectedRows.value.map((row) => row.code),
-    });
-    const isZip = String(data?.type || "").includes("zip");
+    const { data, headers } = await exportPublicityXls({ codes: [row.code] });
     downloadBlob(
       data,
-      isZip
-        ? "发包方调查表.zip"
-        : filenameFromDisposition(headers?.["content-disposition"], "发包方调查表.docx"),
+      filenameFromDisposition(
+        headers?.["content-disposition"],
+        `${row.name || row.code}土地承包经营权村组公示表.xls`,
+      ),
     );
-    ElMessage.success(`已导出 ${selectedRows.value.length} 个发包方调查表`);
   } catch {
-    ElMessage.error("导出发包方调查表失败");
+    ElMessage.error("导出村组公示表失败");
   }
 }
 

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>村组公示表</title>
+<style>
+  /* 村组公示表（CS 版口径：表头题名「发包方调查表」）。
+     版式参数逐项取自原 .doc 实测：A4 纵向，上下左右边距
+     25.0/2.5/25.0/20.0mm（pgMar 1418/1134/1418/1418 twips）。 */
+  @page { size: A4 portrait; margin: 0; }
+
+  * { box-sizing: border-box; }
+
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    color: #000;
+    background: #f2f3f5;
+    font-family: "SimSun", "宋体", serif;
+    font-size: 9pt;
+  }
+
+  .print-btn {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 20;
+    padding: 8px 20px;
+    border: 0;
+    border-radius: 4px;
+    color: #fff;
+    background: #409eff;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  .page {
+    position: relative;
+    background: #fff;
+    overflow: hidden;
+    page-break-after: always;
+    break-after: page;
+    width: 210mm;
+    height: 297mm;
+    /* 左 25mm / 右 20mm / 上 25mm / 下 25mm（原文档边距） */
+    padding: 25mm 20mm 25mm 25mm;
+    margin: 0 auto 14px;
+  }
+  .page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+
+  .form-title {
+    margin: 0 0 3mm;
+    text-align: center;
+    font-family: "SimSun", "宋体", serif;
+    font-size: 16pt;
+    font-weight: 700;
+    line-height: 1.3;
+  }
+
+  .tbl {
+    border-collapse: collapse;
+    table-layout: fixed;
+    border: 1px solid #000;
+    width: 100%;
+  }
+
+  .tbl td {
+    border: 1px solid #000;
+    padding: 0 1mm;
+    vertical-align: middle;
+    text-align: center;
+    font-size: 9pt;
+    line-height: 1.5;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  .tbl .lbl {
+    white-space: normal;
+  }
+
+  .tbl .val {
+    text-align: left;
+    padding-left: 2mm;
+  }
+
+  /* 调查记事正文：多行左上对齐，换行按模板源码断行 */
+  .tbl .note {
+    text-align: left;
+    vertical-align: top;
+    padding: 2mm 2.5mm;
+    white-space: pre-line;
+    line-height: 1.9;
+  }
+
+  /* ── 勾选符号字体：☑/□ 宋体无字形，必须 MS Gothic 兜底 ── */
+  .box, .cb { font-family: "MS Gothic", "Segoe UI Symbol", "SimSun", "宋体", serif; }
+
+  /* 列宽：与原 .doc tblGrid 等宽（11 列，合计 165mm = 210 - 25 - 20）。
+     c3/c4/c7 是原表用来凑跨度的细缝列，保留以保证 colspan 对位一致。 */
+  .c1 { width: 14.75mm; }
+  .c2 { width: 21.61mm; }
+  .c3 { width: 0.42mm; }
+  .c4 { width: 0.63mm; }
+  .c5 { width: 57.14mm; }
+  .c6 { width: 10.21mm; }
+  .c7 { width: 0.53mm; }
+  .c8 { width: 10.69mm; }
+  .c9 { width: 8.59mm; }
+  .c10 { width: 8.17mm; }
+  .c11 { width: 32.26mm; }
+
+  /* 行高（原 .doc trHeight）。调查记事行 115.68mm 在 Word 实排中会把
+     审核人行挤到第 2 页（标题块实际渲染高度比 CSS 声明高出约 15pt），
+     压到 106mm 留出安全余量；该行是 atLeast 空白填写区，视觉差异可忽略。 */
+  .h-1501 { height: 15.01mm; }
+  .h-10600 { height: 106mm; }
+  .h-1118 { height: 11.18mm; }
+  .h-2945 { height: 29.45mm; }
+  .h-1205 { height: 12.05mm; }
+</style>
+</head>
+<body>
+{% macro box(checked, off='□') -%}{{ '☑' if checked else off }}{%- endmacro %}
+<div class="page">
+  <h1 class="form-title">发包方调查表</h1>
+
+  <table class="tbl">
+    <colgroup>
+      <col class="c1"><col class="c2"><col class="c3"><col class="c4"><col class="c5">
+      <col class="c6"><col class="c7"><col class="c8"><col class="c9"><col class="c10"><col class="c11">
+    </colgroup>
+    <tr class="h-1501">
+      <td class="lbl" colspan="3">发包方名称</td>
+      <td class="val" colspan="2">{{ issuer.name }}</td>
+      <td class="lbl" colspan="3">发包方编码</td>
+      <td class="val" colspan="3">{{ issuer.code }}</td>
+    </tr>
+    <tr class="h-1501">
+      <td class="lbl" colspan="3">发包方负责人姓名</td>
+      <td class="val" colspan="2">{{ issuer.head }}</td>
+      <td class="lbl" colspan="3">联系电话</td>
+      <td class="val" colspan="3">{{ issuer.phone }}</td>
+    </tr>
+    <tr class="h-1501">
+      <td class="lbl" colspan="3">发包方负责人地址</td>
+      <td class="val" colspan="5">{{ issuer.address }}</td>
+      <td class="lbl" colspan="2">邮政编码</td>
+      <td class="val">{{ issuer.postcode }}</td>
+    </tr>
+    <tr class="h-1501">
+      <td class="lbl" colspan="3">发包方负责人证件类型</td>
+      <td class="val" colspan="5"><span class="cb">{{ box(issuer.id_type == '身份证') }}</span>身份证　<span class="cb">{{ box(issuer.id_type == '军官证') }}</span>军官证　<span class="cb">{{ box(issuer.id_type == '护照') }}</span>护照　<span class="cb">{{ box(issuer.id_type == '户口簿') }}</span>户口簿　<span class="cb">{{ box(issuer.id_type == '其他') }}</span>其他</td>
+      <td class="lbl" colspan="2">证件号码</td>
+      <td class="val">{{ issuer.id_no }}</td>
+    </tr>
+    <tr class="h-10600">
+      <td class="lbl" rowspan="2">调查记事</td>
+      <td class="note" colspan="10">{{ note_text }}</td>
+    </tr>
+    <tr class="h-1118">
+      <td class="lbl" colspan="3">调查员:</td>
+      <td class="val" colspan="3">{{ surveyors }}</td>
+      <td class="lbl" colspan="2">日期:</td>
+      <td class="val" colspan="2">{{ survey_date }}</td>
+    </tr>
+    <tr class="h-2945">
+      <td class="lbl" rowspan="2">审核意见</td>
+      <td class="val" colspan="10" style="vertical-align:top; padding:2mm 2.5mm; text-align:left;">{{ audit_note }}</td>
+    </tr>
+    <tr class="h-1205">
+      <td class="lbl">审核人:</td>
+      <td class="val" colspan="4">{{ auditor }}</td>
+      <td class="lbl" colspan="3">日期: </td>
+      <td class="val" colspan="2">{{ audit_date }}</td>
+    </tr>
+  </table>
+</div>
+
+</body>
+</html>

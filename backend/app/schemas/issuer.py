@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -62,4 +64,11 @@ class IssuerMergeRequest(BaseModel):
 
 
 class IssuerDocxExportRequest(BaseModel):
+    codes: list[str] = Field(min_length=1, max_length=500)
+
+
+class IssuerExportJobRequest(BaseModel):
+    """批量导出后台任务：kind=survey(发包方调查表) | publicity(村组公示表)。"""
+
+    kind: Literal["survey", "publicity"]
     codes: list[str] = Field(min_length=1, max_length=500)
