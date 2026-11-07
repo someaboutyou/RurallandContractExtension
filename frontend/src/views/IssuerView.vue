@@ -14,8 +14,18 @@
           @clear="handleSearch"
         />
         <el-button plain @click="handleSearch">查询</el-button>
-        <el-button plain :loading="exporting" @click="handleExportIssuerXls">导出发包方清单</el-button>
+        <el-button plain :loading="exporting" @click="handleExportIssuerXls">
+          导出发包方清单{{ isDataCenter && selectedRows.length ? `(${selectedRows.length}户)` : "" }}
+        </el-button>
         <el-button v-if="canManage" plain @click="issuerXlsImportVisible = true">导入发包方清单</el-button>
+        <el-button
+          v-if="isDataCenter && canQualityCheck"
+          plain
+          type="warning"
+          @click="dcQualityCheckVisible = true"
+        >
+          数据质检
+        </el-button>
         <el-button
           plain
           type="primary"
@@ -43,8 +53,8 @@
       </div>
     </div>
 
-    <div class="issuer-workspace">
-      <SurveyBatchPanel v-model="activeBatch" />
+    <div class="issuer-workspace" :class="{ 'dc-mode': isDataCenter }">
+      <SurveyBatchPanel v-if="!isDataCenter" v-model="activeBatch" />
 
       <div class="issuer-table-area">
         <div class="table-shell">
@@ -301,6 +311,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ArrowDown, Loading } from "@element-plus/icons-vue";
 
@@ -322,9 +333,16 @@ import IssuerExportProgressDialog from "../components/issuer/IssuerExportProgres
 import IssuerXlsImportDialog from "../components/issuers/IssuerXlsImportDialog.vue";
 import MergeIssuerDialog from "../components/issuers/MergeIssuerDialog.vue";
 import SurveyBatchPanel from "../components/survey/SurveyBatchPanel.vue";
+import DbQualityCheckDialog from "../components/dataCenter/DbQualityCheckDialog.vue";
 import { useDictionary } from "../composables/useDictionary";
 import { useAuthStore } from "../stores/auth";
 import { validateChinaId, validateMobile, validatePostcode } from "../utils/validators";
+
+const route = useRoute();
+// 数据中心入口（/dc/issuers）：整库口径 —— 无批次面板，导出按「勾选行 / 整库」组织。
+const isDataCenter = computed(() => !!route.meta.dataCenter);
+const dcQualityCheckVisible = ref(false);
+const canQualityCheck = computed(() => authStore.hasPermission("contractors.view"));
 
 const authStore = useAuthStore();
 const canManage = computed(() => authStore.hasPermission("issuers.manage"));
@@ -717,10 +735,20 @@ function filenameFromDisposition(disposition, fallback) {
 async function handleExportIssuerXls() {
   exporting.value = true;
   try {
-    const { data, headers } = await exportIssuerXls({
-      keyword: keyword.value.trim() || undefined,
-      batchId: activeBatch.value?.id || undefined,
-    });
+    // 数据中心口径：勾选了就按勾选清单导出，否则整库（区域口径走数据导出页）；
+    // 建库中心口径：keyword + 当前批次。
+    const payload = isDataCenter.value
+      ? {
+          keyword: keyword.value.trim() || undefined,
+          codes: selectedRows.value.length
+            ? selectedRows.value.map((row) => row.code).join(",")
+            : undefined,
+        }
+      : {
+          keyword: keyword.value.trim() || undefined,
+          batchId: activeBatch.value?.id || undefined,
+        };
+    const { data, headers } = await exportIssuerXls(payload);
     downloadBlob(
       data,
       filenameFromDisposition(headers?.["content-disposition"], "发包方调查表.xls"),
@@ -771,11 +799,15 @@ function openBatchExport(kind) {
     // 勾选了导出勾选清单；没勾选则导出当前批次全部（批次也没选则提示）。
     exportCodes.value = selectedRows.value.map((row) => row.code);
     exportBatchId.value = null;
-  } else if (activeBatch.value?.id) {
+  } else if (!isDataCenter.value && activeBatch.value?.id) {
     exportCodes.value = [];
     exportBatchId.value = activeBatch.value.id;
   } else {
-    ElMessage.warning("请先勾选发包方，或在左侧选择一个调查批次");
+    ElMessage.warning(
+      isDataCenter.value
+        ? "数据中心按勾选导出调查表，请先勾选发包方（整库导出请缩小到具体区域后在建库中心按批次操作）"
+        : "请先勾选发包方，或在左侧选择一个调查批次",
+    );
     return;
   }
   exportDialogVisible.value = true;
@@ -811,7 +843,12 @@ watch(activeBatch, () => {
 });
 
 // 用户在 /surveys「进入任务」记住的批次作为默认选中（读不写，不改其记忆）。
+// 数据中心入口跳过批次记忆：这里永远整库口径。
 onMounted(async () => {
+  if (isDataCenter.value) {
+    loadData();
+    return;
+  }
   try {
     const { data } = await fetchCurrentSurveyBatch();
     if (data.data?.id) {
@@ -835,6 +872,11 @@ onMounted(async () => {
   grid-template-columns: 280px minmax(0, 1fr);
   gap: 12px;
   overflow: hidden;
+}
+
+/* 数据中心入口无批次面板：列表占满整行。 */
+.issuer-workspace.dc-mode {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .issuer-table-area {

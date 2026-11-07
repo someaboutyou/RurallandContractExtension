@@ -82,6 +82,8 @@ const props = defineProps({
   modelValue: { type: Boolean, default: false },
   regionCode: { type: String, default: "" },
   regionName: { type: String, default: "" },
+  // 已选户编码清单（承包方页面勾选行传入）：非空时承包方清单只导出这些户，优先于区域/整库。
+  selectedCodes: { type: Array, default: null },
 });
 const emit = defineEmits(["update:modelValue"]);
 
@@ -96,6 +98,9 @@ let downloadSeq = 0;
 const startedJobId = ref("");
 
 const scopeTitle = computed(() => {
+  if (props.selectedCodes?.length) {
+    return `导出范围：已选 ${props.selectedCodes.length} 户（承包方清单按勾选导出）`;
+  }
   const name = props.regionName || "整库";
   return props.regionCode ? `导出范围：${name}（${props.regionCode}）` : `导出范围：${name}`;
 });
@@ -163,7 +168,8 @@ async function startExport() {
   job.value = { phase: "正在创建导出任务…" };
   try {
     const { data } = await startContractorListExportJob({
-      regionCode: props.regionCode || "",
+      regionCode: props.selectedCodes?.length ? "" : props.regionCode || "",
+      codes: props.selectedCodes?.length ? props.selectedCodes : undefined,
       mode: exportMode.value,
     });
     startedJobId.value = data.data.jobId;

@@ -9,13 +9,13 @@
     <section class="panel">
       <div class="panel-title">当前数据域</div>
       <div class="quick-link-grid">
-        <RouterLink class="quick-link-card" to="/issuers">
+        <RouterLink class="quick-link-card" to="/dc/issuers">
           <div class="quick-link-title">发包方管理</div>
-          <div class="quick-link-desc">浏览和维护标准 FBF 数据。</div>
+          <div class="quick-link-desc">整库维护标准 FBF 数据（清单导入导出、数据质检）。</div>
         </RouterLink>
-        <RouterLink class="quick-link-card" to="/contractors">
-          <div class="quick-link-title">承包方台账</div>
-          <div class="quick-link-desc">查看标准承包方台账与家庭成员信息。</div>
+        <RouterLink class="quick-link-card" to="/dc/contractors">
+          <div class="quick-link-title">承包方管理</div>
+          <div class="quick-link-desc">整库维护承包方台账（清单导入导出、数据质检）。</div>
         </RouterLink>
         <RouterLink class="quick-link-card" to="/requests">
           <div class="quick-link-title">业务申请</div>

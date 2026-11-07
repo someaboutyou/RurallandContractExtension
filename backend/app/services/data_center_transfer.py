@@ -48,14 +48,17 @@ class DataCenterTransferService:
         current_user: User,
         *,
         region_code: str | None = None,
+        codes: list[str] | None = None,
         mode: str = "single",  # single=整体一个 xls | group=按发包方分组打包 zip
         progress_cb=None,
     ) -> tuple[str, bytes]:
-        """region_code 为空即整库（数据权限仍生效）。返回 (文件名, 字节)。"""
+        """region_code 为空即整库（数据权限仍生效）；codes 非空为「已选户」口径，优先于区域。返回 (文件名, 字节)。"""
         from app.services.survey import survey_service
 
         prefix = (region_code or "").strip()
-        if prefix:
+        selected_codes = [c.strip() for c in (codes or []) if str(c).strip()] or None
+        if prefix and not selected_codes:
+            # codes 口径优先且自带逐户越权校验（端点层 ensure_code_in_scope），区域不参与。
             data_access_service.ensure_region_filter_in_scope(
                 current_user, prefix, detail="所选区域不在当前数据权限范围内"
             )
@@ -69,7 +72,9 @@ class DataCenterTransferService:
 
         filters = survey_service._tenant_filters(SurveyCbfResult, current_user)
         filters.append(SurveyCbfResult.result_status != "cancelled")
-        if prefix:
+        if selected_codes:
+            filters.append(SurveyCbfResult.cbfbm.in_(selected_codes))
+        elif prefix:
             # 承包方编码 18 位 = 组码(14) + 户号(4)，区域任一层级用前缀收敛
             filters.append(SurveyCbfResult.cbfbm.like(f"{prefix}%"))
         results = db.scalars(
@@ -106,7 +111,7 @@ class DataCenterTransferService:
             report(idx + 1, len(results), "组装清单数据", result.cbfmc or result.cbfbm)
         report(len(results), len(results), "生成文件")
 
-        scope_label = _safe_name(prefix) if prefix else "整库"
+        scope_label = f"已选{len(selected_codes)}户" if selected_codes else (_safe_name(prefix) if prefix else "整库")
         if mode == "group":
             return self._build_grouped_zip(households, scope_label)
         wb = survey_service._build_template_workbook(scope_label, households)

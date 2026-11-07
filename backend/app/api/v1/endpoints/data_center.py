@@ -115,11 +115,20 @@ def start_contractor_list_export_job(
     payload: dict,
     current_user: User = Depends(require_permission("contractors.view")),
 ):
-    """启动数据中心承包方清单导出任务（regionCode 空=整库；mode=single|group）。"""
+    """启动数据中心承包方清单导出任务（regionCode 空=整库；codes=已选户编码清单，优先于区域；mode=single|group）。"""
     from app.services import data_center_jobs
     from app.services.data_center_transfer import data_center_transfer_service
 
     region_code = _region_or_empty((payload or {}).get("regionCode"))
+    raw_codes = (payload or {}).get("codes") or []
+    codes = [str(c).strip() for c in raw_codes if str(c).strip()] or None
+    if codes:
+        from app.services.data_access_service import data_access_service
+
+        for code in codes:
+            data_access_service.ensure_code_in_scope(
+                current_user, code, detail="勾选的承包方不在当前数据权限范围内"
+            )
     mode = str((payload or {}).get("mode") or "single")
     if mode not in ("single", "group"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="mode 仅支持 single / group")
@@ -131,7 +140,7 @@ def start_contractor_list_export_job(
         db = SessionLocal()
         try:
             filename, content = data_center_transfer_service.export_contractor_xls(
-                db, current_user, region_code=region_code or None, mode=mode,
+                db, current_user, region_code=region_code or None, codes=codes, mode=mode,
                 progress_cb=data_center_jobs._progress_cb(job["id"]),
             )
             data_center_jobs.update_job(job["id"], status="done", phase="导出完成",

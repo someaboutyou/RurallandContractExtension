@@ -40,17 +40,31 @@
         <el-button plain @click="handleSearch">查询</el-button>
         <el-button plain @click="resetFilters">重置</el-button>
         <el-button plain @click="loadData">刷新</el-button>
+        <template v-if="isDataCenter">
+          <!-- 数据中心：整库/已选口径，无批次概念；范围跟随右侧区域树（未选=整库） -->
+          <el-button plain type="primary" @click="dcListExportVisible = true">
+            清单导出{{ selectedRows.length ? `(${selectedRows.length}户)` : "" }}
+          </el-button>
+          <el-button v-if="canManage" plain @click="dcListImportVisible = true">清单导入</el-button>
+          <el-button plain type="warning" @click="dcQualityCheckVisible = true">数据质检</el-button>
+        </template>
         <el-button v-if="canManage" type="success" @click="openCreateDialog">新增承包方</el-button>
       </div>
     </div>
 
-    <div class="contractor-workspace">
-      <SurveyBatchPanel v-model="activeBatch" />
+    <div class="contractor-workspace" :class="{ 'dc-mode': isDataCenter }">
+      <SurveyBatchPanel v-if="!isDataCenter" v-model="activeBatch" />
 
       <div class="contractor-table-area">
         <div class="table-shell">
           <div class="table-scroll">
-            <el-table v-loading="loading" :data="rows" border>
+            <el-table
+              v-loading="loading"
+              :data="rows"
+              border
+              @selection-change="handleSelectionChange"
+            >
+              <el-table-column v-if="isDataCenter" type="selection" width="40" />
               <el-table-column prop="code" label="承包方代码" min-width="180" />
               <el-table-column prop="name" label="承包方名称" min-width="180" />
               <el-table-column prop="typeCode" label="承包方类型" min-width="120">
@@ -115,10 +129,28 @@
     :can-manage="canManage"
     @saved="handleDialogSaved"
   />
+
+  <!-- 数据中心：清单导出（已选/区域/整库）、清单导入、数据质检（均为整库口径，无批次） -->
+  <ContractorListExportDialog
+    v-model="dcListExportVisible"
+    :region-code="activeRegionCode"
+    :region-name="activeRegionLabel"
+    :selected-codes="selectedRows.length ? selectedRows.map((row) => row.code) : null"
+  />
+  <ContractorListImportDialog
+    v-model="dcListImportVisible"
+    @imported="loadData"
+  />
+  <DbQualityCheckDialog
+    v-model="dcQualityCheckVisible"
+    :region-code="activeRegionCode"
+    :region-name="activeRegionLabel"
+  />
 </template>
 
 <script setup>
 import { onMounted, reactive, ref, computed, watch } from "vue";
+import { useRoute } from "vue-router";
 import { ElLoading, ElMessage, ElMessageBox } from "element-plus";
 
 import {
@@ -139,7 +171,22 @@ import { useDictionary } from "../composables/useDictionary";
 import { useAuthStore } from "../stores/auth";
 import ContractorDialog from "../components/contractors/ContractorDialog.vue";
 import RegionFilterPanel from "../components/contractors/RegionFilterPanel.vue";
+import ContractorListExportDialog from "../components/dataCenter/ContractorListExportDialog.vue";
+import ContractorListImportDialog from "../components/dataCenter/ContractorListImportDialog.vue";
+import DbQualityCheckDialog from "../components/dataCenter/DbQualityCheckDialog.vue";
 import SurveyBatchPanel from "../components/survey/SurveyBatchPanel.vue";
+
+const route = useRoute();
+// 数据中心入口（/dc/contractors）：整库口径 —— 无批次面板，勾选行/区域树/整库组织功能。
+const isDataCenter = computed(() => !!route.meta.dataCenter);
+const selectedRows = ref([]);
+const dcListExportVisible = ref(false);
+const dcListImportVisible = ref(false);
+const dcQualityCheckVisible = ref(false);
+
+function handleSelectionChange(selection) {
+  selectedRows.value = selection || [];
+}
 
 const authStore = useAuthStore();
 const canManage = computed(() => authStore.hasPermission("contractors.manage"));
@@ -637,7 +684,12 @@ async function handleDelete(row) {
 loadRegionTree();
 
 // 用户在 /surveys「进入任务」记住的批次作为默认选中（读不写，不改其记忆）。
+// 数据中心入口跳过批次记忆：这里永远整库口径。
 onMounted(async () => {
+  if (isDataCenter.value) {
+    loadData();
+    return;
+  }
   try {
     const { data } = await fetchCurrentSurveyBatch();
     if (data.data?.id) {
@@ -657,9 +709,18 @@ onMounted(async () => {
   grid-template-columns: 280px minmax(0, 1fr) 380px;
 }
 
+/* 数据中心入口无批次面板：两栏（列表 + 区域筛选面板）。 */
+.contractor-workspace.dc-mode {
+  grid-template-columns: minmax(0, 1fr) 380px;
+}
+
 @media (max-width: 1280px) {
   .contractor-workspace {
     grid-template-columns: 280px minmax(0, 1fr);
+  }
+
+  .contractor-workspace.dc-mode {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

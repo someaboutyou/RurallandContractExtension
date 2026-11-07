@@ -192,7 +192,8 @@ const navItems = [
     key: "data-center",
     label: "数据中心",
     children: [
-      { to: "/contractors", label: "承包方台账", permissions: ["contractors.view"] },
+      { to: "/dc/issuers", label: "发包方管理", permissions: ["issuers.view"] },
+      { to: "/dc/contractors", label: "承包方管理", permissions: ["contractors.view"] },
       { to: "/data-imports", label: "数据导入", permissions: ["contractors.view"] },
       { to: "/data-exports", label: "数据导出", permissions: ["contractors.view"] },
     ],

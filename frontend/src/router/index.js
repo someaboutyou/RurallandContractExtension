@@ -40,6 +40,10 @@ const appChildren = [
   { path: "issuers", name: "issuers", component: IssuerView, meta: { requiresAuth: true, permissions: ["issuers.view"] } },
   { path: "survey-templates", name: "survey-templates", component: SurveyTemplateView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
   { path: "contractors", name: "contractors", component: ContractorView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
+  // 数据中心入口（/dc/*）：同一套组件，但整库口径 —— 无批次面板、列表不绑批次，
+  // 工具栏按「勾选行 / 整库（区域树可选）」组织，与建库中心的批次口径分开。
+  { path: "dc/contractors", name: "dc-contractors", component: ContractorView, meta: { requiresAuth: true, dataCenter: true, permissions: ["contractors.view"] } },
+  { path: "dc/issuers", name: "dc-issuers", component: IssuerView, meta: { requiresAuth: true, dataCenter: true, permissions: ["issuers.view"] } },
   { path: "parcels", name: "parcels", component: ParcelOverviewView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
   { path: "data-imports", name: "data-imports", component: DataImportView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
   { path: "data-exports", name: "data-exports", component: DataExportView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },

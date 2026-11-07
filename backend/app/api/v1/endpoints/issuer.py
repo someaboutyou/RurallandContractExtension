@@ -78,19 +78,31 @@ def export_issuers_xls(
     keyword: str | None = Query(default=None),
     batch_id: int | None = Query(default=None, alias="batchId"),
     region_code: str | None = Query(default=None, alias="regionCode"),
+    codes: str | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("issuers.view")),
 ):
     """导出发包方清单（Excel，口径与页面查询一致）。
 
-    ``batchId``（建库中心批次口径）与 ``regionCode``（数据中心区域口径）二选一；
-    都不传即数据权限范围内的整库。
+    ``codes``（数据中心已选口径，逗号分隔编码）优先；其次 ``batchId``
+    （建库中心批次口径）与 ``regionCode``（数据中心区域口径）；都不传即
+    数据权限范围内的整库。
     """
     from urllib.parse import quote
 
-    batch_codes = issuer_service.batch_issuer_codes(db, batch_id) if batch_id is not None else None
+    selected_codes = [c.strip() for c in (codes or "").split(",") if c.strip()] or None
+    batch_codes = (
+        issuer_service.batch_issuer_codes(db, batch_id)
+        if batch_id is not None and selected_codes is None
+        else None
+    )
     filename, content = issuer_excel_transfer_service.export_xls(
-        db, current_user, keyword=keyword, batch_codes=batch_codes, region_code=region_code
+        db,
+        current_user,
+        keyword=keyword if selected_codes is None else None,
+        batch_codes=batch_codes,
+        region_code=region_code if selected_codes is None else None,
+        selected_codes=selected_codes,
     )
     return Response(
         content=content,
