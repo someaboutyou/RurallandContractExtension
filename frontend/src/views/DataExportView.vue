@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <section class="panel data-export-page">
     <div class="export-layout">
       <!-- 左栏：区域树 -->
@@ -37,6 +37,7 @@
           lazy
           :expand-on-click-node="false"
           :filter-node-method="filterRegionNode"
+          @node-click="handleRegionNodeClick"
         >
           <template #default="{ node, data }">
             <div class="region-tree-node">
@@ -141,7 +142,33 @@
         </div>
       </div>
     </div>
+
+    <!-- 数据中心特有：清单导出（区域/整库）+ 全库数据质检（建库中心同能力走批次口径） -->
+    <div class="dc-actions-bar">
+      <div class="dc-scope">
+        <span class="dc-scope-label">作用范围</span>
+        <el-tag :type="selectedRegion ? 'primary' : 'info'" size="small">
+          {{ selectedRegion ? (selectedRegion.fullName || selectedRegion.name) : "整库" }}
+        </el-tag>
+        <span class="dc-scope-hint">在左侧区域树上点击节点切换范围（数据质检与清单导出共用）</span>
+      </div>
+      <div class="dc-buttons">
+        <el-button plain type="primary" @click="listExportVisible = true">清单导出</el-button>
+        <el-button plain type="warning" @click="qualityCheckVisible = true">数据质检</el-button>
+      </div>
+    </div>
   </section>
+
+  <ContractorListExportDialog
+    v-model="listExportVisible"
+    :region-code="selectedRegion?.code || ''"
+    :region-name="selectedRegion ? (selectedRegion.fullName || selectedRegion.name || '') : ''"
+  />
+  <DbQualityCheckDialog
+    v-model="qualityCheckVisible"
+    :region-code="selectedRegion?.code || ''"
+    :region-name="selectedRegion ? (selectedRegion.fullName || selectedRegion.name || '') : ''"
+  />
 </template>
 
 <script setup>
@@ -156,6 +183,8 @@ import {
   downloadDataExport,
   fetchDataExports,
 } from "../api/dataExport";
+import ContractorListExportDialog from "../components/dataCenter/ContractorListExportDialog.vue";
+import DbQualityCheckDialog from "../components/dataCenter/DbQualityCheckDialog.vue";
 
 const regionTreeProps = { label: "fullName", children: "children", isLeaf: "leaf" };
 
@@ -183,6 +212,20 @@ const EXPORT_TYPE_LABELS = {
 };
 
 const exportFormat = ref("contractor_roster");
+
+// ── 数据中心清单导出 / 数据质检（作用范围 = 左侧树上选中的区域，未选=整库）──
+const listExportVisible = ref(false);
+const qualityCheckVisible = ref(false);
+const selectedRegion = ref(null);
+
+function handleRegionNodeClick(data) {
+  // 只把非省级节点当作用域（省级 = 整库）；再次点击已选节点可切回整库。
+  if (!data?.code || data.level === "province") {
+    selectedRegion.value = null;
+    return;
+  }
+  selectedRegion.value = data;
+}
 
 function exportTypeLabel(value) {
   return EXPORT_TYPE_LABELS[value] || value || "—";
@@ -530,5 +573,40 @@ onBeforeUnmount(() => {
 .table-actions {
   display: flex;
   gap: 4px;
+}
+
+/* 数据中心清单导出 / 质检入口条 */
+.dc-actions-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-fill-color-lighter);
+}
+.dc-scope {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.dc-scope-label {
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+.dc-scope-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-buttons {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
 }
 </style>

@@ -149,6 +149,7 @@ def job_public_view(job: dict | None) -> dict | None:
         "jobId": job["id"],
         "runId": job["runId"],
         "batchId": job["batchId"],
+        "regionCode": job.get("regionCode", ""),
         "items": job["items"],
         "status": job["status"],
         "phase": job["phase"],
@@ -340,6 +341,119 @@ def _load_run_context(db: Session, batch) -> dict:
         "contract_numbers": contract_numbers,
         "relation_codes": relation_codes,
         "geom_missing_ids": geom_missing_ids,
+    }
+
+
+def _load_db_run_context(db: Session, tenant: str, region_code: str | None) -> dict:
+    """数据中心（无批次）模式的上下文装载：直接查主表成果，按区域前缀收敛。
+
+    与批次模式共用同一批检查函数——检查项只消费 ctx，本函数负责把
+    「整库/所选区域」的主表数据装成同样的形状（base=result 自身）。
+    """
+    from types import SimpleNamespace
+
+    from app.models.cbht import Cbht
+    from app.models.dictionary import DictionaryItem
+    from app.models.survey import (
+        SurveyCbfJtcyResult,
+        SurveyCbfResult,
+        SurveyCbdkxxResult,
+        SurveyDkResult,
+        SurveyFbfResult,
+    )
+
+    opts = {"skip_tenant_scope": True}
+    prefix = (region_code or "").strip()
+
+    def _region_filters(model, column):
+        filters = [model.tenant_code == tenant]
+        if prefix:
+            filters.append(column.startswith(prefix))
+        return filters
+
+    results_by_uid: dict[str, SurveyCbfResult] = {}
+    cbf_rows_all = db.scalars(
+        select(SurveyCbfResult)
+        .where(*_region_filters(SurveyCbfResult, SurveyCbfResult.group_region_code))
+        .order_by(SurveyCbfResult.id.asc())
+        .execution_options(**opts)
+    ).all()
+    for row in cbf_rows_all:  # 同 uid 多行时取最新（与批次模式 results_by_uid 口径一致）
+        results_by_uid[row.contractor_uid] = row
+    cbf_rows: list[SurveyCbfResult] = list(results_by_uid.values())
+    uids = list(results_by_uid)
+
+    members: list[SurveyCbfJtcyResult] = []
+    if uids:
+        members = list(db.scalars(
+            select(SurveyCbfJtcyResult).where(
+                SurveyCbfJtcyResult.tenant_code == tenant,
+                SurveyCbfJtcyResult.contractor_uid.in_(uids),
+            ).execution_options(**opts)
+        ).all())
+
+    fbf_rows = db.scalars(
+        select(SurveyFbfResult)
+        .where(*_region_filters(SurveyFbfResult, SurveyFbfResult.fbfbm))
+        .execution_options(**opts)
+    ).all()
+    fbf_pairs = [(row, row) for row in fbf_rows]
+
+    dk_rows = db.scalars(
+        select(SurveyDkResult)
+        .where(*_region_filters(SurveyDkResult, SurveyDkResult.dkbm))
+        .execution_options(**opts)
+    ).all()
+    dk_pairs = [(row, row) for row in dk_rows]
+
+    cbdk_rows = db.scalars(
+        select(SurveyCbdkxxResult)
+        .where(*_region_filters(SurveyCbdkxxResult, SurveyCbdkxxResult.cbfbm))
+        .execution_options(**opts)
+    ).all()
+    cbdk_pairs = [(row, row) for row in cbdk_rows]
+
+    contract_numbers: set[str] = set()
+    try:
+        stmt = select(Cbht.cbhtbm).where(Cbht.tenant_code == tenant)
+        if prefix:
+            stmt = stmt.where(Cbht.cbhtbm.like(f"{prefix}%"))
+        contract_numbers = set(db.scalars(stmt.execution_options(**opts)).all())
+    except Exception:  # noqa: BLE001
+        logger.exception("质检装载合同台账失败，合同勾稽检查降级为跳过")
+
+    relation_codes: set[str] = set(db.scalars(
+        select(DictionaryItem.item_value).where(
+            DictionaryItem.dict_type == "nyt2539_c20_relation_to_head",
+            DictionaryItem.enabled.is_(True),
+        )
+    ).all())
+
+    geom_missing_ids: set[int] = set()
+    dk_result_ids = [row.id for row in dk_rows]
+    if dk_result_ids:
+        try:
+            for start in range(0, len(dk_result_ids), 1000):
+                chunk = dk_result_ids[start:start + 1000]
+                rows = db.execute(
+                    text("SELECT id FROM survey_dk_result WHERE tenant_code = :tc AND geom IS NULL AND id = ANY(:ids)"),
+                    {"tc": tenant, "ids": chunk},
+                )
+                geom_missing_ids.update(int(r[0]) for r in rows)
+        except Exception:  # noqa: BLE001
+            logger.exception("质检检查空间图形失败，该项降级为跳过")
+
+    return {
+        "bases": cbf_rows,
+        "results_by_uid": results_by_uid,
+        "members": members,
+        "fbf_pairs": fbf_pairs,
+        "dk_pairs": dk_pairs,
+        "cbdk_pairs": cbdk_pairs,
+        "contract_numbers": contract_numbers,
+        "relation_codes": relation_codes,
+        "geom_missing_ids": geom_missing_ids,
+        "batch": SimpleNamespace(id=0, batch_no="整库", tenant_code=tenant, region_code=prefix),
     }
 
 
@@ -632,6 +746,100 @@ def start_quality_check_job(batch_id: int, user_id: int, items: dict[str, bool] 
     return job
 
 
+def start_db_quality_check_job(
+    user_id: int, region_code: str | None = None, items: dict[str, bool] | None = None
+) -> dict:
+    """数据中心（无批次）质检：直接检查主表成果，按区域前缀收敛，batch_id=0 哨兵留痕。"""
+    job = _create_job(0, user_id, items or {})
+    job["regionCode"] = (region_code or "").strip()
+    with _LOCK:
+        if job["id"] in _JOBS:
+            _JOBS[job["id"]]["regionCode"] = job["regionCode"]
+
+    def target():
+        from app.db.session import SessionLocal
+        from app.models.user import User
+        from app.services.data_access_service import data_access_service
+
+        db = SessionLocal()
+        try:
+            user = db.get(User, user_id)
+            tenant = data_access_service.derive_tenant_code(job["regionCode"] or None)
+            if not tenant:
+                raise ValueError("无法确定租户（缺少区域码或租户配置）")
+            enabled = job["items"]
+            _update_job(job["id"], phase="装载数据…")
+            ctx = _load_db_run_context(db, tenant, job["regionCode"])
+            batch = ctx["batch"]
+
+            total = 1
+            if enabled.get("fbf"):
+                total += len(ctx["fbf_pairs"])
+            if enabled.get("cbf"):
+                total += len(ctx["bases"])
+            if enabled.get("land"):
+                total += len(ctx["dk_pairs"])
+            if enabled.get("contract"):
+                total += len(ctx["bases"]) + len(ctx["cbdk_pairs"])
+            total = max(total, 1)
+            state = {"done": 0}
+
+            def tick():
+                state["done"] += 1
+                _update_job(job["id"], done=state["done"], total=total)
+
+            writer = _RecordWriter(db, job["runId"], batch, user_id)
+            started_at = time.time()
+
+            _update_job(job["id"], phase="检查证件号码重复")
+            if enabled.get("card_no", True):
+                _check_card_no(ctx, writer, tick)
+            if enabled.get("fbf", True):
+                _update_job(job["id"], phase="检查发包方信息")
+                _check_fbf(ctx, writer, tick)
+            if enabled.get("cbf", True):
+                _update_job(job["id"], phase="检查承包方信息")
+                _check_cbf(ctx, writer, tick)
+            if enabled.get("land", True):
+                _update_job(job["id"], phase="检查承包地块信息")
+                _check_land(ctx, writer, tick)
+            if enabled.get("contract", True):
+                _update_job(job["id"], phase="检查合同与权证")
+                _check_contract(ctx, writer, tick)
+
+            _update_job(job["id"], phase="写入质检记录")
+            duration_ms = int((time.time() - started_at) * 1000)
+            summary = {
+                "scope": "db",
+                "regionCode": job["regionCode"],
+                "items": {k: v for k, v in enabled.items() if v},
+                "counts": writer.counts,
+                "perItem": writer.per_item,
+                "durationMs": duration_ms,
+                "notes": ["权证台账本系统未建表，权证检查以合同台账勾稽替代"] if enabled.get("contract") else [],
+            }
+            writer.add("summary", "summary", json.dumps(summary, ensure_ascii=False))
+            writer.flush()
+
+            counts = dict(writer.counts)
+            _update_job(job["id"], status="done", phase="质检完成", done=total, total=total,
+                        counts=counts, current="")
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("数据中心质检任务失败 job=%s", job["id"])
+            try:
+                db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            _update_job(job["id"], status="error", error=str(exc) or exc.__class__.__name__,
+                        detail=traceback.format_exc(limit=5))
+        finally:
+            db.close()
+
+    thread = threading.Thread(target=target, name=f"qc-db-job-{job['id'][:8]}", daemon=True)
+    thread.start()
+    return job
+
+
 # ── 历史记录查询（供端点使用）────────────────────────────────
 
 def list_runs(db: Session, batch_id: int, page: int = 1, page_size: int = 20) -> dict:
@@ -658,6 +866,7 @@ def list_runs(db: Session, batch_id: int, page: int = 1, page_size: int = 20) ->
             "runId": row.run_id,
             "batchId": row.batch_id,
             "batchNo": row.batch_no,
+            "regionCode": (summary or {}).get("regionCode") or row.region_code or "",
             "counts": (summary or {}).get("counts") or {},
             "perItem": (summary or {}).get("perItem") or {},
             "items": (summary or {}).get("items") or {},
@@ -740,7 +949,7 @@ def build_records_export(
     from app.models.survey import SurveyBatch, SurveyQualityCheckRecord
 
     batch = db.get(SurveyBatch, batch_id)
-    batch_no = batch.batch_no if batch else str(batch_id)
+    batch_no = batch.batch_no if batch else ("整库" if batch_id == 0 else str(batch_id))
 
     query = db.query(SurveyQualityCheckRecord).filter(
         SurveyQualityCheckRecord.batch_id == batch_id,

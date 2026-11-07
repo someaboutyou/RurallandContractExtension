@@ -274,6 +274,7 @@ class SurveyServiceExcelTransferMixin:
         return {
             "cbfbm": (result.cbfbm if result else task.cbfbm) or "",
             "cbfmc": (result.cbfmc if result else task.cbfmc) or "",
+            "groupRegionName": (getattr(result, "group_region_name", None) if result else None) or "",
             "cbflx": CONTRACTOR_TYPE_LABELS.get(result.cbflx if result else task.cbflx, ""),
             "members": [
                 {
@@ -550,6 +551,170 @@ class SurveyServiceExcelTransferMixin:
         }
         return (data if not errors else None), errors
 
+    # ── 公共差异比对（建库中心批次导入 / 数据中心导入同源）─────────────────
+
+    def _diff_members_for_import(
+        self,
+        existing_members: list[dict],
+        excel_members: list[dict],
+        *,
+        member_change_reason: str,
+    ) -> dict:
+        """家庭成员差异比对（按证件号码匹配）。
+
+        供两条导入链路共用：
+        - 建库中心批次导入（``_plan_household`` update 分支）
+        - 数据中心清单导入（``_plan_household_db``，按承包方编号匹配主表）
+
+        ``existing_members`` 为库内成员字典列表（须含 ``idNo``；``memberUid``/
+        ``isHouseholdHead``/``changeReason`` 可缺省——两条链路的详情序列化口径
+        不同，缺失的键按空值处理，payload 由调用方全量重写成员表）。
+
+        返回 dict：``members_payload`` / ``added`` / ``updated`` / ``deleted_names`` /
+        ``deleted_payloads``（批次链路的 deletedMembers，数据中心忽略）/
+        ``warnings`` / ``errors`` / ``excel_row_count``（未标记删除的成员行数）。
+        """
+        members_payload: list[dict] = []
+        added_names: list[str] = []
+        updated_summaries: list[str] = []
+        deleted_names: list[str] = []
+        deleted_payloads: list[dict] = []
+        deleted_keys: set[str] = set()
+        matched_keys: set[str] = set()
+        warnings: list[str] = []
+        errors: list[str] = []
+
+        existing_by_id: dict[str, dict] = {}
+        for member in existing_members:
+            id_no = (member.get("idNo") or "").strip()
+            if id_no:
+                existing_by_id.setdefault(id_no, member)
+
+        def _member_key(target: dict) -> str:
+            """成员身份键：memberUid 优先，缺省（数据中心详情口径）退回证件号。"""
+            return str(target.get("memberUid") or "") or f"id:{target.get('idNo') or ''}"
+
+        for member in excel_members:
+            if member.get("marked_delete"):
+                # 删除标记：按证件号码匹配库内成员 → 从 payload 剔除并记 deletedMembers
+                # （两条链路的成员表都是整体重写，省略即删除；deleted_payloads 只承载变化原因）
+                target = existing_by_id.get(member["id_no"]) if member["id_no"] else None
+                if target is None:
+                    warnings.append(
+                        f"标记删除的成员「{member['name']}」在库内不存在或证件号为空无法匹配，忽略删除"
+                    )
+                    continue
+                # 户主判定：批次详情带 isHouseholdHead；数据中心详情按关系码兜底
+                is_head = bool(target.get("isHouseholdHead")) or (
+                    target.get("relationToHead") or ""
+                ) in HEAD_RELATION_PRIORITY
+                if is_head:
+                    errors.append(f"成员「{member['name']}」是户主，不能标记删除；如需调整请直接修改户主信息")
+                    continue
+                key = _member_key(target)
+                matched_keys.add(key)
+                deleted_keys.add(key)
+                deleted_names.append(member["name"])
+                deleted_payloads.append({
+                    "memberUid": target.get("memberUid"),
+                    "changeReason": member_change_reason,
+                })
+                continue
+            if not member["id_no"]:
+                errors.append(f"成员「{member['name']}」证件号码为空，无法匹配（导入要求证件号码必填）")
+                continue
+            target = existing_by_id.get(member["id_no"])
+            if target is None:
+                if not member["gender"]:
+                    errors.append(f"新增成员「{member['name']}」性别为空且无法从证件号码判定")
+                    continue
+                members_payload.append({
+                    "name": member["name"],
+                    "gender": member["gender"],
+                    "idType": member["id_type"] or _DEFAULT_ID_TYPE,
+                    "idNo": member["id_no"],
+                    "relationToHead": member["relation"] or _DEFAULT_RELATION,
+                    "isCoOwner": member["is_co_owner"] or "0",
+                    "note": member["note"] or None,
+                    "isHouseholdHead": member["is_head_label"],
+                    "changeReason": member_change_reason,
+                })
+                added_names.append(member["name"])
+                continue
+            matched_keys.add(_member_key(target))
+            entry = dict(target)
+            changed_fields = []
+            for excel_key, payload_key, label in [
+                ("name", "name", "姓名"),
+                ("gender", "gender", "性别"),
+                ("id_type", "idType", "证件类型"),
+                ("relation", "relationToHead", "与户主关系"),
+                ("is_co_owner", "isCoOwner", "是否共有人"),
+            ]:
+                new_value = member.get(excel_key)
+                if new_value and str(new_value) != str(target.get(payload_key) or ""):
+                    entry[payload_key] = new_value
+                    changed_fields.append(label)
+            new_note = member.get("note") or ""
+            if new_note and new_note != str(target.get("note") or ""):
+                entry["note"] = new_note
+                changed_fields.append("备注")
+            if changed_fields:
+                if not (entry.get("changeReason") or "").strip():
+                    entry["changeReason"] = member_change_reason
+                updated_summaries.append(f"{member['name']}（{'、'.join(changed_fields)}）")
+            members_payload.append(entry)
+
+        for member in existing_members:
+            key = _member_key(member)
+            if key and key not in matched_keys and key not in deleted_keys:
+                members_payload.append(member)
+                warnings.append(
+                    f"库内成员「{member.get('name') or member.get('idNo')}」不在 Excel 中，按原样保留"
+                )
+
+        excel_row_count = sum(1 for m in excel_members if not m.get("marked_delete"))
+        return {
+            "members_payload": members_payload,
+            "added": added_names,
+            "updated": updated_summaries,
+            "deleted_names": deleted_names,
+            "deleted_payloads": deleted_payloads,
+            "warnings": warnings,
+            "errors": errors,
+            "excel_row_count": excel_row_count,
+        }
+
+    def _assign_head_flags(self, members_payload: list[dict], excel_members: list[dict]) -> None:
+        """户主唯一化（⛔ 一个户里绝不能出现两个户主类标记）。
+
+        Excel 标「户主/本人」的成员优先 → payload 既有 isHouseholdHead →
+        关系码兜底（统一口径）；户主关系统一收敛为「02」。
+        ``excel_members`` 与 ``members_payload`` 前 N 项同序（Excel 成员在前）。
+        """
+        head_idx: int | None = None
+        for i, member in enumerate(excel_members):
+            if member.get("is_head_label") and i < len(members_payload) and members_payload[i].get("idNo") == member["id_no"]:
+                head_idx = i
+                break
+        if head_idx is None:
+            for i, entry in enumerate(members_payload):
+                if entry.get("isHouseholdHead"):
+                    head_idx = i
+                    break
+        if head_idx is None:
+            for i, entry in enumerate(members_payload):
+                if (entry.get("relationToHead") or "") in HEAD_RELATION_PRIORITY:
+                    head_idx = i
+                    break
+        if head_idx is None and members_payload:
+            head_idx = 0
+        for i, entry in enumerate(members_payload):
+            entry["isHouseholdHead"] = head_idx is not None and i == head_idx
+            head_entry = members_payload[head_idx]
+            if head_entry.get("relationToHead") not in HEAD_RELATION_PRIORITY:
+                head_entry["relationToHead"] = "02"
+
     # ── 匹配与差异 ──────────────────────────────────────────────────────────
 
     # (payload key, 规范化数据 key, 标签)
@@ -619,92 +784,23 @@ class SurveyServiceExcelTransferMixin:
         updated_summaries: list[str] = []
         deleted_names: list[str] = []
         deleted_member_payloads: list[dict] = []
-        deleted_uids: set[str] = set()
-        # 家庭成员数（个）按「未标记删除」的成员行数比对
-        excel_row_count = sum(1 for m in household["members"] if not m.get("marked_delete"))
+        excel_row_count = 0
 
         if action == "update":
-            existing_members = list(current.get("familyMembers") or [])
-            existing_by_id: dict[str, dict] = {}
-            for member in existing_members:
-                id_no = (member.get("idNo") or "").strip()
-                if id_no:
-                    existing_by_id.setdefault(id_no, member)
-            matched_uids: set[str] = set()
-
-            for member in household["members"]:
-                if member.get("marked_delete"):
-                    # 删除标记：按证件号码匹配库内成员 → 从 payload 剔除并记 deletedMembers
-                    # （update_result 整表重写成员，省略即删除；deletedMembers 只承载变化原因）
-                    target = existing_by_id.get(member["id_no"]) if member["id_no"] else None
-                    if target is None:
-                        warnings.append(
-                            f"标记删除的成员「{member['name']}」在库内不存在或证件号为空无法匹配，忽略删除"
-                        )
-                        continue
-                    if target.get("isHouseholdHead"):
-                        errors.append(f"成员「{member['name']}」是户主，不能标记删除；如需调整请直接修改户主信息")
-                        continue
-                    matched_uids.add(target.get("memberUid"))
-                    deleted_uids.add(target.get("memberUid"))
-                    deleted_names.append(member["name"])
-                    deleted_member_payloads.append({
-                        "memberUid": target.get("memberUid"),
-                        "changeReason": "承包方调查表（Excel）标记删除",
-                    })
-                    continue
-                if not member["id_no"]:
-                    errors.append(f"成员「{member['name']}」证件号码为空，无法匹配（导入要求证件号码必填）")
-                    continue
-                target = existing_by_id.get(member["id_no"])
-                if target is None:
-                    if not member["gender"]:
-                        errors.append(f"新增成员「{member['name']}」性别为空且无法从证件号码判定")
-                        continue
-                    members_payload.append({
-                        "name": member["name"],
-                        "gender": member["gender"],
-                        "idType": member["id_type"] or _DEFAULT_ID_TYPE,
-                        "idNo": member["id_no"],
-                        "relationToHead": member["relation"] or _DEFAULT_RELATION,
-                        "isCoOwner": member["is_co_owner"] or "0",
-                        "note": member["note"] or None,
-                        "isHouseholdHead": member["is_head_label"],
-                        "changeReason": IMPORT_MEMBER_CHANGE_REASON,
-                    })
-                    added_names.append(member["name"])
-                    continue
-                matched_uids.add(target.get("memberUid"))
-                entry = dict(target)
-                changed_fields = []
-                for excel_key, payload_key, label in [
-                    ("name", "name", "姓名"),
-                    ("gender", "gender", "性别"),
-                    ("id_type", "idType", "证件类型"),
-                    ("relation", "relationToHead", "与户主关系"),
-                    ("is_co_owner", "isCoOwner", "是否共有人"),
-                ]:
-                    new_value = member.get(excel_key)
-                    if new_value and str(new_value) != str(target.get(payload_key) or ""):
-                        entry[payload_key] = new_value
-                        changed_fields.append(label)
-                new_note = member.get("note") or ""
-                if new_note and new_note != str(target.get("note") or ""):
-                    entry["note"] = new_note
-                    changed_fields.append("备注")
-                if changed_fields:
-                    if not (entry.get("changeReason") or "").strip():
-                        entry["changeReason"] = IMPORT_MEMBER_CHANGE_REASON
-                    updated_summaries.append(f"{member['name']}（{'、'.join(changed_fields)}）")
-                members_payload.append(entry)
-
-            for member in existing_members:
-                uid = member.get("memberUid")
-                if uid not in matched_uids and uid not in deleted_uids:
-                    members_payload.append(member)
-                    warnings.append(
-                        f"库内成员「{member.get('name') or member.get('idNo')}」不在 Excel 中，按原样保留"
-                    )
+            # 公共成员差异比对（与数据中心清单导入同源）
+            diff = self._diff_members_for_import(
+                list(current.get("familyMembers") or []),
+                household["members"],
+                member_change_reason=IMPORT_MEMBER_CHANGE_REASON,
+            )
+            members_payload = diff["members_payload"]
+            added_names = diff["added"]
+            updated_summaries = diff["updated"]
+            deleted_names = diff["deleted_names"]
+            deleted_member_payloads = diff["deleted_payloads"]
+            warnings.extend(diff["warnings"])
+            errors.extend(diff["errors"])
+            excel_row_count = diff["excel_row_count"]
 
             if household["member_count_raw"]:
                 try:
@@ -749,31 +845,8 @@ class SurveyServiceExcelTransferMixin:
                 errors.append("新增户至少需要一名带证件号码的家庭成员")
 
         # 户主唯一化（⛔ 一个户里绝不能出现两个户主类标记）：
-        # Excel 标「户主/本人」的成员优先 → 原有 isHouseholdHead → 关系码兜底（统一口径）。
-        head_idx: int | None = None
-        if action == "update":
-            # members_payload 前 excel_row_count 项与 household["members"] 同序
-            for i, member in enumerate(household["members"]):
-                if member.get("is_head_label") and i < len(members_payload) and members_payload[i].get("idNo") == member["id_no"]:
-                    head_idx = i
-                    break
-        if head_idx is None:
-            for i, entry in enumerate(members_payload):
-                if entry.get("isHouseholdHead"):
-                    head_idx = i
-                    break
-        if head_idx is None:
-            for i, entry in enumerate(members_payload):
-                if (entry.get("relationToHead") or "") in HEAD_RELATION_PRIORITY:
-                    head_idx = i
-                    break
-        if head_idx is None and members_payload:
-            head_idx = 0
-        for i, entry in enumerate(members_payload):
-            entry["isHouseholdHead"] = head_idx is not None and i == head_idx
-            head_entry = members_payload[head_idx]
-            if head_entry.get("relationToHead") not in HEAD_RELATION_PRIORITY:
-                head_entry["relationToHead"] = "02"
+        # Excel 标「户主/本人」的成员优先 → 既有 isHouseholdHead → 关系码兜底（统一口径）。
+        self._assign_head_flags(members_payload, household["members"] if action == "update" else [])
 
         # 有没有实际变化
         if action == "update":

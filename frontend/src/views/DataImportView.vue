@@ -5,6 +5,8 @@
       <div class="toolbar-actions">
         <el-input v-model="keyword" clearable placeholder="搜索批次号或名称" style="width: 220px" @keyup.enter="loadBatches" />
         <el-button plain @click="loadBatches">刷新</el-button>
+        <el-button v-if="canManage" plain @click="issuerListImportVisible = true">发包方清单导入</el-button>
+        <el-button v-if="canManage" plain @click="contractorListImportVisible = true">承包方清单导入</el-button>
         <el-button v-if="canManage" type="success" @click="openCreateDialog">新建导入批次</el-button>
       </div>
     </div>
@@ -205,6 +207,10 @@
       <el-button :loading="fixSubmitting" type="success" @click="handleFixImport">修正并导入</el-button>
     </template>
   </el-dialog>
+
+  <!-- 数据中心特有：清单导入（无批次口径；建库中心清单导入走批次任务页） -->
+  <IssuerXlsImportDialog v-model="issuerListImportVisible" />
+  <ContractorListImportDialog v-model="contractorListImportVisible" />
 </template>
 
 <script setup>
@@ -225,9 +231,16 @@ import {
 } from "../api/dataImport";
 import { fetchRegionChildren, searchRegions } from "../api/region";
 import { useAuthStore } from "../stores/auth";
+import IssuerXlsImportDialog from "../components/issuers/IssuerXlsImportDialog.vue";
+import ContractorListImportDialog from "../components/dataCenter/ContractorListImportDialog.vue";
 
 const authStore = useAuthStore();
 const canManage = computed(() => authStore.hasPermission("contractors.manage"));
+
+// ── 数据中心清单导入（无批次口径）──
+const issuerListImportVisible = ref(false);
+const contractorListImportVisible = ref(false);
+
 const loading = ref(false);
 const submitting = ref(false);
 const uploading = ref(false);

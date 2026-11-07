@@ -57,12 +57,19 @@ class IssuerExcelTransferService:
         *,
         keyword: str | None = None,
         batch_codes: list[str] | None = None,
+        region_code: str | None = None,
     ) -> tuple[str, bytes]:
-        """导出当前数据权限 + 查询关键字下的发包方清单（可再按批次过滤）。"""
+        """导出当前数据权限 + 查询关键字下的发包方清单（可再按批次/区域过滤）。
+
+        ``region_code`` 为数据中心口径：按发包方编码前缀（省县镇村组码）收敛范围，
+        为空即整库（数据权限仍生效）。
+        """
         filters = data_access_service.build_code_scope_filters(Fbf.fbfbm, current_user)
         if batch_codes is not None:
             # 批次内无发包方时也要给出带表头的空文件，而不是损坏的响应。
             filters.append(Fbf.fbfbm.in_(batch_codes or [""]))
+        if region_code and region_code.strip():
+            filters.append(Fbf.fbfbm.like(f"{region_code.strip()}%"))
         stmt = select(Fbf).where(*filters)
         if keyword and keyword.strip():
             pattern = f"%{keyword.strip()}%"
@@ -82,6 +89,8 @@ class IssuerExcelTransferService:
         workbook.save(buffer)
 
         filename = "发包方调查表.xls"
+        if region_code and region_code.strip():
+            filename = f"发包方清单_{_UNSAFE_FILENAME.sub('_', region_code.strip())}.xls"
         if keyword and keyword.strip():
             filename = f"发包方调查表_{_UNSAFE_FILENAME.sub('_', keyword.strip())}.xls"
         logger.info(
