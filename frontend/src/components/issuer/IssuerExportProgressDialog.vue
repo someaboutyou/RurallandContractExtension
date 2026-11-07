@@ -52,12 +52,12 @@ import {
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
-  kind: { type: String, default: "survey" }, // survey=发包方调查表 | publicity=村组公示表
+  kind: { type: String, default: "survey" }, // survey=发包方调查表 | publicity=村组公示签字表
   codes: { type: Array, default: () => [] },
 });
 const emit = defineEmits(["update:modelValue"]);
 
-const KIND_LABELS = { survey: "发包方调查表", publicity: "村组公示表" };
+const KIND_LABELS = { survey: "发包方调查表", publicity: "村组公示签字表" };
 
 const job = ref({});
 const jobStatus = ref("idle"); // idle / running / done / error

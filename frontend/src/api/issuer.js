@@ -63,7 +63,7 @@ export function exportIssuerSurveyDocxBulk(payload) {
   });
 }
 
-/** 按发包方（村组）导出《调查信息公示表》Excel（一个发包方一个 sheet）。 */
+/** 按发包方（村组）导出《调查信息公示签字表》Excel（一个发包方一个 sheet）。 */
 export function exportPublicityXls(payload) {
   return http.post("/issuers/publicity-xls", payload, {
     responseType: "blob",

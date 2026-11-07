@@ -7,7 +7,7 @@
 支持两种导出类型（kind）：
 
 - ``survey``：发包方调查表 Word——单个 docx，多个打包 zip；
-- ``publicity``：村组公示表 xls——所有选中村组合并为**一个** xls
+- ``publicity``：村组公示签字表 xls——所有选中村组合并为**一个** xls
   （一个发包方一个 sheet，与同步端点口径一致），进度按 sheet 汇报。
 
 进度状态放进程内存，任务数上限 ``MAX_TASKS``，超出按创建时间淘汰最旧的。
@@ -41,12 +41,12 @@ MAX_TASKS = 20
 #: 支持的导出类型 → 展示名（用于进度文案与默认文件名）
 KIND_LABELS: dict[str, str] = {
     "survey": "发包方调查表",
-    "publicity": "村组公示表",
+    "publicity": "村组公示签字表",
 }
 
 
 class IssuerExportTaskService:
-    """按选中发包方（村组）批量导出调查表 / 公示表，带进度。"""
+    """按选中发包方（村组）批量导出调查表 / 公示签字表，带进度。"""
 
     def __init__(self) -> None:
         self._tasks: dict[str, dict[str, Any]] = {}
@@ -199,7 +199,7 @@ class IssuerExportTaskService:
     def _run_publicity(
         self, db: Session, task_id: str, codes: list[str], total: int, label: str
     ) -> tuple[str, bytes]:
-        """村组公示表：一个发包方一个 sheet，全部合并为一个 xls（同步端点同口径）。"""
+        """村组公示签字表：一个发包方一个 sheet，全部合并为一个 xls（同步端点同口径）。"""
 
         def on_sheet_done(done: int, sheet_total: int) -> None:
             self._update(

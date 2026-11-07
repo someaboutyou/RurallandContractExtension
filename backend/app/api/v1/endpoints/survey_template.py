@@ -56,10 +56,10 @@ _BLANK_DEFINITIONS: list[dict] = [
     },
     {
         "key": "village-publicity",
-        "label": "村组公示表",
-        "category": "公示表",
+        "label": "村组公示签字表",
+        "category": "公示签字表",
         "template_key": "village-publicity",
-        "filename": "村组公示表.docx",
+        "filename": "村组公示签字表.docx",
         "description": "村组（发包方）基本情况公示表：发包方信息、调查记事与审核意见（空白表，打印后填写）。",
     },
     {

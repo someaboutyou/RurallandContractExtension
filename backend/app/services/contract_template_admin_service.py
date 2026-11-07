@@ -40,9 +40,9 @@ class ContractTemplateAdminService:
             "plot-sketch-map": {"name": "承包地块示意图模板", "filename": "poltsketchmap.html", "group": "出件文书"},
             "registration-application": {"name": "不动产登记申请书模板", "filename": "registration_application.html", "group": "出件文书"},
             "village-publicity": {
-                "name": "村组公示表模板",
+                "name": "村组公示签字表模板",
                 "filename": "village_publicity.html",
-                "group": "公示表",
+                "group": "公示签字表",
                 "note": "村组（发包方）基本情况公示表：发包方信息、调查记事、调查员与审核意见。版式取自 CS 版数据导出样张。",
             },
             "cadastral-survey": {
@@ -344,7 +344,7 @@ class ContractTemplateAdminService:
             "packets": [_sample_cadastral_packet(parcels, family_members)],
             # ── 两张摸底表的预览样例（字段与 survey/sheet.py 的上下文同键） ──
             **_sample_sheet_context(),
-            # ── 村组公示表预览样例（值一律脱敏，禁止真实个人信息） ──
+            # ── 村组公示签字表预览样例（值一律脱敏，禁止真实个人信息） ──
             **_sample_publicity_context(),
         }
 
@@ -464,7 +464,7 @@ def _sample_sheet_context() -> dict:
 
 
 def _sample_publicity_context() -> dict:
-    """村组公示表预览样例（键与 ``village_publicity.html`` 同源）。
+    """村组公示签字表预览样例（键与 ``village_publicity.html`` 同源）。
 
     ⚠️ 样例值必须脱敏（张某 / 138****0000 / ××县），不得使用真实个人信息——
     见 2026-11-07 预览样例脱敏约定。

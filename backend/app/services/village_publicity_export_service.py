@@ -1,4 +1,4 @@
-"""村组公示表 Excel 导出（延长三十年调查信息公示表）。
+"""村组公示签字表 Excel 导出（延长三十年调查信息公示签字表）。
 
 口径与 CS 版《数据导入导出》导出的 xls 完全对齐：
 
@@ -10,8 +10,8 @@
 
 文件名设计（与 CS 版公示表 .doc 的 ``名称(组码)`` 口径一致）：
 
-- 单个发包方：``{发包方名称}({fbfbm})土地承包经营权村组公示表.xls``
-- 多个发包方（一文件多 sheet）：``{首个名称}等{n}个村组土地承包经营权村组公示表.xls``
+- 单个发包方：``{发包方名称}({fbfbm})土地承包经营权村组公示签字表.xls``
+- 多个发包方（一文件多 sheet）：``{首个名称}等{n}个村组土地承包经营权村组公示签字表.xls``
 """
 
 from __future__ import annotations
@@ -41,8 +41,8 @@ logger = logging.getLogger(__name__)
 #: ㎡ → 亩（与 sheet.py 同口径）
 _MU_DIVISOR = Decimal("666.67")
 
-TITLE = "第二轮土地承包到期后再延长三十年调查信息公示表"
-SUFFIX = "土地承包经营权村组公示表"
+TITLE = "第二轮土地承包到期后再延长三十年调查信息公示签字表"
+SUFFIX = "土地承包经营权村组公示签字表"
 NCOLS = 46
 
 _FILENAME_UNSAFE = str.maketrans({char: "_" for char in '\\/:*?"<>|[]'})
@@ -132,7 +132,7 @@ def _date_cn(value) -> str:
 
 
 class VillagePublicityExportService:
-    """按发包方（村组）生成《调查信息公示表》xls。"""
+    """按发包方（村组）生成《调查信息公示签字表》xls。"""
 
     # ── 数据装配 ────────────────────────────────────────────────────────
 
@@ -446,7 +446,7 @@ class VillagePublicityExportService:
 
     @staticmethod
     def _unique_sheet_name(raw: str, used: set[str]) -> str:
-        name = raw.translate(str.maketrans({c: "_" for c in '\\/:*?[]'}))[:31] or "公示表"
+        name = raw.translate(str.maketrans({c: "_" for c in '\\/:*?[]'}))[:31] or "公示签字表"
         candidate, index = name, 2
         while candidate in used:
             suffix = f"({index})"

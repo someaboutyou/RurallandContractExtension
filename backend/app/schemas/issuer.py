@@ -68,7 +68,7 @@ class IssuerDocxExportRequest(BaseModel):
 
 
 class IssuerExportJobRequest(BaseModel):
-    """批量导出后台任务：kind=survey(发包方调查表) | publicity(村组公示表)。"""
+    """批量导出后台任务：kind=survey(发包方调查表) | publicity(村组公示签字表)。"""
 
     kind: Literal["survey", "publicity"]
     codes: list[str] = Field(min_length=1, max_length=500)
