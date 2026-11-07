@@ -56,9 +56,13 @@ class IssuerExcelTransferService:
         current_user: User,
         *,
         keyword: str | None = None,
+        batch_codes: list[str] | None = None,
     ) -> tuple[str, bytes]:
-        """导出当前数据权限 + 查询关键字下的发包方清单。"""
+        """导出当前数据权限 + 查询关键字下的发包方清单（可再按批次过滤）。"""
         filters = data_access_service.build_code_scope_filters(Fbf.fbfbm, current_user)
+        if batch_codes is not None:
+            # 批次内无发包方时也要给出带表头的空文件，而不是损坏的响应。
+            filters.append(Fbf.fbfbm.in_(batch_codes or [""]))
         stmt = select(Fbf).where(*filters)
         if keyword and keyword.strip():
             pattern = f"%{keyword.strip()}%"

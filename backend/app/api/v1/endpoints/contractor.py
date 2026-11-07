@@ -46,6 +46,7 @@ def list_contractors(
     id_no: str | None = Query(default=None, alias="idNo"),
     address: str | None = Query(default=None),
     region_code: str | None = Query(default=None, alias="regionCode"),
+    batch_id: int | None = Query(default=None, alias="batchId"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contractors.view")),
 ):
@@ -62,6 +63,7 @@ def list_contractors(
             id_no=id_no,
             address=address,
             region_code=region_code,
+            batch_id=batch_id,
         )
     }
 

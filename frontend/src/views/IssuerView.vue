@@ -31,7 +31,7 @@
           :disabled="!selectedRows.length"
           @click="openBatchExport('publicity')"
         >
-          导出公示表{{ selectedRows.length ? `(${selectedRows.length})` : "" }}
+          导出公示签字表{{ selectedRows.length ? `(${selectedRows.length})` : "" }}
         </el-button>
         <el-button v-if="canManage" plain @click="issuerXlsImportVisible = true">导入调查表</el-button>
         <el-button v-if="canManage" type="success" @click="openCreateDialog">新增发包方</el-button>
@@ -47,8 +47,12 @@
       </div>
     </div>
 
-    <div class="table-shell">
-      <div class="table-scroll">
+    <div class="issuer-workspace">
+      <SurveyBatchPanel v-model="activeBatch" />
+
+      <div class="issuer-table-area">
+        <div class="table-shell">
+          <div class="table-scroll">
         <el-table
           ref="issuerTableRef"
           v-loading="loading"
@@ -77,7 +81,7 @@
                   </el-button>
                   <template #dropdown>
                     <el-dropdown-menu>
-                      <el-dropdown-item command="publicity">村组公示表</el-dropdown-item>
+                      <el-dropdown-item command="publicity">村组公示签字表</el-dropdown-item>
                       <el-dropdown-item command="survey">发包方调查表</el-dropdown-item>
                     </el-dropdown-menu>
                   </template>
@@ -95,7 +99,7 @@
                 </el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item command="publicity">村组公示表</el-dropdown-item>
+                    <el-dropdown-item command="publicity">村组公示签字表</el-dropdown-item>
                     <el-dropdown-item command="survey">发包方调查表</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
@@ -103,20 +107,22 @@
             </template>
           </el-table-column>
         </el-table>
+        </div>
       </div>
-    </div>
 
-    <div class="pagination-wrap">
-      <el-pagination
-        :current-page="page"
-        :page-size="pageSize"
-        :page-sizes="[10, 20, 50, 100]"
-        :total="total"
-        background
-        layout="total, sizes, prev, pager, next, jumper"
-        @current-change="handlePageChange"
-        @size-change="handlePageSizeChange"
-      />
+      <div class="pagination-wrap">
+        <el-pagination
+          :current-page="page"
+          :page-size="pageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="total"
+          background
+          layout="total, sizes, prev, pager, next, jumper"
+          @current-change="handlePageChange"
+          @size-change="handlePageSizeChange"
+        />
+      </div>
+      </div>
     </div>
   </section>
 
@@ -297,7 +303,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ArrowDown, Loading } from "@element-plus/icons-vue";
 
@@ -312,11 +318,13 @@ import {
   fetchIssuers,
   updateIssuer,
 } from "../api/issuer";
+import { fetchCurrentSurveyBatch } from "../api/survey";
 import { useDialogMap } from "../composables/useDialogMap";
 import DictionarySelect from "../components/DictionarySelect.vue";
 import IssuerExportProgressDialog from "../components/issuer/IssuerExportProgressDialog.vue";
 import IssuerXlsImportDialog from "../components/issuers/IssuerXlsImportDialog.vue";
 import MergeIssuerDialog from "../components/issuers/MergeIssuerDialog.vue";
+import SurveyBatchPanel from "../components/survey/SurveyBatchPanel.vue";
 import { useDictionary } from "../composables/useDictionary";
 import { useAuthStore } from "../stores/auth";
 import { validateChinaId, validateMobile, validatePostcode } from "../utils/validators";
@@ -346,6 +354,9 @@ const exporting = ref(false);
 const issuerContractors = ref([]);
 const issuerContractorsLoading = ref(false);
 const issuerContractorsError = ref("");
+
+// 右侧调查批次面板：选中批次后列表只显示该批次范围内的发包方。
+const activeBatch = ref(null);
 
 const parcelsTabActivated = ref(false);
 const parcelsLoading = ref(false);
@@ -556,6 +567,7 @@ async function loadData() {
       page: page.value,
       page_size: pageSize.value,
       keyword: keyword.value.trim() || undefined,
+      batchId: activeBatch.value?.id || undefined,
     });
     rows.value = data.data.items;
     total.value = data.data.total;
@@ -715,6 +727,7 @@ async function handleExportIssuerXls() {
   try {
     const { data, headers } = await exportIssuerXls({
       keyword: keyword.value.trim() || undefined,
+      batchId: activeBatch.value?.id || undefined,
     });
     downloadBlob(
       data,
@@ -756,7 +769,7 @@ function handleRowExport(command, row) {
 
 // ---- 批量导出：走后台任务 + 进度弹窗（村组多、耗时长，需要可见进度） ----
 const exportDialogVisible = ref(false);
-const exportKind = ref("survey"); // survey=发包方调查表 | publicity=村组公示表
+const exportKind = ref("survey"); // survey=发包方调查表 | publicity=村组公示签字表
 const exportCodes = ref([]);
 
 function openBatchExport(kind) {
@@ -769,7 +782,7 @@ function openBatchExport(kind) {
   exportDialogVisible.value = true;
 }
 
-// ---- 村组公示表导出（一个发包方一个 sheet，批量合并为一个 xls） ----
+// ---- 村组公示签字表导出（一个发包方一个 sheet，批量合并为一个 xls） ----
 async function handleExportPublicity(row) {
   if (!row?.code) return;
   try {
@@ -778,11 +791,11 @@ async function handleExportPublicity(row) {
       data,
       filenameFromDisposition(
         headers?.["content-disposition"],
-        `${row.name || row.code}土地承包经营权村组公示表.xls`,
+        `${row.name || row.code}土地承包经营权村组公示签字表.xls`,
       ),
     );
   } catch {
-    ElMessage.error("导出村组公示表失败");
+    ElMessage.error("导出村组公示签字表失败");
   }
 }
 
@@ -792,10 +805,54 @@ function onIssuersImported() {
   loadData();
 }
 
-loadData();
+// 批次切换：重置页码并按新批次刷新（取消选中回到全量）。
+watch(activeBatch, () => {
+  page.value = 1;
+  loadData();
+});
+
+// 用户在 /surveys「进入任务」记住的批次作为默认选中（读不写，不改其记忆）。
+onMounted(async () => {
+  try {
+    const { data } = await fetchCurrentSurveyBatch();
+    if (data.data?.id) {
+      activeBatch.value = data.data;
+      return; // watch(activeBatch) 会带着 batchId 触发首次加载
+    }
+  } catch {
+    // 拿不到当前批次就按全量加载
+  }
+  loadData();
+});
 </script>
 
 <style scoped>
+/* 左侧调查批次面板 + 列表的双栏布局。 */
+.issuer-workspace {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 12px;
+  overflow: hidden;
+}
+
+.issuer-table-area {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+@media (max-width: 960px) {
+  .issuer-workspace {
+    grid-template-columns: 1fr;
+    overflow: visible;
+  }
+}
+
 /* 发包方信息：按屏幕尺寸自适应列数并压缩行高，尽量一屏展示、不出现纵向滚动。 */
 .issuer-form-grid {
   display: grid;

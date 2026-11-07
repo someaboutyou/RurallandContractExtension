@@ -30,6 +30,7 @@ def list_issuers(
     page_size: int = Query(default=20, ge=1, le=200),
     keyword: str | None = Query(default=None),
     region_code: str | None = Query(default=None, alias="regionCode"),
+    batch_id: int | None = Query(default=None, alias="batchId"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("issuers.view")),
 ):
@@ -41,6 +42,7 @@ def list_issuers(
             current_user=current_user,
             keyword=keyword,
             region_code=region_code,
+            batch_id=batch_id,
         )
     }
 
@@ -74,14 +76,16 @@ def merge_issuers(
 @router.get("/xls")
 def export_issuers_xls(
     keyword: str | None = Query(default=None),
+    batch_id: int | None = Query(default=None, alias="batchId"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("issuers.view")),
 ):
     """导出发包方清单（Excel，口径与页面查询一致）。"""
     from urllib.parse import quote
 
+    batch_codes = issuer_service.batch_issuer_codes(db, batch_id) if batch_id is not None else None
     filename, content = issuer_excel_transfer_service.export_xls(
-        db, current_user, keyword=keyword
+        db, current_user, keyword=keyword, batch_codes=batch_codes
     )
     return Response(
         content=content,
@@ -138,7 +142,7 @@ def export_publicity_xls(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("issuers.view")),
 ):
-    """按选中的发包方（村组）导出《调查信息公示表》Excel（一个发包方一个 sheet）。"""
+    """按选中的发包方（村组）导出《调查信息公示签字表》Excel（一个发包方一个 sheet）。"""
     from urllib.parse import quote
 
     from app.services.village_publicity_export_service import (
@@ -256,7 +260,7 @@ def create_issuer_export_job(
 ):
     """创建发包方批量导出后台任务，立即返回 ``taskId`` 供前端轮询进度。
 
-    kind：``survey`` = 发包方调查表（Word，多个 zip）；``publicity`` = 村组公示表
+    kind：``survey`` = 发包方调查表（Word，多个 zip）；``publicity`` = 村组公示签字表
     （一个发包方一个 sheet，合并为一个 xls）。
     """
     from app.services.issuer_export_task_service import issuer_export_task_service

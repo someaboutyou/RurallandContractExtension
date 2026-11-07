@@ -15,6 +15,7 @@ from app.models.survey import (
 )
 from app.models.user import User
 from app.repositories.land_parcel_repository import land_parcel_repository
+from app.services.contractor_service import contractor_service
 from app.services.data_access_service import data_access_service
 
 
@@ -357,6 +358,7 @@ class LandParcelService:
         page_size: int,
         keyword: str | None,
         current_user: User,
+        batch_id: int | None = None,
     ) -> dict:
         """以承包方为单位汇总承包地块（当前结果态）。
 
@@ -365,6 +367,17 @@ class LandParcelService:
         """
         stmt = select(SurveyCbfResult)
         count_stmt = select(func.count(SurveyCbfResult.id))
+        if batch_id is not None:
+            # 批次口径：只显示该批次快照（survey_cbf_base）里的承包户。
+            # ⛔ 先取成 Python 列表再 in_()，不要写 in_(select(...)) 子查询：
+            # 全局 with_loader_criteria（区域/租户 scope）会二次注入到子查询里，
+            # 命中集合被静默缩小。见 skill sqlalchemy-loader-criteria-subquery。
+            uids = contractor_service.batch_contractor_uids(db, batch_id)
+            if not uids:
+                return {"items": [], "total": 0, "page": page, "pageSize": page_size}
+            condition = SurveyCbfResult.contractor_uid.in_(uids)
+            stmt = stmt.where(condition)
+            count_stmt = count_stmt.where(condition)
         if keyword:
             pattern = f"%{keyword.strip()}%"
             # 发包方命中：先由「承包地块关系 + 发包方结果表」找出对应的承包方编码。

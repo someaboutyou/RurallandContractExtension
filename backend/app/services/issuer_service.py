@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.models.cbht import Cbht
 from app.models.fbf import Fbf
 from app.models.survey import (
+    SurveyBatch,
     SurveyCbfResult,
     SurveyCbdkxxResult,
     SurveyFbfBase,
@@ -26,12 +27,23 @@ class IssuerService:
         current_user: User,
         keyword: str | None = None,
         region_code: str | None = None,
+        batch_id: int | None = None,
     ) -> dict:
+        extra_filters = data_access_service.build_code_scope_filters(Fbf.fbfbm, current_user)
+        if batch_id is not None:
+            # 批次口径：只显示该批次发包方快照（survey_fbf_base）里登记的村组。
+            # ⛔ 先取成 Python 列表再 in_()，不要写 in_(select(...)) 子查询：
+            # 全局 with_loader_criteria（区域/租户 scope）会二次注入到子查询里，
+            # 命中集合被静默缩小。见 skill sqlalchemy-loader-criteria-subquery。
+            codes = self.batch_issuer_codes(db, batch_id)
+            if not codes:
+                return {"items": [], "total": 0, "page": page, "pageSize": page_size}
+            extra_filters.append(Fbf.fbfbm.in_(codes))
         records, total = issuer_repository.list_issuers(
             db,
             page=page,
             page_size=page_size,
-            extra_filters=data_access_service.build_code_scope_filters(Fbf.fbfbm, current_user),
+            extra_filters=extra_filters,
             keyword=keyword.strip() if keyword else None,
             region_code=region_code.strip() if region_code else None,
         )
@@ -41,6 +53,21 @@ class IssuerService:
             "page": page,
             "pageSize": page_size,
         }
+
+    def batch_issuer_codes(self, db: Session, batch_id: int) -> list[str]:
+        """调查批次的发包方代码集合（survey_fbf_base 快照）。批次不存在抛 404。"""
+        batch = db.get(SurveyBatch, batch_id)
+        if batch is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="调查批次不存在")
+        return list(
+            db.scalars(
+                select(SurveyFbfBase.fbfbm).where(
+                    SurveyFbfBase.tenant_code == batch.tenant_code,
+                    SurveyFbfBase.batch_id == batch_id,
+                )
+                .execution_options(skip_tenant_scope=True)
+            ).all()
+        )
 
     def create_issuer(self, db: Session, payload: dict, current_user: User) -> dict:
         data_access_service.ensure_code_in_scope(current_user, payload["code"], detail="发包方不在当前数据权限范围内")

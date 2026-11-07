@@ -28,14 +28,26 @@ class ContractorService:
         id_no: str | None = None,
         address: str | None = None,
         region_code: str | None = None,
+        batch_id: int | None = None,
     ) -> dict:
         if region_code:
             data_access_service.ensure_region_filter_in_scope(current_user, region_code, detail="区域不在当前数据权限范围内")
+        extra_filters = data_access_service.build_code_scope_filters(SurveyCbfResult.cbfbm, current_user)
+        if batch_id is not None:
+            # 批次口径：只显示该批次快照（survey_cbf_base）里的承包户。
+            # contractor_uid 是稳定身份（分/合户改码后不变），用 uid 匹配结果行。
+            # ⛔ 先取成 Python 列表再 in_()，不要写 in_(select(...)) 子查询：
+            # 全局 with_loader_criteria（区域/租户 scope）会二次注入到子查询里，
+            # 命中集合被静默缩小。见 skill sqlalchemy-loader-criteria-subquery。
+            uids = self.batch_contractor_uids(db, batch_id)
+            if not uids:
+                return {"items": [], "total": 0, "page": page, "pageSize": page_size}
+            extra_filters.append(SurveyCbfResult.contractor_uid.in_(uids))
         contractors, total = contractor_repository.list_contractors(
             db,
             page=page,
             page_size=page_size,
-            extra_filters=data_access_service.build_code_scope_filters(SurveyCbfResult.cbfbm, current_user),
+            extra_filters=extra_filters,
             keyword=keyword.strip() if keyword else None,
             type_code=type_code or None,
             name=name.strip() if name else None,
@@ -50,6 +62,21 @@ class ContractorService:
             "page": page,
             "pageSize": page_size,
         }
+
+    def batch_contractor_uids(self, db: Session, batch_id: int) -> list[str]:
+        """调查批次的承包方 uid 集合（survey_cbf_base 快照）。批次不存在抛 404。"""
+        batch = db.get(SurveyBatch, batch_id)
+        if batch is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="调查批次不存在")
+        return list(
+            db.scalars(
+                select(SurveyCbfBase.contractor_uid).where(
+                    SurveyCbfBase.tenant_code == batch.tenant_code,
+                    SurveyCbfBase.batch_id == batch_id,
+                )
+                .execution_options(skip_tenant_scope=True)
+            ).all()
+        )
 
     def get_contractor(self, db: Session, code: str, current_user: User) -> dict:
         contractor = contractor_repository.get_contractor(db, code)

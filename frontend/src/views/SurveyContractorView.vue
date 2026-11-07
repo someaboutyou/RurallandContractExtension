@@ -1,31 +1,36 @@
 <template>
   <section class="panel table-page survey-contractor-page">
-    <el-empty v-if="!activeBatch && !batchLoading" description="请先在「调查批次管理」中进入任务" />
+    <div v-if="!activeBatch" class="survey-contractor-empty">
+      <el-empty description="请先在左侧选择一个调查批次" />
+    </div>
 
-    <template v-else>
-      <div class="toolbar">
-        <div class="panel-title">承包方管理</div>
-        <div class="toolbar-actions">
-          <el-input v-model="taskKeyword" :disabled="!activeBatch" clearable placeholder="搜索承包方" style="width: 220px" @keyup.enter="loadTasks" />
-          <el-button :disabled="!activeBatch" :icon="Search" plain @click="loadTasks">查询</el-button>
-          <el-button v-if="canManage" :disabled="!activeBatch || activeBatch?.status === 'finished'" :icon="Plus" type="primary" @click="openCreateContractor">新增</el-button>
-          <el-button :disabled="!activeBatch || !selectedTasks.length" plain @click="exportDialogVisible = true">导出</el-button>
-          <el-button v-if="canManage" :disabled="!activeBatch || !selectedTasks.length" plain @click="lockDialogVisible = true">锁定/解锁</el-button>
-          <el-button v-if="canManage" :disabled="!activeBatch || activeBatch?.status === 'finished'" plain @click="xlsImportVisible = true">承包户导入</el-button>
-          <el-button v-if="canManage" :disabled="!activeBatch" plain @click="relationDialogVisible = true">家庭关系处理</el-button>
+    <div v-else class="survey-contractor-body">
+      <SurveyBatchPanel v-model="activeBatch" />
+
+      <div class="survey-contractor-main">
+        <div class="toolbar">
+          <div class="panel-title">承包方管理</div>
+          <div class="toolbar-actions">
+            <el-input v-model="taskKeyword" :disabled="!activeBatch" clearable placeholder="搜索承包方" style="width: 220px" @keyup.enter="loadTasks" />
+            <el-button :disabled="!activeBatch" :icon="Search" plain @click="loadTasks">查询</el-button>
+            <el-button v-if="canManage" :disabled="!activeBatch || activeBatch?.status === 'finished'" :icon="Plus" type="primary" @click="openCreateContractor">新增</el-button>
+            <el-button :disabled="!activeBatch || !selectedTasks.length" plain @click="exportDialogVisible = true">导出</el-button>
+            <el-button v-if="canManage" :disabled="!activeBatch || !selectedTasks.length" plain @click="lockDialogVisible = true">锁定/解锁</el-button>
+            <el-button v-if="canManage" :disabled="!activeBatch || activeBatch?.status === 'finished'" plain @click="xlsImportVisible = true">承包户导入</el-button>
+            <el-button v-if="canManage" :disabled="!activeBatch" plain @click="relationDialogVisible = true">家庭关系处理</el-button>
+          </div>
         </div>
-      </div>
 
-      <el-table
-        ref="taskTableRef"
-        v-loading="taskLoading"
-        :data="tasks"
-        border
-        stripe
-        size="small"
-        class="survey-table"
-        @selection-change="handleSelectionChange"
-      >
+        <el-table
+          ref="taskTableRef"
+          v-loading="taskLoading"
+          :data="tasks"
+          border
+          stripe
+          size="small"
+          class="survey-table"
+          @selection-change="handleSelectionChange"
+        >
         <el-table-column type="selection" width="40" fixed="left" />
         <el-table-column prop="cbfbm" label="泗洪承包方编码" width="160" show-overflow-tooltip />
         <el-table-column prop="cbfmc" label="承包方姓名" min-width="120" show-overflow-tooltip>
@@ -65,7 +70,8 @@
           </template>
         </el-table-column>
       </el-table>
-    </template>
+      </div>
+    </div>
 
     <ContractorResultDialog
       ref="contractorResultDialog"
@@ -102,7 +108,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Plus, Search } from "@element-plus/icons-vue";
 
@@ -111,11 +117,11 @@ import ContractorXlsImportDialog from "../components/survey/ContractorXlsImportD
 import ContractorExportDialog from "../components/survey/ContractorExportDialog.vue";
 import ContractorLockDialog from "../components/survey/ContractorLockDialog.vue";
 import ContractorRelationDialog from "../components/survey/ContractorRelationDialog.vue";
+import SurveyBatchPanel from "../components/survey/SurveyBatchPanel.vue";
 
 import {
   deleteSurveyContractor,
   fetchCurrentSurveyBatch,
-  fetchSurveyBatches,
   fetchSurveyTasks,
 } from "../api/survey";
 import { useAuthStore } from "../stores/auth";
@@ -123,8 +129,6 @@ import { useAuthStore } from "../stores/auth";
 const authStore = useAuthStore();
 const canManage = computed(() => authStore.hasPermission("contractors.manage"));
 
-const batchLoading = ref(false);
-const batches = ref([]);
 const activeBatch = ref(null);
 
 const taskLoading = ref(false);
@@ -156,25 +160,21 @@ function buildRegionParams() {
   return regionCode ? { regionCode } : {};
 }
 
-async function loadBatches() {
-  batchLoading.value = true;
+// 批次切换（左侧面板点选）：重新加载该批次的承包户任务。
+watch(activeBatch, () => {
+  loadTasks();
+});
+
+// 用户在 /surveys「进入任务」记住的批次作为默认选中。
+onMounted(async () => {
   try {
-    const { data } = await fetchSurveyBatches({ page: 1, page_size: 100 });
-    batches.value = data.data.items || [];
-    if (!activeBatch.value) {
-      try {
-        const current = await fetchCurrentSurveyBatch();
-        if (current.data.data) {
-          activeBatch.value = current.data.data;
-        }
-      } catch { /* 忽略：回退到第一个批次 */ }
+    const { data } = await fetchCurrentSurveyBatch();
+    if (data.data?.id) {
+      activeBatch.value = data.data;
+      return; // watch(activeBatch) 会触发首次加载
     }
-    if (!activeBatch.value && batches.value.length) {
-      activeBatch.value = batches.value[0];
-    }
-    await loadTasks();
-  } finally { batchLoading.value = false; }
-}
+  } catch { /* 拿不到当前批次就等用户手动选择 */ }
+});
 
 async function loadTasks() {
   if (!activeBatch.value) { tasks.value = []; return; }
@@ -263,11 +263,43 @@ async function handleDeleteTask(row) {
     ElMessage.error(error.response?.data?.detail || "删除承包方失败");
   }
 }
-
-onMounted(loadBatches);
 </script>
 
 <style scoped>
+
+/* 左侧调查批次面板 + 承包户任务列表的双栏布局。 */
+.survey-contractor-empty {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.survey-contractor-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 12px;
+  overflow: hidden;
+}
+
+.survey-contractor-main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+@media (max-width: 960px) {
+  .survey-contractor-body {
+    grid-template-columns: 1fr;
+    overflow: visible;
+  }
+}
+
 .survey-contractor-page {
   min-height: 0;
 }

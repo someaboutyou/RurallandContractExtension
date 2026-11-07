@@ -45,6 +45,8 @@
     </div>
 
     <div class="contractor-workspace">
+      <SurveyBatchPanel v-model="activeBatch" />
+
       <div class="contractor-table-area">
         <div class="table-shell">
           <div class="table-scroll">
@@ -116,7 +118,7 @@
 </template>
 
 <script setup>
-import { reactive, ref, computed } from "vue";
+import { onMounted, reactive, ref, computed, watch } from "vue";
 import { ElLoading, ElMessage, ElMessageBox } from "element-plus";
 
 import {
@@ -131,11 +133,13 @@ import {
   startCadastralExport,
   startSurveySheetExport,
 } from "../api/contractor";
+import { fetchCurrentSurveyBatch } from "../api/survey";
 import { fetchRegionTree } from "../api/region";
 import { useDictionary } from "../composables/useDictionary";
 import { useAuthStore } from "../stores/auth";
 import ContractorDialog from "../components/contractors/ContractorDialog.vue";
 import RegionFilterPanel from "../components/contractors/RegionFilterPanel.vue";
+import SurveyBatchPanel from "../components/survey/SurveyBatchPanel.vue";
 
 const authStore = useAuthStore();
 const canManage = computed(() => authStore.hasPermission("contractors.manage"));
@@ -159,6 +163,9 @@ const regionTree = ref([]);
 const filterRegionTree = ref([]);
 const activeRegionCode = ref("");
 const activeRegionLabel = ref("");
+
+// 右侧调查批次面板：选中批次后列表只显示该批次范围内的承包户。
+const activeBatch = ref(null);
 
 function normalizeRegionTree(nodes = []) {
   return nodes.map((item) => ({
@@ -189,6 +196,7 @@ async function loadData() {
       idNo: filters.idNo.trim() || undefined,
       address: filters.address.trim() || undefined,
       regionCode: activeRegionCode.value || undefined,
+      batchId: activeBatch.value?.id || undefined,
     });
     rows.value = data.data.items;
     total.value = data.data.total;
@@ -196,6 +204,12 @@ async function loadData() {
     loading.value = false;
   }
 }
+
+// 批次切换：重置页码并按新批次刷新（取消选中回到全量）。
+watch(activeBatch, () => {
+  page.value = 1;
+  loadData();
+});
 
 function handleSearch() {
   page.value = 1;
@@ -621,5 +635,37 @@ async function handleDelete(row) {
 }
 
 loadRegionTree();
-loadData();
+
+// 用户在 /surveys「进入任务」记住的批次作为默认选中（读不写，不改其记忆）。
+onMounted(async () => {
+  try {
+    const { data } = await fetchCurrentSurveyBatch();
+    if (data.data?.id) {
+      activeBatch.value = data.data;
+      return; // watch(activeBatch) 会带着 batchId 触发首次加载
+    }
+  } catch {
+    // 拿不到当前批次就按全量加载
+  }
+  loadData();
+});
 </script>
+
+<style scoped>
+/* 左侧调查批次面板 + 列表 + 区域筛选面板的三栏布局（覆盖全局两列 grid）。 */
+.contractor-workspace {
+  grid-template-columns: 280px minmax(0, 1fr) 380px;
+}
+
+@media (max-width: 1280px) {
+  .contractor-workspace {
+    grid-template-columns: 280px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 960px) {
+  .contractor-workspace {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

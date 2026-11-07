@@ -46,8 +46,12 @@
       </div>
     </div>
 
-    <div class="table-shell">
-      <div class="table-scroll">
+    <div class="parcel-workspace">
+      <SurveyBatchPanel v-model="activeBatch" />
+
+      <div class="parcel-main">
+        <div class="table-shell">
+          <div class="table-scroll">
         <el-table
           v-loading="loading"
           :data="treeRows"
@@ -85,18 +89,20 @@
           <el-table-column prop="stockParcelLabel" label="是否确股地块" min-width="110" align="center" />
           <el-table-column prop="remark" label="备注" min-width="140" show-overflow-tooltip />
         </el-table>
+        </div>
       </div>
-    </div>
 
-    <div class="pagination-wrap">
-      <el-pagination
-        :current-page="page"
-        :page-size="pageSize"
-        :total="total"
-        background
-        layout="total, prev, pager, next"
-        @current-change="handlePageChange"
-      />
+      <div class="pagination-wrap">
+        <el-pagination
+          :current-page="page"
+          :page-size="pageSize"
+          :total="total"
+          background
+          layout="total, prev, pager, next"
+          @current-change="handlePageChange"
+        />
+      </div>
+      </div>
     </div>
 
     <AddParcelDialog
@@ -129,18 +135,18 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
 import AddParcelDialog from "../components/survey/AddParcelDialog.vue";
 import ParcelImportDialog from "../components/survey/ParcelImportDialog.vue";
 import ContractorResultDialog from "../components/survey/view/ContractorResultDialog.vue";
+import SurveyBatchPanel from "../components/survey/SurveyBatchPanel.vue";
 import {
   exportParcelSketchPdf,
   exportParcelSurveyDocx,
   fetchCurrentSurveyBatch,
   fetchParcelsOverview,
-  fetchSurveyBatches,
   persistSurveyPendingOperation,
   removeSurveyParcel,
 } from "../api/survey";
@@ -165,12 +171,11 @@ const keyword = ref("");
 const selectedRows = ref([]);
 const currentRow = ref(null);
 
-const batches = ref([]);
-const batchId = ref(null);
+// 左侧调查批次面板：选中批次后列表只显示该批次范围内承包户的地块。
+const activeBatch = ref(null);
+const batchId = computed(() => activeBatch.value?.id ?? null);
 const importVisible = ref(false);
-const selectedBatch = computed(
-  () => batches.value.find((batch) => batch.id === batchId.value) || null
-);
+const selectedBatch = computed(() => activeBatch.value);
 
 const addParcelDialog = ref(null);
 const addTarget = ref(null);
@@ -436,27 +441,6 @@ async function handleExportCommand(command) {
   }
 }
 
-async function loadBatches() {
-  try {
-    const { data } = await fetchSurveyBatches({ page: 1, page_size: 100 });
-    batches.value = data.data.items || [];
-    try {
-      const current = await fetchCurrentSurveyBatch();
-      if (current.data.data?.id) {
-        batchId.value = current.data.data.id;
-        return;
-      }
-    } catch {
-      // 忽略：回退到进行中/第一个批次
-    }
-    const active = batches.value.find((batch) => batch.status === "active");
-    batchId.value = (active || batches.value[0])?.id ?? null;
-  } catch {
-    batches.value = [];
-    batchId.value = null;
-  }
-}
-
 async function load() {
   loading.value = true;
   try {
@@ -464,6 +448,7 @@ async function load() {
       page: page.value,
       pageSize: pageSize.value,
       keyword: keyword.value.trim() || undefined,
+      batchId: batchId.value || undefined,
     });
     items.value = data.data.items || [];
     total.value = data.data.total || 0;
@@ -484,13 +469,54 @@ function handlePageChange(value) {
   load();
 }
 
+// 批次切换：重置页码并按新批次刷新（取消选中回到全量）。
+watch(activeBatch, () => {
+  page.value = 1;
+  load();
+});
+
+// 用户在 /surveys「进入任务」记住的批次作为默认选中（读不写，不改其记忆）。
 onMounted(async () => {
-  await loadBatches();
-  await load();
+  try {
+    const { data } = await fetchCurrentSurveyBatch();
+    if (data.data?.id) {
+      activeBatch.value = data.data;
+      return; // watch(activeBatch) 会带着 batchId 触发首次加载
+    }
+  } catch {
+    // 拿不到当前批次就按全量加载
+  }
+  load();
 });
 </script>
 
 <style scoped>
+/* 左侧调查批次面板 + 地块树表的双栏布局。 */
+.parcel-workspace {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 12px;
+  overflow: hidden;
+}
+
+.parcel-main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+@media (max-width: 960px) {
+  .parcel-workspace {
+    grid-template-columns: 1fr;
+    overflow: visible;
+  }
+}
+
 .parcel-group-row {
   background: #dfe9f5;
 }

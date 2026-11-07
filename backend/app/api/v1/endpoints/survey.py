@@ -511,13 +511,14 @@ def get_parcels_overview(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, alias="pageSize", ge=1, le=200),
     keyword: str | None = Query(default=None),
+    batch_id: int | None = Query(default=None, alias="batchId"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contractors.view")),
 ):
     """建库中心 > 承包地块：以承包方为单位组织地块清单。"""
     return {
         "data": land_parcel_service.get_parcels_overview(
-            db, page, page_size, keyword, current_user
+            db, page, page_size, keyword, current_user, batch_id=batch_id
         )
     }
 
