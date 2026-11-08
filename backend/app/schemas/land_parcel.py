@@ -20,6 +20,7 @@ class LandParcelItem(BaseModel):
     dknz: str | None = None
     dkbz: str | None = None
     dkbzxx: str | None = None
+    zjrxm: str | None = None
     fbfbm: str | None = None
     fbfmc: str | None = None
     cbjyqqdfs: str | None = None

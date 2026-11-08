@@ -13,9 +13,17 @@ import zipfile
 from datetime import date
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.survey import SurveyBatch
+from app.models.survey import (
+    SurveyBatch,
+    SurveyCbfResult,
+    SurveyCbfJtcyResult,
+    SurveyCbdkxxResult,
+    SurveyDkResult,
+    SurveyFbfResult,
+)
 from app.models.user import User
 from app.services import html_docx
 from app.services.contractor_survey_docx_service import (
@@ -29,6 +37,7 @@ XLS_MEDIA_TYPE = "application/vnd.ms-excel"
 ZIP_MEDIA_TYPE = "application/zip"
 
 DOC_CONTRACTOR_EXCEL = "contractor_excel"
+DOC_BASELINE_VERIFY = "baseline_verify_excel"
 DOC_CONTRACTOR_WORD = "contractor_word"
 DOC_HOUSEHOLDER = "householder_declaration"
 DOC_AUTHORIZATION = "authorization_declaration"
@@ -37,6 +46,7 @@ DOC_SURVEY_APPLICATION = "survey_application"
 
 DOC_LABELS = {
     DOC_CONTRACTOR_EXCEL: "承包方调查表（Excel）",
+    DOC_BASELINE_VERIFY: "摸底调查核实表（单户）",
     DOC_CONTRACTOR_WORD: "承包方调查表（Word）",
     DOC_HOUSEHOLDER: "户主声明书",
     DOC_AUTHORIZATION: "委托声明书",
@@ -46,12 +56,16 @@ DOC_LABELS = {
 
 _DOC_ORDER = [
     DOC_CONTRACTOR_EXCEL,
+    DOC_BASELINE_VERIFY,
     DOC_CONTRACTOR_WORD,
     DOC_HOUSEHOLDER,
     DOC_AUTHORIZATION,
     DOC_NO_OBJECTION,
     DOC_SURVEY_APPLICATION,
 ]
+
+#: 逐户生成、不进入 Word 文档循环的导出类型。
+_PER_HOUSEHOLD_DOCS = {DOC_BASELINE_VERIFY}
 
 _UNSAFE_FILENAME = re.compile(r'[\\/:*?"<>|]')
 
@@ -136,7 +150,13 @@ class ContractorDocumentExportService:
             )
             files.append((filename, content, XLS_MEDIA_TYPE))
 
-        word_docs = [doc for doc in _DOC_ORDER if doc in requested and doc not in (DOC_CONTRACTOR_EXCEL,)]
+        if DOC_BASELINE_VERIFY in requested:
+            files.extend(self._export_baseline_verify(db, batch, uids, current_user))
+
+        word_docs = [
+            doc for doc in _DOC_ORDER
+            if doc in requested and doc not in (DOC_CONTRACTOR_EXCEL, *_PER_HOUSEHOLD_DOCS)
+        ]
         if word_docs:
             for uid in uids:
                 result = survey_service.get_result(db, batch_id, uid, current_user)
@@ -168,6 +188,91 @@ class ContractorDocumentExportService:
                 archive.writestr(name, content)
         zip_name = f"承包方资料_{(batch.region_name or batch.batch_no or batch_id)}.zip"
         return _UNSAFE_FILENAME.sub("_", zip_name), buffer.getvalue(), ZIP_MEDIA_TYPE
+
+    def _export_baseline_verify(
+        self,
+        db: Session,
+        batch: SurveyBatch,
+        uids: list[str],
+        current_user: User,
+    ) -> list[tuple[str, bytes, str]]:
+        """按户导出「摸底调查核实表（单户）」。
+
+        版式与调查批次管理中的摸底调查核实表一致（CS 版承包台账-调查报表-
+        摸底调查核实表单户口径）：每户单独一个 xls，表头取该户所属发包方信息，
+        户内成员与承包地块逐行展开。
+        """
+        from app.services.batch_form_export_service import batch_form_export_service
+
+        files: list[tuple[str, bytes, str]] = []
+        for uid in uids:
+            # 先走统一结果读取，复用数据权限校验（越权时抛 403）。
+            detail = survey_service.get_result(db, batch.id, uid, current_user)
+            result = db.scalars(
+                select(SurveyCbfResult)
+                .where(
+                    SurveyCbfResult.tenant_code == batch.tenant_code,
+                    SurveyCbfResult.contractor_uid == uid,
+                )
+                .order_by(SurveyCbfResult.id.desc())
+            ).first()
+            if result is None:
+                continue
+            members = list(
+                db.scalars(
+                    select(SurveyCbfJtcyResult)
+                    .where(
+                        SurveyCbfJtcyResult.tenant_code == batch.tenant_code,
+                        SurveyCbfJtcyResult.contractor_uid == uid,
+                    )
+                    .order_by(SurveyCbfJtcyResult.cyxm.asc())
+                ).all()
+            )
+            relations = list(
+                db.scalars(
+                    select(SurveyCbdkxxResult)
+                    .where(
+                        SurveyCbdkxxResult.tenant_code == batch.tenant_code,
+                        SurveyCbdkxxResult.cbfbm == result.cbfbm,
+                    )
+                    .order_by(SurveyCbdkxxResult.dkbm.asc())
+                ).all()
+            )
+            dk_by_dkbm: dict[str, SurveyDkResult] = {}
+            dkbms = list(dict.fromkeys(rel.dkbm for rel in relations if rel.dkbm))
+            if dkbms:
+                for parcel in db.scalars(
+                    select(SurveyDkResult).where(
+                        SurveyDkResult.tenant_code == batch.tenant_code,
+                        SurveyDkResult.dkbm.in_(dkbms),
+                    )
+                ).all():
+                    dk_by_dkbm[parcel.dkbm] = parcel
+            fbfbm = (result.cbfbm or "")[:14]
+            issuer = db.scalars(
+                select(SurveyFbfResult)
+                .where(
+                    SurveyFbfResult.tenant_code == batch.tenant_code,
+                    SurveyFbfResult.fbfbm == fbfbm,
+                )
+                .order_by(SurveyFbfResult.id.desc())
+            ).first()
+            if issuer is None:
+                continue
+            content = batch_form_export_service.build_single_household_workbook(
+                db, issuer, result, members, relations, dk_by_dkbm
+            )
+            name = detail.get("name") or result.cbfmc or ""
+            tail = str(result.cbfbm or "")[-4:]
+            try:
+                family_number = str(int(tail))
+            except ValueError:
+                family_number = tail
+            filename = _UNSAFE_FILENAME.sub(
+                "_", f"{family_number}-{name}-单户摸底调查表.xls"
+            )
+            files.append((filename, content, XLS_MEDIA_TYPE))
+        return files
 
     @staticmethod
     def _unique_name(filename: str, seen: set[str]) -> str:

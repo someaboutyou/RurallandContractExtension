@@ -365,6 +365,11 @@ export function fetchParcelsOverview(params) {
   return http.get("/surveys/parcels/overview", { params });
 }
 
+/** 承包地块数据初始化（对齐 CS 版承包台账-初始数据）。 */
+export function initializeParcelAttributes(payload) {
+  return http.post("/surveys/parcels/initialize", payload, { timeout: 180000 });
+}
+
 /** 导出选中地块的《承包地块调查表》Word（一个返回 docx，多个返回 zip）。 */
 export function exportParcelSurveyDocx(payload) {
   return http.post("/surveys/parcels/export-docx", payload, {

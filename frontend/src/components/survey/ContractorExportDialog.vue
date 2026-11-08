@@ -37,7 +37,7 @@
     </el-checkbox-group>
 
     <div class="export-tip">
-      Excel 沿用现有承包户导出格式；Word 按户生成，多户或多类型时自动打包为 ZIP。
+      承包方调查表（Excel）为批量清单；摸底调查核实表按户各生成一份；Word 按户生成。多户或多类型时自动打包为 ZIP。
     </div>
 
     <template #footer>
@@ -69,6 +69,7 @@ const emit = defineEmits(["update:modelValue"]);
 
 const options = [
   { value: "contractor_excel", label: "承包方调查表", format: "Excel" },
+  { value: "baseline_verify_excel", label: "摸底调查核实表（单户）", format: "Excel" },
   { value: "contractor_word", label: "承包方调查表", format: "Word" },
   { value: "householder_declaration", label: "户主声明书", format: "Word" },
   { value: "authorization_declaration", label: "委托声明书", format: "Word" },

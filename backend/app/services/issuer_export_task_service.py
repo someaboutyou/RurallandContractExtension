@@ -23,14 +23,18 @@ import logging
 import threading
 import uuid
 import zipfile
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, set_current_user
 from app.models.user import User
+from app.services.issuer_excel_transfer import issuer_excel_transfer_service
 from app.services.issuer_survey_docx_service import issuer_survey_docx_service
+from app.services.village_announcement_export_service import (
+    village_announcement_export_service,
+)
 from app.services.village_publicity_export_service import village_publicity_export_service
 
 logger = logging.getLogger(__name__)
@@ -42,7 +46,10 @@ MAX_TASKS = 20
 KIND_LABELS: dict[str, str] = {
     "survey": "发包方调查表",
     "publicity": "村组公示签字表",
+    "bundle": "发包方导出",
 }
+
+BUNDLE_ITEMS = ("list", "survey", "publicity", "announcement")
 
 
 class IssuerExportTaskService:
@@ -88,6 +95,55 @@ class IssuerExportTaskService:
         thread = threading.Thread(
             target=self._run,
             args=(task_id, kind, unique, user_id),
+            daemon=True,
+        )
+        thread.start()
+        return task_id
+
+    def create_bundle_task(
+        self,
+        *,
+        items: list[str],
+        codes: list[str],
+        announcement: dict[str, Any] | None,
+        user_id: int,
+    ) -> str:
+        """合并导出任务：按选中发包方一次生成多种材料（清单/调查表/公示表/公告表）。"""
+        requested = [item for item in BUNDLE_ITEMS if item in set(items)]
+        if not requested:
+            raise ValueError("未指定导出内容")
+        unique: list[str] = []
+        seen: set[str] = set()
+        for code in codes:
+            code = str(code or "").strip()
+            if code and code not in seen:
+                seen.add(code)
+                unique.append(code)
+        if not unique:
+            raise ValueError("未指定发包方")
+
+        units = sum(1 if item in ("list", "publicity") else len(unique) for item in requested)
+        task_id = uuid.uuid4().hex
+        with self._lock:
+            self._prune_locked()
+            self._tasks[task_id] = {
+                "id": task_id,
+                "kind": "bundle",
+                "items": requested,
+                "user_id": user_id,
+                "status": "pending",
+                "done": 0,
+                "total": max(1, units),
+                "percent": 0,
+                "message": "正在准备…",
+                "error": None,
+                "archive": None,
+                "filename": None,
+                "createdAt": datetime.now(),
+            }
+        thread = threading.Thread(
+            target=self._run,
+            args=(task_id, "bundle", unique, user_id, requested, announcement),
             daemon=True,
         )
         thread.start()
@@ -139,7 +195,15 @@ class IssuerExportTaskService:
                 task.update(fields)
 
     # ── 后台线程 ────────────────────────────────────────────────────────────
-    def _run(self, task_id: str, kind: str, codes: list[str], user_id: int) -> None:
+    def _run(
+        self,
+        task_id: str,
+        kind: str,
+        codes: list[str],
+        user_id: int,
+        items: list[str] | None = None,
+        announcement: dict[str, Any] | None = None,
+    ) -> None:
         db: Session = SessionLocal()
         try:
             user = db.get(User, user_id)
@@ -154,13 +218,16 @@ class IssuerExportTaskService:
 
             if kind == "survey":
                 filename, payload = self._run_survey(db, task_id, codes, total, label)
-            else:
+            elif kind == "publicity":
                 filename, payload = self._run_publicity(db, task_id, codes, total, label)
+            else:
+                filename, payload = self._run_bundle(
+                    db, user, task_id, codes, items or ["survey"], announcement or {}
+                )
 
             self._update(
                 task_id,
                 status="completed",
-                done=total,
                 percent=100,
                 message=f"已生成 {total} 个村组的{label}，可以下载了",
                 archive=payload,
@@ -214,6 +281,105 @@ class IssuerExportTaskService:
             db, codes, progress_callback=on_sheet_done
         )
         return filename, content
+
+    def _run_bundle(
+        self,
+        db: Session,
+        user: User,
+        task_id: str,
+        codes: list[str],
+        items: list[str],
+        announcement: dict[str, Any],
+    ) -> tuple[str, bytes]:
+        """合并导出：按选中发包方生成所选材料，单个直接返回，多个打包 zip。"""
+        total = max(
+            1,
+            sum(1 if item in ("list", "publicity") else len(codes) for item in items),
+        )
+        done = 0
+
+        def bump(step: int, message: str) -> None:
+            nonlocal done
+            done = min(total, done + step)
+            self._update(
+                task_id,
+                done=done,
+                total=total,
+                percent=min(99, max(1, int(done * 100 / total))),
+                message=message,
+            )
+
+        files: list[tuple[str, bytes]] = []
+        if "list" in items:
+            filename, content = issuer_excel_transfer_service.export_xls(
+                db, user, selected_codes=codes
+            )
+            files.append((filename, content))
+            bump(1, "已生成发包方清单")
+        if "survey" in items:
+            for code in codes:
+                content, filename = issuer_survey_docx_service.render(db, fbfbm=code)
+                files.append((filename, content))
+                bump(1, f"已生成 {code} 的发包方调查表")
+        if "publicity" in items:
+            content, filename = village_publicity_export_service.export(db, codes)
+            files.append((filename, content))
+            bump(len(codes), "已生成村组公示签字表")
+        if "announcement" in items:
+            for code in codes:
+                params = self._announcement_params(db, code, announcement)
+                filename, content = village_announcement_export_service.export(
+                    db,
+                    code,
+                    params["announceDate"],
+                    params["endDate"],
+                    params["stampUnit"],
+                    params["address"],
+                )
+                files.append((filename, content))
+                bump(1, f"已生成 {code} 的村组公告表")
+
+        if not files:
+            raise ValueError("没有可导出的内容")
+        if len(files) == 1:
+            return files[0]
+
+        buffer = io.BytesIO()
+        seen: set[str] = set()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            for filename, content in files:
+                archive.writestr(self._unique_name(filename, seen), content)
+        return f"发包方导出_已选{len(codes)}户.zip", buffer.getvalue()
+
+    @staticmethod
+    def _announcement_params(
+        db: Session, code: str, announcement: dict[str, Any]
+    ) -> dict[str, Any]:
+        needed = ("announceDate", "endDate", "stampUnit", "address")
+        if all(announcement.get(key) for key in needed):
+            return announcement
+        defaults = village_announcement_export_service.defaults(db, code)
+        today = date.today()
+        return {
+            "announceDate": today,
+            "endDate": today,
+            "stampUnit": defaults["stampUnit"],
+            "address": defaults["requestAddress"],
+        }
+
+    @staticmethod
+    def _unique_name(filename: str, seen: set[str]) -> str:
+        if filename not in seen:
+            seen.add(filename)
+            return filename
+        stem, dot, suffix = filename.rpartition(".")
+        index = 2
+        while True:
+            candidate = f"{stem}({index}){dot}{suffix}"
+            if candidate not in seen:
+                seen.add(candidate)
+                return candidate
+            index += 1
 
 
 #: 供端点层做参数校验时复用的回调类型标注（无运行时作用）

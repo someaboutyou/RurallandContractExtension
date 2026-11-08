@@ -70,6 +70,7 @@ from app.schemas.survey import (
     SurveyParcelGeometryValidateRequest,
     SurveyParcelBoundaryRead,
     SurveyParcelBoundaryUpdate,
+    SurveyParcelInitializeRequest,
     SurveyPendingOperation,
     SurveyQualityCheckStart,
 )
@@ -519,6 +520,20 @@ def get_parcels_overview(
     return {
         "data": land_parcel_service.get_parcels_overview(
             db, page, page_size, keyword, current_user, batch_id=batch_id
+        )
+    }
+
+
+@router.post("/parcels/initialize", response_model=ApiResponse[dict])
+def initialize_parcel_attributes(
+    payload: SurveyParcelInitializeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """承包地块数据初始化（对齐 CS 版承包台账-初始数据）。"""
+    return {
+        "data": survey_service.initialize_parcel_attributes(
+            db, payload.model_dump(), current_user
         )
     }
 

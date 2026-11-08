@@ -24,6 +24,15 @@
         >
           删除{{ selectedRows.length ? `(${selectedRows.length})` : "" }}
         </el-button>
+        <el-button
+          v-if="canManage"
+          plain
+          type="primary"
+          :disabled="!selectedRows.length || !batchId"
+          @click="initializeVisible = true"
+        >
+          数据初始化{{ selectedRows.length ? `(${selectedRows.length})` : "" }}
+        </el-button>
         <el-dropdown
           trigger="click"
           :disabled="!selectedRows.length || exporting"
@@ -131,6 +140,12 @@
       :batch="selectedBatch"
       @imported="load"
     />
+
+    <ParcelInitializeDialog
+      v-model="initializeVisible"
+      :rows="selectedRows"
+      @initialized="load"
+    />
   </section>
 </template>
 
@@ -140,6 +155,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 
 import AddParcelDialog from "../components/survey/AddParcelDialog.vue";
 import ParcelImportDialog from "../components/survey/ParcelImportDialog.vue";
+import ParcelInitializeDialog from "../components/survey/ParcelInitializeDialog.vue";
 import ContractorResultDialog from "../components/survey/view/ContractorResultDialog.vue";
 import SurveyBatchPanel from "../components/survey/SurveyBatchPanel.vue";
 import {
@@ -176,6 +192,7 @@ const activeBatch = ref(null);
 const batchPanelCollapsed = ref(false);
 const batchId = computed(() => activeBatch.value?.id ?? null);
 const importVisible = ref(false);
+const initializeVisible = ref(false);
 const selectedBatch = computed(() => activeBatch.value);
 
 const addParcelDialog = ref(null);

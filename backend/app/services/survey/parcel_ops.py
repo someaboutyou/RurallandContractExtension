@@ -18,6 +18,8 @@ from app.models.user import User
 from app.services.data_access_service import data_access_service
 from app.services.survey.parcel_geometry import SQM_PER_MU
 
+from decimal import Decimal
+
 logger = logging.getLogger(__name__)
 
 class SurveyServiceParcelOpsMixin:
@@ -54,6 +56,209 @@ class SurveyServiceParcelOpsMixin:
         if isinstance(initialized_at, str):
             values["initialized_at"] = datetime.fromisoformat(initialized_at)
         return values
+
+    def update_parcel_attributes(self, db: Session, contractor_uid: str, cbfbm: str, updates: list[dict]) -> bool:
+        """把「地块信息」面板上的属性编辑写回结果表。
+
+        只改属性（名称/面积/地类/四至/指界人/备注等），不动图形与结构；
+        随「保存调查结果」一起提交，由差异重建逻辑负责生成地块级变更明细。
+        返回本次是否有字段实际发生变化。
+        """
+        optional_fields = (
+            "syqxz", "tdlylx", "dkdz", "dkxz", "dknz", "dkbz", "dkbzxx", "zjrxm",
+        )
+        changed_any = False
+        for item in updates or []:
+            dkbm = str(item.get("dkbm") or "").strip()
+            if not dkbm:
+                continue
+            relation = db.scalars(
+                select(SurveyCbdkxxResult)
+                .where(
+                    SurveyCbdkxxResult.cbfbm == cbfbm,
+                    SurveyCbdkxxResult.dkbm == dkbm,
+                    SurveyCbdkxxResult.result_status != "removed",
+                )
+                .order_by(SurveyCbdkxxResult.id.desc())
+            ).first()
+            parcel = db.scalars(
+                select(SurveyDkResult)
+                .where(
+                    SurveyDkResult.dkbm == dkbm,
+                    SurveyDkResult.result_status != "removed",
+                )
+                .order_by(SurveyDkResult.id.desc())
+            ).first()
+            if parcel is None and relation is None:
+                continue
+            changed = False
+            if parcel is not None:
+                for field in ("dkmc", "dklb", "dldj", "tdyt", "sfjbnt"):
+                    if field not in item:
+                        continue
+                    raw = item.get(field)
+                    new_value = str(raw).strip() if raw not in (None, "") else ""
+                    if not new_value:
+                        # 非空列：空值不覆盖，避免把必填项写坏。
+                        continue
+                    if getattr(parcel, field) != new_value:
+                        setattr(parcel, field, new_value)
+                        changed = True
+                for field in optional_fields:
+                    if field not in item:
+                        continue
+                    raw = item.get(field)
+                    new_value = str(raw).strip() if raw not in (None, "") else None
+                    if getattr(parcel, field) != new_value:
+                        setattr(parcel, field, new_value)
+                        changed = True
+                if item.get("scmj") is not None:
+                    new_area = Decimal(str(item["scmj"]))
+                    if parcel.scmj != new_area:
+                        parcel.scmj = new_area
+                        changed = True
+                if changed:
+                    parcel.is_changed = True
+            if relation is not None and item.get("htmj") is not None:
+                new_contract = Decimal(str(item["htmj"]))
+                new_mu = (new_contract / Decimal(str(SQM_PER_MU))).quantize(Decimal("0.01"))
+                if relation.htmj != new_contract or relation.htmjm != new_mu:
+                    relation.htmj = new_contract
+                    relation.htmjm = new_mu
+                    relation.is_changed = True
+                    changed = True
+            changed_any = changed_any or changed
+        return changed_any
+
+    def initialize_parcel_attributes(self, db: Session, payload: dict, current_user: User) -> dict:
+        """承包地块「数据初始化」（对齐 CS 版承包台账-初始数据）。
+
+        支持初始化的子项：所有权性质、地块类别、土地利用类型、地力等级、土地用途、
+        是否基本农田、确权面积（按实测/合同面积）、指界人（固定值/按户主）、地块备注；
+        并可选择「仅初始化空值」与「仅处理承包地块（类别 10）」。
+        """
+        values = {
+            field: payload.get(field)
+            for field in ("syqxz", "dklb", "tdlylx", "dldj", "tdyt", "sfjbnt")
+            if payload.get(field) not in (None, "")
+        }
+        aware_mode = payload.get("awareAreaMode")
+        refer_person = str(payload.get("referPerson") or "").strip()
+        refer_by_owner = bool(payload.get("referPersonByOwner"))
+        init_refer = bool(refer_person or refer_by_owner)
+        comment = payload.get("comment")
+        init_comment = comment is not None
+        initialize_null = bool(payload.get("initializeNull"))
+        only_contract = bool(payload.get("onlyContractParcels"))
+        if not (values or aware_mode or init_refer or init_comment):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请至少选择一个初始化项")
+
+        def empty(value, empty_code: str | None = None) -> bool:
+            if value is None:
+                return True
+            text = str(value).strip()
+            return not text or (empty_code is not None and text == empty_code)
+
+        def area_mu(value) -> Decimal | None:
+            if value is None:
+                return None
+            return (Decimal(str(value)) / Decimal(str(SQM_PER_MU))).quantize(Decimal("0.01"))
+
+        owner_names: dict[str, str] = {}
+        processed = 0
+        updated = 0
+        skipped = 0
+        affected_contractors: set[str] = set()
+        seen: set[tuple[str, str]] = set()
+        for item in payload.get("items") or []:
+            cbfbm = str(item.get("cbfbm") or "").strip()
+            dkbm = str(item.get("dkbm") or "").strip()
+            if not cbfbm or not dkbm or (cbfbm, dkbm) in seen:
+                continue
+            seen.add((cbfbm, dkbm))
+            data_access_service.ensure_code_in_scope(
+                current_user, cbfbm, detail="承包方不在当前数据权限范围内"
+            )
+            relation = db.scalars(
+                select(SurveyCbdkxxResult)
+                .where(
+                    SurveyCbdkxxResult.cbfbm == cbfbm,
+                    SurveyCbdkxxResult.dkbm == dkbm,
+                    SurveyCbdkxxResult.result_status != "removed",
+                )
+                .order_by(SurveyCbdkxxResult.id.desc())
+            ).first()
+            if relation is None:
+                skipped += 1
+                continue
+            parcel = db.scalars(
+                select(SurveyDkResult)
+                .where(
+                    SurveyDkResult.dkbm == dkbm,
+                    SurveyDkResult.result_status != "removed",
+                )
+                .order_by(SurveyDkResult.id.desc())
+            ).first()
+            if parcel is None:
+                skipped += 1
+                continue
+            if only_contract and not empty(parcel.dklb) and str(parcel.dklb) != "10":
+                skipped += 1
+                continue
+            processed += 1
+            changed = False
+            for field, value in values.items():
+                current = getattr(parcel, field)
+                if initialize_null and not empty(current, "900" if field == "dldj" else None):
+                    continue
+                if current != value:
+                    setattr(parcel, field, value)
+                    changed = True
+            if aware_mode:
+                current_mu = relation.htmjm
+                if not initialize_null or current_mu is None or float(current_mu) == 0:
+                    if aware_mode == "actual":
+                        target_mu = area_mu(parcel.scmj)
+                    else:
+                        target_mu = area_mu(relation.htmj)
+                    if target_mu is not None and relation.htmjm != target_mu:
+                        relation.htmjm = target_mu
+                        relation.is_changed = True
+                        changed = True
+            if init_refer:
+                if not initialize_null or empty(parcel.zjrxm):
+                    if refer_by_owner:
+                        if cbfbm not in owner_names:
+                            owner_names[cbfbm] = db.scalar(
+                                select(SurveyCbfResult.cbfmc)
+                                .where(SurveyCbfResult.cbfbm == cbfbm)
+                                .order_by(SurveyCbfResult.id.desc())
+                            ) or ""
+                        target_refer = owner_names[cbfbm]
+                    else:
+                        target_refer = refer_person
+                    if target_refer and parcel.zjrxm != target_refer:
+                        parcel.zjrxm = target_refer
+                        changed = True
+            if init_comment:
+                if not initialize_null or empty(parcel.dkbzxx):
+                    target_comment = (comment or "").strip() or None
+                    if parcel.dkbzxx != target_comment:
+                        parcel.dkbzxx = target_comment
+                        changed = True
+            if changed:
+                parcel.is_changed = True
+                relation.is_changed = True
+                updated += 1
+                affected_contractors.add(cbfbm)
+
+        db.commit()
+        return {
+            "processed": processed,
+            "updated": updated,
+            "skipped": skipped,
+            "contractors": len(affected_contractors),
+        }
 
     def _snapshot_parcel_geometry(self, db: Session, parcel_id: int) -> dict | None:
         value = db.scalar(text("SELECT ST_AsGeoJSON(ST_Transform(geom, 4326)) FROM survey_dk_result WHERE id = :id"), {"id": parcel_id})

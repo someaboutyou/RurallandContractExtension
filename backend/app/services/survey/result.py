@@ -268,6 +268,12 @@ class SurveyServiceResultMixin:
                 member_entries=sheet_entries, editor_name=current_user.real_name,
             )
 
+        # 地块属性编辑随「保存调查结果」一并提交（地块名称/面积/地类/四至/指界人/备注等）。
+        # 先刷新一遍已存在的行；待保存操作新生成的地块在下面操作执行后再补一次。
+        parcel_attr_changed = self.update_parcel_attributes(
+            db, contractor_uid, result.cbfbm, payload.get("parcels") or []
+        )
+
         changed_members = db.scalars(
             select(SurveyCbfJtcyResult).where(
                 SurveyCbfJtcyResult.contractor_uid == contractor_uid,
@@ -293,7 +299,13 @@ class SurveyServiceResultMixin:
         }
         deleted_member_count = len(base_member_uids - result_member_uids)
         contractor_changed = self._contractor_changed(result, base)
-        result.is_changed = contractor_changed or bool(changed_members) or deleted_member_count > 0 or issuer_changed
+        result.is_changed = (
+            contractor_changed
+            or bool(changed_members)
+            or deleted_member_count > 0
+            or issuer_changed
+            or parcel_attr_changed
+        )
         form_change_count = (1 if contractor_changed else 0) + (1 if issuer_changed else 0) + len(changed_members) + deleted_member_count
         after_summary = self._summary_from_result(result)
         if issuer_payload and issuer:
@@ -328,6 +340,11 @@ class SurveyServiceResultMixin:
         created_contractors = self._apply_pending_operations(
             db, batch_id, contractor_uid, pending_operations, current_user
         )
+        # 待保存操作可能刚生成本批次新增/切割/互换换入地块，补写一次属性编辑。
+        if self.update_parcel_attributes(
+            db, contractor_uid, result.cbfbm, payload.get("parcels") or []
+        ):
+            result.is_changed = True
         if not has_terminal_operation:
             preserved_operation_change_count = db.scalar(
                 select(func.count(SurveyChangeRecord.id)).where(

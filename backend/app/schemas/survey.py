@@ -1,4 +1,5 @@
 ﻿from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -639,6 +640,59 @@ class SurveyPendingOperation(BaseModel):
     payload: dict = {}
 
 
+class SurveyParcelAttributeUpdate(BaseModel):
+    """地块属性编辑（随「保存调查结果」提交，不涉及图形/结构变更）。"""
+
+    dkbm: str = Field(min_length=1, max_length=19)
+    dkmc: str | None = Field(default=None, max_length=50)
+    scmj: float | None = None
+    htmj: float | None = None
+    syqxz: str | None = Field(default=None, max_length=2)
+    dklb: str | None = Field(default=None, max_length=2)
+    tdlylx: str | None = Field(default=None, max_length=3)
+    dldj: str | None = Field(default=None, max_length=2)
+    tdyt: str | None = Field(default=None, max_length=1)
+    sfjbnt: str | None = Field(default=None, max_length=1)
+    dkdz: str | None = Field(default=None, max_length=50)
+    dkxz: str | None = Field(default=None, max_length=50)
+    dknz: str | None = Field(default=None, max_length=50)
+    dkbz: str | None = Field(default=None, max_length=50)
+    dkbzxx: str | None = Field(default=None, max_length=300)
+    zjrxm: str | None = Field(default=None, max_length=100)
+
+
+class SurveyParcelInitializeItem(BaseModel):
+    cbfbm: str = Field(min_length=1, max_length=18)
+    dkbm: str = Field(min_length=1, max_length=19)
+
+
+class SurveyParcelInitializeRequest(BaseModel):
+    """承包地块数据初始化（对齐 CS 版承包台账-初始数据）。
+
+    仅提交勾选的初始化项；``initializeNull`` 为真时只填充当前为空的字段。
+    """
+
+    batchId: int | None = None
+    items: list[SurveyParcelInitializeItem] = Field(min_length=1, max_length=2000)
+    syqxz: str | None = Field(default=None, max_length=2)
+    dklb: str | None = Field(default=None, max_length=2)
+    tdlylx: str | None = Field(default=None, max_length=3)
+    dldj: str | None = Field(default=None, max_length=2)
+    tdyt: str | None = Field(default=None, max_length=1)
+    sfjbnt: str | None = Field(default=None, max_length=1)
+    #: 确权面积初始化方式：actual=按实测面积，contract=按合同面积。
+    awareAreaMode: Literal["actual", "contract"] | None = None
+    #: 指界人：referPerson 固定值；referPersonByOwner=true 时取承包方名称（户主）。
+    referPerson: str | None = Field(default=None, max_length=100)
+    referPersonByOwner: bool = False
+    #: 地块备注。
+    comment: str | None = Field(default=None, max_length=300)
+    #: 仅填充当前为空的字段（CS「初始化空值」）。
+    initializeNull: bool = False
+    #: 仅处理地块类别为 10（承包地块）的记录（CS「处理合同地块」反选项）。
+    onlyContractParcels: bool = False
+
+
 class SurveyContractorUpdate(BaseModel):
     code: str = Field(min_length=1, max_length=18)
     typeCode: str = Field(min_length=1, max_length=1)
@@ -668,6 +722,7 @@ class SurveyContractorUpdate(BaseModel):
     familyMembers: list[SurveyMemberUpdate] = []
     deletedMembers: list[SurveyMemberDeleteEntry] = []
     pendingOperations: list[SurveyPendingOperation] = []
+    parcels: list[SurveyParcelAttributeUpdate] = []
 
 
 class SurveyMemberRead(SurveyMemberUpdate):

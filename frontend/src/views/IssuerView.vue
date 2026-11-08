@@ -14,8 +14,12 @@
           @clear="handleSearch"
         />
         <el-button plain @click="handleSearch">查询</el-button>
-        <el-button plain :loading="exporting" @click="handleExportIssuerXls">
-          导出发包方清单{{ isDataCenter && selectedRows.length ? `(${selectedRows.length}户)` : "" }}
+        <el-button
+          plain
+          :disabled="!selectedRows.length"
+          @click="openBundleExport"
+        >
+          导出{{ selectedRows.length ? `(${selectedRows.length})` : "" }}
         </el-button>
         <el-button v-if="canManage" plain @click="issuerXlsImportVisible = true">导入发包方清单</el-button>
         <el-button
@@ -26,21 +30,7 @@
         >
           数据质检
         </el-button>
-        <el-button
-          plain
-          type="primary"
-          @click="openBatchExport('survey')"
-        >
-          导出调查表{{ selectedRows.length ? `(${selectedRows.length})` : "(全部)" }}
-        </el-button>
-        <el-button
-          plain
-          type="primary"
-          @click="openBatchExport('publicity')"
-        >
-          导出公示签字表{{ selectedRows.length ? `(${selectedRows.length})` : "(全部)" }}
-        </el-button>
-        <el-button v-if="canManage" type="success" @click="openCreateDialog">新增发包方</el-button>
+        <el-button v-if="canManage" type="success" @click="openCreateDialog">新增</el-button>
         <el-button
           v-if="canManage"
           plain
@@ -95,6 +85,7 @@
                   <template #dropdown>
                     <el-dropdown-menu>
                       <el-dropdown-item command="publicity">村组公示签字表</el-dropdown-item>
+                      <el-dropdown-item command="announcement">村组公告表</el-dropdown-item>
                       <el-dropdown-item command="survey">发包方调查表</el-dropdown-item>
                     </el-dropdown-menu>
                   </template>
@@ -113,6 +104,7 @@
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item command="publicity">村组公示签字表</el-dropdown-item>
+                    <el-dropdown-item command="announcement">村组公告表</el-dropdown-item>
                     <el-dropdown-item command="survey">发包方调查表</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
@@ -308,11 +300,22 @@
     @imported="onIssuersImported"
   />
 
+  <IssuerAnnouncementDialog
+    v-model="announcementVisible"
+    :issuer="announcementRow"
+  />
+
+  <IssuerBatchExportDialog
+    v-model="bundleExportVisible"
+    :rows="selectedRows"
+    @submit="handleBundleExportSubmit"
+  />
+
   <IssuerExportProgressDialog
-    v-model="exportDialogVisible"
-    :kind="exportKind"
-    :codes="exportCodes"
-    :batch-id="exportBatchId"
+    v-model="bundleProgressVisible"
+    :payload="bundleExportPayload"
+    title="导出选中发包方"
+    subject="发包方资料"
   />
 
   <!-- 数据中心：整库数据质检（不传 region 即整库口径，与承包方管理入口一致） -->
@@ -329,7 +332,6 @@ import {
   createIssuer,
   deleteIssuer,
   exportIssuerSurveyDocx,
-  exportIssuerXls,
   exportPublicityXls,
   fetchIssuerContractors,
   fetchIssuerParcels,
@@ -340,6 +342,8 @@ import { fetchCurrentSurveyBatch } from "../api/survey";
 import { useDialogMap } from "../composables/useDialogMap";
 import DictionarySelect from "../components/DictionarySelect.vue";
 import IssuerExportProgressDialog from "../components/issuer/IssuerExportProgressDialog.vue";
+import IssuerAnnouncementDialog from "../components/issuer/IssuerAnnouncementDialog.vue";
+import IssuerBatchExportDialog from "../components/issuer/IssuerBatchExportDialog.vue";
 import IssuerXlsImportDialog from "../components/issuers/IssuerXlsImportDialog.vue";
 import MergeIssuerDialog from "../components/issuers/MergeIssuerDialog.vue";
 import SurveyBatchPanel from "../components/survey/SurveyBatchPanel.vue";
@@ -374,7 +378,6 @@ const selectedRows = ref([]);
 const mergeIssuerDialog = ref(null);
 const mergeVisible = ref(false);
 const issuerXlsImportVisible = ref(false);
-const exporting = ref(false);
 
 const issuerContractors = ref([]);
 const issuerContractorsLoading = ref(false);
@@ -743,35 +746,6 @@ function filenameFromDisposition(disposition, fallback) {
   return match ? decodeURIComponent(match[1]) : fallback;
 }
 
-async function handleExportIssuerXls() {
-  exporting.value = true;
-  try {
-    // 数据中心口径：勾选了就按勾选清单导出，否则整库（区域口径走数据导出页）；
-    // 建库中心口径：keyword + 当前批次。
-    const payload = isDataCenter.value
-      ? {
-          keyword: keyword.value.trim() || undefined,
-          codes: selectedRows.value.length
-            ? selectedRows.value.map((row) => row.code).join(",")
-            : undefined,
-        }
-      : {
-          keyword: keyword.value.trim() || undefined,
-          batchId: activeBatch.value?.id || undefined,
-        };
-    const { data, headers } = await exportIssuerXls(payload);
-    downloadBlob(
-      data,
-      filenameFromDisposition(headers?.["content-disposition"], "发包方调查表.xls"),
-    );
-    ElMessage.success("发包方清单已导出");
-  } catch {
-    ElMessage.error("导出发包方清单失败");
-  } finally {
-    exporting.value = false;
-  }
-}
-
 async function handleExportIssuerWord(row) {
   if (!row?.code) return;
   try {
@@ -788,40 +762,43 @@ async function handleExportIssuerWord(row) {
   }
 }
 
-// ---- 行内导出：一个下拉分发两类单村组导出（同步接口，单个生成很快） ----
+// ---- 行内导出：一个下拉分发单村组导出（同步接口，单个生成很快） ----
+const announcementVisible = ref(false);
+const announcementRow = ref(null);
+
+function openAnnouncement(row) {
+  announcementRow.value = row;
+  announcementVisible.value = true;
+}
+
 function handleRowExport(command, row) {
   if (!row?.code) return;
   if (command === "publicity") {
     handleExportPublicity(row);
+  } else if (command === "announcement") {
+    openAnnouncement(row);
   } else if (command === "survey") {
     handleExportIssuerWord(row);
   }
 }
 
-// ---- 批量导出：走后台任务 + 进度弹窗（村组多、耗时长，需要可见进度） ----
-const exportDialogVisible = ref(false);
-const exportKind = ref("survey"); // survey=发包方调查表 | publicity=村组公示签字表
-const exportCodes = ref([]);
-const exportBatchId = ref(null);
+// ---- 批量导出：勾选发包方 → 选择导出内容 → 后台任务 + 进度弹窗 ----
+const bundleExportVisible = ref(false);
+const bundleProgressVisible = ref(false);
+const bundleExportPayload = ref(null);
 
-function openBatchExport(kind) {
-  exportKind.value = kind;
-  if (selectedRows.value.length) {
-    // 勾选了导出勾选清单；没勾选则导出当前批次全部（批次也没选则提示）。
-    exportCodes.value = selectedRows.value.map((row) => row.code);
-    exportBatchId.value = null;
-  } else if (!isDataCenter.value && activeBatch.value?.id) {
-    exportCodes.value = [];
-    exportBatchId.value = activeBatch.value.id;
-  } else {
-    ElMessage.warning(
-      isDataCenter.value
-        ? "数据中心按勾选导出调查表，请先勾选发包方（整库导出请缩小到具体区域后在建库中心按批次操作）"
-        : "请先勾选发包方，或在左侧选择一个调查批次",
-    );
+function openBundleExport() {
+  if (!selectedRows.value.length) {
+    ElMessage.warning("请先勾选发包方，再选择导出内容");
     return;
   }
-  exportDialogVisible.value = true;
+  bundleExportVisible.value = true;
+}
+
+function handleBundleExportSubmit(payload) {
+  bundleExportPayload.value = payload;
+  bundleExportVisible.value = false;
+  bundleProgressVisible.value = true;
 }
 
 // ---- 村组公示签字表导出（一个发包方一个 sheet，批量合并为一个 xls） ----

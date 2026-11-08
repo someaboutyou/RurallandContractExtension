@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -67,6 +68,15 @@ class IssuerDocxExportRequest(BaseModel):
     codes: list[str] = Field(min_length=1, max_length=500)
 
 
+class IssuerAnnouncementRequest(BaseModel):
+    """村组公示公告导出参数（对齐 CS 版「公示公告信息设置」对话框）。"""
+
+    announceDate: date
+    endDate: date
+    stampUnit: str = Field(min_length=1, max_length=100)
+    address: str = Field(min_length=1, max_length=255)
+
+
 class IssuerExportJobRequest(BaseModel):
     """批量导出后台任务：kind=survey(发包方调查表) | publicity=村组公示签字表。
 
@@ -77,3 +87,16 @@ class IssuerExportJobRequest(BaseModel):
     kind: Literal["survey", "publicity"]
     codes: list[str] | None = Field(default=None, max_length=500)
     batchId: int | None = None
+
+
+class IssuerBundleExportRequest(BaseModel):
+    """合并导出：按勾选的发包方一次性导出多种材料。"""
+
+    codes: list[str] = Field(min_length=1, max_length=500)
+    items: list[Literal["list", "survey", "publicity", "announcement"]] = Field(
+        min_length=1, max_length=4
+    )
+    announceDate: date | None = None
+    endDate: date | None = None
+    stampUnit: str | None = Field(default=None, max_length=100)
+    address: str | None = Field(default=None, max_length=255)

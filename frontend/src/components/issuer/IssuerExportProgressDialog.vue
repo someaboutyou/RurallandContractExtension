@@ -12,7 +12,7 @@
         <el-progress :percentage="percentage" :stroke-width="14" striped striped-flow />
         <div class="phase-line">{{ job.message || "正在启动…" }}</div>
         <div v-if="job.total" class="count-line">
-          {{ job.done }} / {{ job.total }} 个村组
+          {{ job.done }} / {{ job.total }} {{ payload ? "项" : "个村组" }}
         </div>
         <div class="tip-line">
           数据量大时导出需要一些时间；可点「后台运行」关闭弹窗，导出完成后会自动下载并提示。
@@ -47,6 +47,7 @@ import { ElMessage } from "element-plus";
 import {
   downloadIssuerExportJob,
   getIssuerExportJob,
+  startIssuerBundleExportJob,
   startIssuerExportJob,
 } from "../../api/issuer";
 
@@ -55,6 +56,10 @@ const props = defineProps({
   kind: { type: String, default: "survey" }, // survey=发包方调查表 | publicity=村组公示签字表
   codes: { type: Array, default: () => [] },
   batchId: { type: Number, default: null }, // 未勾选时按批次导出全部
+  // 合并导出：传 payload 时直接提交该载荷，忽略 kind/codes/batchId。
+  payload: { type: Object, default: null },
+  title: { type: String, default: "" },
+  subject: { type: String, default: "" },
 });
 const emit = defineEmits(["update:modelValue"]);
 
@@ -67,7 +72,10 @@ let pollTimer = null;
 let downloadSeq = 0;
 const startedTaskId = ref("");
 
-const dialogTitle = computed(() => `导出${KIND_LABELS[props.kind] || "文件"}`);
+const dialogTitle = computed(() => props.title || `导出${KIND_LABELS[props.kind] || "文件"}`);
+const subjectLabel = computed(
+  () => props.subject || KIND_LABELS[props.kind] || "文件",
+);
 
 const percentage = computed(() => {
   const total = Number(job.value.total || 0);
@@ -88,10 +96,15 @@ function start() {
   job.value = { message: "正在创建导出任务…" };
   jobStatus.value = "running";
   autoDownloaded.value = false;
-  const payload = props.codes.length
-    ? { kind: props.kind, codes: props.codes }
-    : { kind: props.kind, batchId: props.batchId };
-  startIssuerExportJob(payload)
+  const payload = props.payload
+    ? props.payload
+    : props.codes.length
+      ? { kind: props.kind, codes: props.codes }
+      : { kind: props.kind, batchId: props.batchId };
+  const request = props.payload
+    ? startIssuerBundleExportJob(payload)
+    : startIssuerExportJob(payload);
+  request
     .then(({ data }) => {
       const taskId = data?.data?.taskId;
       if (!taskId) throw new Error("no taskId");
@@ -158,7 +171,7 @@ async function download() {
     URL.revokeObjectURL(url);
     autoDownloaded.value = true;
     if (!isVisible()) {
-      ElMessage.success(`已导出${KIND_LABELS[props.kind] || "文件"}：${filename}`);
+      ElMessage.success(`已导出${subjectLabel.value}：${filename}`);
       resetState();
     }
   } catch {

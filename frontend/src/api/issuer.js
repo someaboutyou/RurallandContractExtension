@@ -71,11 +71,29 @@ export function exportPublicityXls(payload) {
   });
 }
 
+/** 村组公告表导出对话框默认值。 */
+export function fetchAnnouncementDefaults(code) {
+  return http.get(`/issuers/${code}/announcement-defaults`);
+}
+
+/** 导出单个发包方的《村组公示公告》Word。 */
+export function exportVillageAnnouncement(code, payload) {
+  return http.post(`/issuers/${code}/announcement`, payload, {
+    responseType: "blob",
+    timeout: 120000,
+  });
+}
+
 // ── 批量导出后台任务：创建 → 轮询进度 → 下载（kind: survey | publicity）──
 
 /** 创建批量导出任务，立即返回 `{ taskId }`。 */
 export function startIssuerExportJob(payload) {
   return http.post("/issuers/export-jobs", payload, { timeout: 60000 });
+}
+
+/** 创建合并导出任务（按选中发包方一次导出多种材料）。 */
+export function startIssuerBundleExportJob(payload) {
+  return http.post("/issuers/export-bundle-jobs", payload, { timeout: 60000 });
 }
 
 /** 轮询批量导出任务进度。 */

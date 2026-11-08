@@ -1012,6 +1012,28 @@ async function handleSaveResult() {
     const validMembers = allMembers.filter((m) => !m._deleted);
     const cleanMembers = validMembers.map(({ _deleted, _isNew, ...rest }) => rest);
     const deletedMembers = allMembers.filter((m) => m._deleted && m.memberUid).map((m) => ({ memberUid: m.memberUid, changeReason: m.changeReason || resultForm.changeReason || "去世" }));
+    // 地块信息面板的属性编辑（名称/面积/地类/四至/指界人/备注等）随保存统一提交；
+    // 移除 / 切割源历史地块不在此列（由待保存操作负责）。
+    const parcelUpdates = (parcels.value || [])
+      .filter((parcel) => parcel?.dkbm && !["removed", "split_source"].includes(parcel.resultStatus))
+      .map((parcel) => ({
+        dkbm: parcel.dkbm,
+        dkmc: parcel.dkmc ?? "",
+        scmj: parcel.scmj ?? null,
+        htmj: parcel.htmj ?? null,
+        syqxz: parcel.syqxz ?? null,
+        dklb: parcel.dklb ?? null,
+        tdlylx: parcel.tdlylx ?? null,
+        dldj: parcel.dldj ?? null,
+        tdyt: parcel.tdyt ?? null,
+        sfjbnt: parcel.sfjbnt ?? null,
+        dkdz: parcel.dkdz ?? null,
+        dkxz: parcel.dkxz ?? null,
+        dknz: parcel.dknz ?? null,
+        dkbz: parcel.dkbz ?? null,
+        dkbzxx: parcel.dkbzxx ?? null,
+        zjrxm: parcel.zjrxm ?? null,
+      }));
     const { issuer, baseIssuer, ...contractorPayload } = resultForm;
     let contractorUid = activeTask.value?.contractorUid;
     if (isCreatingContractorResult.value) {
@@ -1028,7 +1050,7 @@ async function handleSaveResult() {
     // 合户是「加入待保存 → 点「保存调查结果」才真正落库」，所以"是否进入新户页面"
     // 只能在这个时点问。先把合户操作捞出来（下面会把 pendingOperations 清空）。
     const mergeOperation = pendingOperations.value.find((op) => op.type === "merge_household") || null;
-    const { data: savedResponse } = await updateSurveyResult(props.activeBatch.id, contractorUid, { ...contractorPayload, contractorUid, familyMembers: cleanMembers, deletedMembers, pendingOperations: pendingOperations.value });
+    const { data: savedResponse } = await updateSurveyResult(props.activeBatch.id, contractorUid, { ...contractorPayload, contractorUid, familyMembers: cleanMembers, deletedMembers, pendingOperations: pendingOperations.value, parcels: parcelUpdates });
     const createdContractors = savedResponse?.data?.createdContractors || [];
     ElMessage.success(isCreatingContractorResult.value ? "承包方调查数据已新增" : "调查结果已保存");
     pendingOperations.value = [];

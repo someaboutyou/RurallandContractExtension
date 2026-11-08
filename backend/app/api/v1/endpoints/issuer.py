@@ -5,6 +5,8 @@ from app.api.deps import get_current_user, get_db, require_permission
 from app.models.fbf import Fbf
 from app.models.user import User
 from app.schemas.issuer import (
+    IssuerAnnouncementRequest,
+    IssuerBundleExportRequest,
     IssuerContractorRead,
     IssuerCreate,
     IssuerDocxExportRequest,
@@ -195,6 +197,57 @@ def export_publicity_xls(
     )
 
 
+# ── 村组公示公告（村组公告表） ──────────────────────────────────────────────
+
+
+@router.get("/{code}/announcement-defaults", response_model=ApiResponse[dict])
+def get_announcement_defaults(
+    code: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("issuers.view")),
+):
+    """村组公告表导出对话框默认值（公告日期/截止日期/盖章单位/地址）。"""
+    from app.services.village_announcement_export_service import (
+        village_announcement_export_service,
+    )
+
+    _ensure_issuer_exportable(db, code, current_user)
+    return {"data": village_announcement_export_service.defaults(db, code)}
+
+
+@router.post("/{code}/announcement")
+def export_village_announcement(
+    code: str,
+    payload: IssuerAnnouncementRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("issuers.view")),
+):
+    """导出单个发包方的《村组公示公告》Word（对齐 CS 版公示公告信息设置）。"""
+    from urllib.parse import quote
+
+    from app.services.village_announcement_export_service import (
+        DOCX_MEDIA_TYPE,
+        village_announcement_export_service,
+    )
+
+    _ensure_issuer_exportable(db, code, current_user)
+    if payload.endDate < payload.announceDate:
+        raise HTTPException(status_code=400, detail="截止日期不能小于公告日期")
+    filename, content = village_announcement_export_service.export(
+        db,
+        code,
+        payload.announceDate,
+        payload.endDate,
+        payload.stampUnit,
+        payload.address,
+    )
+    return Response(
+        content=content,
+        media_type=DOCX_MEDIA_TYPE,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
 @router.post("/export-docx")
 def export_issuers_survey_docx(
     payload: IssuerDocxExportRequest,
@@ -313,6 +366,60 @@ def create_issuer_export_job(
     try:
         task_id = issuer_export_task_service.create_task(
             kind=payload.kind, codes=codes, user_id=current_user.id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"data": {"taskId": task_id}}
+
+
+@router.post("/export-bundle-jobs", response_model=ApiResponse[dict])
+def create_issuer_bundle_export_job(
+    payload: IssuerBundleExportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("issuers.view")),
+):
+    """合并导出后台任务：按勾选发包方一次性生成所选材料（清单/调查表/公示表/公告表）。"""
+    from app.services.issuer_export_task_service import issuer_export_task_service
+
+    codes: list[str] = []
+    seen: set[str] = set()
+    for raw_code in payload.codes:
+        code = str(raw_code or "").strip()
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        _ensure_issuer_exportable(db, code, current_user)
+        codes.append(code)
+    if not codes:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未找到可导出的发包方")
+
+    announcement = None
+    if "announcement" in payload.items:
+        if not (
+            payload.announceDate
+            and payload.endDate
+            and payload.stampUnit
+            and payload.address
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="请设置村组公告表的公告日期、截止日期、盖章单位和地址",
+            )
+        if payload.endDate < payload.announceDate:
+            raise HTTPException(status_code=400, detail="截止日期不能小于公告日期")
+        announcement = {
+            "announceDate": payload.announceDate,
+            "endDate": payload.endDate,
+            "stampUnit": payload.stampUnit,
+            "address": payload.address,
+        }
+
+    try:
+        task_id = issuer_export_task_service.create_bundle_task(
+            items=payload.items,
+            codes=codes,
+            announcement=announcement,
+            user_id=current_user.id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
