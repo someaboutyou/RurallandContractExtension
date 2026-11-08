@@ -149,20 +149,10 @@
           <div class="toolbar-actions">
             <el-input v-model="issuerKeyword" clearable placeholder="搜索发包方" style="width: 220px" @keyup.enter="loadIssuerRows" @clear="loadIssuerRows" />
             <el-button :icon="Search" plain @click="loadIssuerRows">查询</el-button>
-            <template v-if="canManage">
-              <el-button
-                :disabled="activeBatch?.status === 'finished' || selectedIssuerRows.length < 2"
-                type="warning"
-                plain
-                @click="openMergeIssuer"
-              >合并</el-button>
-              <el-button :disabled="activeBatch?.status === 'finished'" :icon="Plus" type="primary" @click="openCreateIssuer">新增</el-button>
-            </template>
             <span class="batch-selected-hint">已选 {{ selectedIssuerRows.length }} 个发包方</span>
           </div>
         </div>
         <el-table
-          ref="issuerTableRef"
           v-loading="issuerLoading"
           :data="issuerRows"
           row-key="issuerUid"
@@ -212,8 +202,6 @@
     </section>
 
     <BatchCreateDialog ref="batchCreateDialog" v-model="batchDialogVisible" @created="onBatchCreated" />
-    <IssuerSurveyDialog ref="issuerSurveyDialog" v-model="issuerSurveyVisible" :active-batch="activeBatch" :can-manage="canManage" @saved="onIssuerSaved" />
-    <MergeIssuerDialog ref="mergeIssuerDialog" v-model="mergeIssuerVisible" :active-batch="activeBatch" :rows="selectedIssuerRows" @merged="onIssuersMerged" />
     <QualityCheckDialog v-model="qualityCheckVisible" :batch="activeBatch" />
   </div>
 </template>
@@ -225,8 +213,6 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { CircleCheck, Download, Plus, Search } from "@element-plus/icons-vue";
 
 import BatchCreateDialog from "../components/survey/view/BatchCreateDialog.vue";
-import IssuerSurveyDialog from "../components/survey/view/IssuerSurveyDialog.vue";
-import MergeIssuerDialog from "../components/survey/view/MergeIssuerDialog.vue";
 import QualityCheckDialog from "../components/survey/QualityCheckDialog.vue";
 
 import {
@@ -298,12 +284,7 @@ const formChecks = reactive(
 const hasCheckedForm = computed(() => Object.values(formChecks).some(Boolean));
 const batchExporting = ref(false);
 
-// ---- 发包方维护（新增 / 编辑 / 合并 / 删除）----
-const issuerTableRef = ref(null);
-const issuerSurveyDialog = ref(null);
-const issuerSurveyVisible = ref(false);
-const mergeIssuerDialog = ref(null);
-const mergeIssuerVisible = ref(false);
+// ---- 发包方维护（原合并 / 新增入口已移除）----
 // ---- 数据质检 ----
 const qualityCheckVisible = ref(false);
 
@@ -429,24 +410,6 @@ async function loadIssuerRows() {
 }
 
 function handleIssuerSelectionChange(rows) { selectedIssuerRows.value = rows || []; }
-
-// ---- Issuer operations ----
-function openCreateIssuer() {
-  if (!activeBatch.value || activeBatch.value?.status === "finished") return;
-  issuerSurveyDialog.value.openForCreate(activeBatch.value, activeBatch.value?.regionCode || activeRegionCode.value);
-}
-function onIssuerSaved() { loadBatchDetail(); }
-
-function openMergeIssuer() {
-  if (!activeBatch.value || selectedIssuerRows.value.length < 2) return;
-  mergeIssuerDialog.value.open();
-}
-function onIssuersMerged() {
-  // 合并后被合并方已删除，清掉勾选再整表重查
-  selectedIssuerRows.value = [];
-  issuerTableRef.value?.clearSelection();
-  loadBatchDetail();
-}
 
 function downloadBlob(data, filename) {
   const url = URL.createObjectURL(data);

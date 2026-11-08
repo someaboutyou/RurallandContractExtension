@@ -46,8 +46,8 @@
       </div>
     </div>
 
-    <div class="parcel-workspace">
-      <SurveyBatchPanel v-model="activeBatch" />
+    <div class="parcel-workspace" :class="{ 'is-batch-collapsed': batchPanelCollapsed }">
+      <SurveyBatchPanel v-model="activeBatch" v-model:collapsed="batchPanelCollapsed" />
 
       <div class="parcel-main">
         <div class="table-shell">
@@ -173,6 +173,7 @@ const currentRow = ref(null);
 
 // 左侧调查批次面板：选中批次后列表只显示该批次范围内承包户的地块。
 const activeBatch = ref(null);
+const batchPanelCollapsed = ref(false);
 const batchId = computed(() => activeBatch.value?.id ?? null);
 const importVisible = ref(false);
 const selectedBatch = computed(() => activeBatch.value);
@@ -500,6 +501,10 @@ onMounted(async () => {
   grid-template-columns: 280px minmax(0, 1fr);
   gap: 12px;
   overflow: hidden;
+}
+
+.parcel-workspace.is-batch-collapsed {
+  grid-template-columns: 42px minmax(0, 1fr);
 }
 
 .parcel-main {

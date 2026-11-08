@@ -249,8 +249,8 @@
               <span :class="parcelChangedClass(row)">{{ row.scmj == null ? "-" : (sqmToMu(row.scmj) ?? "-") }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="类别" width="80">
-            <template #default="{ row }">{{ dklbMap[row.dklb] || row.dklb || "-" }}</template>
+          <el-table-column label="类别" width="90">
+            <template #default="{ row }">{{ parcelCategoryLabel(row.dklb) || row.dklb || "-" }}</template>
           </el-table-column>
           <el-table-column label="是否基本农田" width="100">
             <template #default="{ row }">{{ row.sfjbnt === "1" ? "是" : "否" }}</template>
@@ -310,7 +310,7 @@
               </span>
             </el-tooltip>
           </div>
-          <el-form label-position="top" size="small" :disabled="isHistoricalParcel(selectedParcel)">
+          <el-form label-position="left" label-width="104px" size="small" :disabled="isHistoricalParcel(selectedParcel)">
             <div class="parcel-detail-grid">
               <el-form-item label="地块编码">
                 <el-input :model-value="selectedParcel.dkbm" disabled />
@@ -340,11 +340,43 @@
                 />
               </el-form-item>
             </div>
-            <el-form-item label="土地利用类型">
-              <el-select v-model="selectedParcel.tdlylx" style="width: 100%" clearable>
-                <el-option v-for="(label, code) in tdlylxMap" :key="code" :label="label" :value="code" />
-              </el-select>
-            </el-form-item>
+            <div class="parcel-detail-grid">
+              <el-form-item label="所有权性质">
+                <el-select v-model="selectedParcel.syqxz" style="width: 100%" clearable>
+                  <el-option v-for="item in ownershipOptions" :key="item.value" :label="item.label" :value="item.value" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="地块类别">
+                <el-select v-model="selectedParcel.dklb" style="width: 100%" clearable>
+                  <el-option v-for="item in parcelCategoryOptions" :key="item.value" :label="item.label" :value="item.value" />
+                </el-select>
+              </el-form-item>
+            </div>
+            <div class="parcel-detail-grid">
+              <el-form-item label="土地利用类型">
+                <el-select v-model="selectedParcel.tdlylx" style="width: 100%" clearable>
+                  <el-option v-for="(label, code) in tdlylxMap" :key="code" :label="label" :value="code" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="地力等级">
+                <el-select v-model="selectedParcel.dldj" style="width: 100%" clearable>
+                  <el-option v-for="item in landGradeOptions" :key="item.value" :label="item.label" :value="item.value" />
+                </el-select>
+              </el-form-item>
+            </div>
+            <div class="parcel-detail-grid">
+              <el-form-item label="土地用途">
+                <el-select v-model="selectedParcel.tdyt" style="width: 100%" clearable>
+                  <el-option v-for="item in landUseOptions" :key="item.value" :label="item.label" :value="item.value" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="是否基本农田">
+                <el-select v-model="selectedParcel.sfjbnt" style="width: 100%" clearable>
+                  <el-option label="是" value="1" />
+                  <el-option label="否" value="0" />
+                </el-select>
+              </el-form-item>
+            </div>
             <div class="parcel-detail-grid">
               <el-form-item label="东至">
                 <el-input v-model="selectedParcel.dkdz" placeholder="东至" />
@@ -359,6 +391,21 @@
               </el-form-item>
               <el-form-item label="北至">
                 <el-input v-model="selectedParcel.dkbz" placeholder="北至" />
+              </el-form-item>
+            </div>
+            <div class="parcel-detail-grid">
+              <el-form-item label="指界人">
+                <el-input v-model="selectedParcel.zjrxm" placeholder="请输入指界人" />
+              </el-form-item>
+              <el-form-item label="地块备注">
+                <el-input
+                  v-model="selectedParcel.dkbzxx"
+                  type="textarea"
+                  :rows="2"
+                  maxlength="300"
+                  show-word-limit
+                  placeholder="请输入地块备注"
+                />
               </el-form-item>
             </div>
             <div class="parcel-detail-grid">
@@ -610,11 +657,11 @@ import { ElMessage } from "element-plus";
 import AddParcelDialog from "./AddParcelDialog.vue";
 import BoundaryMaintainDialog from "./BoundaryMaintainDialog.vue";
 import { useDialogMap } from "../../composables/useDialogMap";
+import { useDictionary } from "../../composables/useDictionary";
 import { useParcelDraftMap } from "../../composables/survey/useParcelDraftMap";
 import { useSplitParcel } from "../../composables/survey/useSplitParcel";
 import { useAddParcelGeometry } from "../../composables/survey/useAddParcelGeometry";
 import {
-  dklbMap,
   tdlylxMap,
   formatArea,
   isCurrentParcel,
@@ -631,6 +678,11 @@ import {
   parcelChangedClass,
 } from "../../utils/parcelStatusHelpers";
 import { sqmToMu, muToSqm } from "../../utils/areaUnits";
+
+const { options: ownershipOptions } = useDictionary("nyt2539_c06_ownership_property");
+const { options: parcelCategoryOptions, labelOf: parcelCategoryLabel } = useDictionary("nyt2539_c07_parcel_category");
+const { options: landGradeOptions } = useDictionary("nyt2539_c08_land_grade");
+const { options: landUseOptions } = useDictionary("nyt2539_c09_land_use");
 
 const props = defineProps({
   batchId: { type: Number, required: true },
@@ -1096,7 +1148,7 @@ onBeforeUnmount(() => {
   height: auto;
   min-height: 0;
 }
-.parcel-map-container { flex: 1; position: relative; min-width: 0; border: 1px solid #ebeef5; border-radius: 4px; overflow: hidden; }
+.parcel-map-container { flex: 0 0 44%; position: relative; min-width: 0; border: 1px solid #ebeef5; border-radius: 4px; overflow: hidden; }
 .parcel-map-container.is-add-mode { border-color: #60a5fa; box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.35); }
 .parcel-map-container.is-split-mode { border-color: #fb923c; box-shadow: inset 0 0 0 1px rgba(251, 146, 60, 0.35); }
 .parcel-map { width: 100%; height: 100%; }
@@ -1169,7 +1221,8 @@ onBeforeUnmount(() => {
 }
 
 .parcel-list {
-  width: 420px;
+  flex: 1 1 56%;
+  width: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1184,8 +1237,11 @@ onBeforeUnmount(() => {
 /* 被禁用的按钮不触发鼠标事件，tooltip 的触发区要落在外面这层 span 上。 */
 .boundary-entry-wrap { display: inline-flex; }
 .parcel-detail-grid { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.parcel-detail :deep(.el-form-item) { margin-bottom: 10px; }
-.parcel-detail :deep(.el-form-item__label) { padding: 0 0 4px; font-size: 12px; }
+.parcel-detail :deep(.el-form-item) { display: flex; min-height: 32px; margin-bottom: 8px; align-items: center; }
+.parcel-detail :deep(.el-form-item__label) { display: flex; float: none; width: 104px; justify-content: flex-end; padding: 0 8px 0 0; font-size: 12px; line-height: 32px; text-align: right; white-space: nowrap; }
+.parcel-detail :deep(.el-form-item__content) { flex: 1 1 auto; min-width: 0; margin-left: 0; }
+.parcel-detail :deep(.el-input__wrapper),
+.parcel-detail :deep(.el-select__wrapper) { min-height: 32px; }
 .parcel-detail.is-removed { background: #f4f4f5; border: 1px solid #dcdfe6; padding: 8px; }
 .field-changed { background-color: #fdf6ec; padding: 2px 6px; border-radius: 3px; }
 .parcel-row-action-placeholder { color: #c0c4cc; }
@@ -1318,7 +1374,7 @@ onBeforeUnmount(() => {
   background-color: #f4f4f5;
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 960px) {
   .parcel-layout {
     flex-direction: column;
     height: auto;
@@ -1330,6 +1386,7 @@ onBeforeUnmount(() => {
 
   .parcel-list {
     width: 100%;
+    flex: none;
   }
 
   .split-config-grid {

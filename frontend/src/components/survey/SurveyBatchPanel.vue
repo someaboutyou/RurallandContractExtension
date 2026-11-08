@@ -1,74 +1,96 @@
 <template>
-  <section class="panel survey-batch-panel">
-    <div class="batch-panel-header">
-      <div class="panel-title">{{ title }}</div>
-      <el-select
-        v-model="surveyStatusFilter"
-        clearable
-        placeholder="调查状态"
-        class="batch-header-filter"
+  <section class="panel survey-batch-panel" :class="{ 'is-collapsed': collapsed }">
+    <div v-if="collapsed" class="batch-panel-collapsed">
+      <el-button
+        circle
         size="small"
-      >
-        <el-option label="未开始" value="not_started" />
-        <el-option label="进行中" value="in_progress" />
-        <el-option label="已调查" value="surveyed" />
-        <el-option label="已确认" value="confirmed" />
-        <el-option label="已跳过" value="skipped" />
-      </el-select>
+        :icon="Expand"
+        title="展开批次管理"
+        @click="toggleCollapsed"
+      />
+      <span class="batch-collapsed-title">调查批次</span>
     </div>
 
-    <el-input
-      v-model="keyword"
-      :prefix-icon="Search"
-      clearable
-      placeholder="搜索批次"
-      class="batch-search"
-      @keyup.enter="loadBatches"
-      @clear="loadBatches"
-    />
-
-    <div v-loading="loading" class="batch-card-list">
-      <el-empty v-if="!filteredBatches.length && !loading" description="暂无调查批次" :image-size="88" />
-      <el-tooltip
-        v-for="batch in filteredBatches"
-        :key="batch.id"
-        placement="right"
-        effect="light"
-        :show-after="250"
-        popper-class="batch-detail-tooltip"
-      >
-        <template #content>
-          <div class="batch-tooltip-content">
-            <div><span>批次号</span>{{ batch.batchNo || "-" }}</div>
-            <div><span>创建时间</span>{{ formatDateTime(batch.createdAt) }}</div>
-            <div><span>调查区域</span>{{ batch.regionName || batch.regionCode || "-" }}</div>
-            <div><span>调查员</span>{{ assigneeSummary(batch) }}</div>
-            <div><span>已调查</span>{{ batch.surveyedCount || 0 }} 户</div>
-            <div><span>已确认</span>{{ batch.confirmedCount || 0 }} 户</div>
-          </div>
-        </template>
-        <div
-          class="batch-card"
-          :class="{ 'is-active': modelValue?.id === batch.id }"
-          tabindex="0"
-          @click="handleBatchSelect(batch)"
-          @keydown.enter.prevent="handleBatchSelect(batch)"
-        >
-          <span class="batch-card-title">{{ batch.batchName || batch.batchNo }}</span>
-          <span class="batch-card-status-row">
-            <el-tag :type="batchStatusType(batch.status)" size="small">{{ batchStatusLabel(batch.status) }}</el-tag>
-            <span class="batch-card-progress">{{ batchSurveySummary(batch) }}</span>
-          </span>
-          <span class="batch-card-meta-row">
-            <span class="batch-card-assignee" :class="{ 'is-empty': !batch.assigneeCount }">
-              调查员：{{ assigneeSummary(batch) }}
-            </span>
-          </span>
+    <template v-else>
+      <div class="batch-panel-header">
+        <div class="panel-title">{{ title }}</div>
+        <div class="batch-header-actions">
+          <el-select
+            v-model="surveyStatusFilter"
+            clearable
+            placeholder="调查状态"
+            class="batch-header-filter"
+            size="small"
+          >
+            <el-option label="未开始" value="not_started" />
+            <el-option label="进行中" value="in_progress" />
+            <el-option label="已调查" value="surveyed" />
+            <el-option label="已确认" value="confirmed" />
+            <el-option label="已跳过" value="skipped" />
+          </el-select>
+          <el-button
+            link
+            :icon="Fold"
+            title="收起批次管理"
+            class="batch-collapse-btn"
+            @click="toggleCollapsed"
+          />
         </div>
-      </el-tooltip>
-    </div>
+      </div>
 
-    <div class="batch-panel-footnote">点击批次按其范围过滤列表，再次点击取消过滤</div>
+      <el-input
+        v-model="keyword"
+        :prefix-icon="Search"
+        clearable
+        placeholder="搜索批次"
+        class="batch-search"
+        @keyup.enter="loadBatches"
+        @clear="loadBatches"
+      />
+
+      <div v-loading="loading" class="batch-card-list">
+        <el-empty v-if="!filteredBatches.length && !loading" description="暂无调查批次" :image-size="88" />
+        <el-tooltip
+          v-for="batch in filteredBatches"
+          :key="batch.id"
+          placement="right"
+          effect="light"
+          :show-after="250"
+          popper-class="batch-detail-tooltip"
+        >
+          <template #content>
+            <div class="batch-tooltip-content">
+              <div><span>批次号</span>{{ batch.batchNo || "-" }}</div>
+              <div><span>创建时间</span>{{ formatDateTime(batch.createdAt) }}</div>
+              <div><span>调查区域</span>{{ batch.regionName || batch.regionCode || "-" }}</div>
+              <div><span>调查员</span>{{ assigneeSummary(batch) }}</div>
+              <div><span>已调查</span>{{ batch.surveyedCount || 0 }} 户</div>
+              <div><span>已确认</span>{{ batch.confirmedCount || 0 }} 户</div>
+            </div>
+          </template>
+          <div
+            class="batch-card"
+            :class="{ 'is-active': modelValue?.id === batch.id }"
+            tabindex="0"
+            @click="handleBatchSelect(batch)"
+            @keydown.enter.prevent="handleBatchSelect(batch)"
+          >
+            <span class="batch-card-title">{{ batch.batchName || batch.batchNo }}</span>
+            <span class="batch-card-status-row">
+              <el-tag :type="batchStatusType(batch.status)" size="small">{{ batchStatusLabel(batch.status) }}</el-tag>
+              <span class="batch-card-progress">{{ batchSurveySummary(batch) }}</span>
+            </span>
+            <span class="batch-card-meta-row">
+              <span class="batch-card-assignee" :class="{ 'is-empty': !batch.assigneeCount }">
+                调查员：{{ assigneeSummary(batch) }}
+              </span>
+            </span>
+          </div>
+        </el-tooltip>
+      </div>
+
+      <div class="batch-panel-footnote">点击批次按其范围过滤列表，再次点击取消过滤</div>
+    </template>
   </section>
 </template>
 
@@ -77,7 +99,7 @@
 // 与「/surveys 调查批次管理」的区别：无新建按钮，仅作批次筛选入口，
 // 选中批次后由父视图把 batchId 传给列表接口做数据过滤。
 import { computed, onMounted, ref } from "vue";
-import { Search } from "@element-plus/icons-vue";
+import { Expand, Fold, Search } from "@element-plus/icons-vue";
 
 import { fetchSurveyBatches } from "../../api/survey";
 
@@ -86,14 +108,20 @@ const props = defineProps({
   modelValue: { type: Object, default: null },
   /** 面板标题。 */
   title: { type: String, default: "调查批次" },
+  /** 是否收起为窄条。 */
+  collapsed: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["update:modelValue"]);
+const emit = defineEmits(["update:modelValue", "update:collapsed"]);
 
 const loading = ref(false);
 const batches = ref([]);
 const keyword = ref("");
 const surveyStatusFilter = ref("");
+
+function toggleCollapsed() {
+  emit("update:collapsed", !props.collapsed);
+}
 
 const filteredBatches = computed(() => {
   if (!surveyStatusFilter.value) return batches.value;
@@ -180,6 +208,44 @@ onMounted(loadBatches);
   display: flex;
   justify-content: space-between;
   gap: 8px;
+}
+
+.batch-header-actions {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+}
+
+.batch-collapse-btn {
+  padding: 2px;
+  color: var(--muted);
+}
+
+.batch-collapse-btn:hover {
+  color: var(--accent);
+}
+
+.survey-batch-panel.is-collapsed {
+  align-items: center;
+  padding: 8px 4px;
+}
+
+.batch-panel-collapsed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+}
+
+.batch-collapsed-title {
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 2px;
+  line-height: 1.2;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
 }
 
 .batch-header-filter {

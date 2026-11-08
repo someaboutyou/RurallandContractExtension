@@ -104,7 +104,7 @@
       </div>
     </header>
 
-    <main class="main">
+    <main class="main" :class="{ 'is-wide-page': isWideContentPage }">
       <section class="content">
         <RouterView />
       </section>
@@ -217,6 +217,7 @@ const navItems = [
       { to: "/layers", label: "图层管理", permissions: ["layers.manage"] },
       { to: "/request-attachment-templates", label: "流程附件", permissions: ["requests.manage"] },
       PRINT_TEMPLATE_NAV_ITEM,
+      { to: "/license", label: "授权管理", platformAdminOnly: true },
     ],
   },
 ];
@@ -225,7 +226,11 @@ const visibleNavItems = computed(() =>
   navItems
     .map((item) => {
       if (item.children?.length) {
-        const children = item.children.filter((child) => authStore.hasAnyPermission(child.permissions));
+        const children = item.children.filter((child) =>
+          child.platformAdminOnly
+            ? authStore.user?.roleCode === "platform_admin"
+            : authStore.hasAnyPermission(child.permissions),
+        );
         return { ...item, children };
       }
       return item;
@@ -236,7 +241,11 @@ const visibleNavItems = computed(() =>
 
 const systemNavItems = computed(() => {
   const systemItem = navItems.find((item) => item.key === "system");
-  return (systemItem?.children || []).filter((child) => authStore.hasAnyPermission(child.permissions));
+  return (systemItem?.children || []).filter((child) =>
+    child.platformAdminOnly
+      ? authStore.user?.roleCode === "platform_admin"
+      : authStore.hasAnyPermission(child.permissions),
+  );
 });
 
 const routeThemeMap = {
@@ -262,6 +271,11 @@ const secondaryNavItems = computed(() => {
   return activeTopItem.value?.children || [];
 });
 const isMapPage = computed(() => route.path === "/gis");
+const isWideContentPage = computed(() =>
+  ["/issuers", "/survey-contractors", "/parcels", "/surveys"].some(
+    (path) => route.path === path || route.path.startsWith(`${path}/`),
+  ),
+);
 const userInitial = computed(() => (authStore.displayName || "用户").trim().slice(0, 1).toUpperCase());
 
 const themeStyle = computed(() => {

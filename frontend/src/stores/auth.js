@@ -21,7 +21,7 @@ export const useAuthStore = defineStore("auth", {
       return this.permissions.includes(permissionCode);
     },
     hasAnyPermission(permissionCodes) {
-      return permissionCodes.some((item) => this.permissions.includes(item));
+      return Array.isArray(permissionCodes) && permissionCodes.some((item) => this.permissions.includes(item));
     },
     persistToken(token) {
       this.token = token;

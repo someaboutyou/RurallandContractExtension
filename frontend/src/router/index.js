@@ -26,6 +26,7 @@ const RequestView = () => import("../views/RequestView.vue");
 const RequestAttachmentTemplateView = () => import("../views/RequestAttachmentTemplateView.vue");
 const WorkflowDesignerView = () => import("../views/WorkflowDesignerView.vue");
 const ContractTemplateManagementView = () => import("../views/ContractTemplateManagementView.vue");
+const LicenseManagementView = () => import("../views/LicenseManagementView.vue");
 
 const REQUEST_MODULE_PERMISSIONS = [
   "requests.manage",
@@ -70,6 +71,12 @@ const appChildren = [
     meta: { requiresAuth: true, permissions: ["dictionaries.view"] },
   },
   { path: "regions", name: "regions", component: RegionManagementView, meta: { requiresAuth: true, permissions: ["regions.view", "regions.manage"] } },
+  {
+    path: "license",
+    name: "license",
+    component: LicenseManagementView,
+    meta: { requiresAuth: true, platformAdminOnly: true },
+  },
   { path: "workflows", name: "workflows", component: WorkflowDesignerView, meta: { requiresAuth: true, permissions: ["roles.manage"] } },
   { path: "layers", name: "layers", component: LayerManagementView, meta: { requiresAuth: true, permissions: ["layers.manage"] } },
   {
@@ -150,7 +157,11 @@ function isNativeShell() {
 }
 
 function getFirstAllowedRoute(authStore) {
-  const match = appChildren.find((item) => !item.meta?.permissions || authStore.hasAnyPermission(item.meta.permissions));
+  const match = appChildren.find(
+    (item) =>
+      item.name !== "license" &&
+      (!item.meta?.permissions || authStore.hasAnyPermission(item.meta.permissions)),
+  );
   return match?.name || "login";
 }
 
@@ -195,6 +206,11 @@ router.beforeEach(async (to) => {
       name: isMobileRoute ? "mobile-login" : "login",
       query: { redirect: to.fullPath },
     };
+  }
+
+  if (to.meta.platformAdminOnly && authStore.user?.roleCode !== "platform_admin") {
+    const fallbackName = getFirstAllowedRoute(authStore);
+    return { name: fallbackName === "license" ? "gis" : fallbackName };
   }
 
   if (to.name === "login" && authStore.isAuthenticated) {

@@ -4,8 +4,8 @@
       <el-empty description="请先在左侧选择一个调查批次" />
     </div>
 
-    <div v-else class="survey-contractor-body">
-      <SurveyBatchPanel v-model="activeBatch" />
+    <div v-else class="survey-contractor-body" :class="{ 'is-batch-collapsed': batchPanelCollapsed }">
+      <SurveyBatchPanel v-model="activeBatch" v-model:collapsed="batchPanelCollapsed" />
 
       <div class="survey-contractor-main">
         <div class="toolbar">
@@ -133,6 +133,7 @@ const authStore = useAuthStore();
 const canManage = computed(() => authStore.hasPermission("contractors.manage"));
 
 const activeBatch = ref(null);
+const batchPanelCollapsed = ref(false);
 
 const taskLoading = ref(false);
 const tasks = ref([]);
@@ -287,6 +288,10 @@ async function handleDeleteTask(row) {
   grid-template-columns: 280px minmax(0, 1fr);
   gap: 12px;
   overflow: hidden;
+}
+
+.survey-contractor-body.is-batch-collapsed {
+  grid-template-columns: 42px minmax(0, 1fr);
 }
 
 .survey-contractor-main {

@@ -248,6 +248,10 @@ a {
   width: 100%;
 }
 
+.shell .main.is-wide-page {
+  width: calc(100% - 16px);
+}
+
 .header {
   flex: 0 0 auto;
 }

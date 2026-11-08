@@ -53,8 +53,15 @@
       </div>
     </div>
 
-    <div class="issuer-workspace" :class="{ 'dc-mode': isDataCenter }">
-      <SurveyBatchPanel v-if="!isDataCenter" v-model="activeBatch" />
+    <div
+      class="issuer-workspace"
+      :class="{ 'dc-mode': isDataCenter, 'is-batch-collapsed': batchPanelCollapsed }"
+    >
+      <SurveyBatchPanel
+        v-if="!isDataCenter"
+        v-model="activeBatch"
+        v-model:collapsed="batchPanelCollapsed"
+      />
 
       <div class="issuer-table-area">
         <div class="table-shell">
@@ -375,6 +382,7 @@ const issuerContractorsError = ref("");
 
 // 右侧调查批次面板：选中批次后列表只显示该批次范围内的发包方。
 const activeBatch = ref(null);
+const batchPanelCollapsed = ref(false);
 
 const parcelsTabActivated = ref(false);
 const parcelsLoading = ref(false);
@@ -880,6 +888,10 @@ onMounted(async () => {
 /* 数据中心入口无批次面板：列表占满整行。 */
 .issuer-workspace.dc-mode {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.issuer-workspace.is-batch-collapsed {
+  grid-template-columns: 42px minmax(0, 1fr);
 }
 
 .issuer-table-area {

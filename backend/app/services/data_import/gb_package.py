@@ -10,7 +10,8 @@
    ACE OLEDB，驱动必然存在）。表名大小写不敏感，字段与大写 GDB 图层同构，
    直接复用 FIELD_MAPS + normalize_row。
 2. **矢量数据**：shp 文件名 = 图层前缀 + 行政区划代码（如 DK1505262019.shp），
-   按**前缀**识别；dbf 是 GBK 编码，fiona 打开需显式 ``encoding="gbk"``。
+   按**前缀**识别；dbf 可能是 GBK 或 UTF-8，统一由 ``detect_dbf_encoding``
+   抽样字段字节判断后打开，避免 UTF-8 被误按 GBK 解码成乱码。
    只取 DK/JZD/JZX 三类，其余图层（CJQY/XJQY/DZDW 等）忽略。
 3. **界址点/界址线不直接灌表**：本系统的约定是"地块图形是界址点位置的
    唯一来源"（见 services/survey/boundary.py 模块注释），点号是内部自编的
@@ -363,6 +364,68 @@ def read_mdb_table(mdb_path: str, table_name: str) -> list[dict]:
 # CRS
 # ===========================================================================
 
+def detect_dbf_encoding(shp_path: str | Path) -> str | None:
+    """推断 DBF 文本字段编码：UTF-8 优先，其次 GB18030/GBK。
+
+    部分国标包的 DK/JZD/JZX shapefile 实际使用 UTF-8（且带 UTF-8 LDID），
+    早期代码一律传 ``encoding="gbk"``，会把 UTF-8 中文解成「涓滆タ鍦」这类
+    乱码。这里直接抽样 DBF 原始字段字节判断，避免依赖 GDAL 的默认猜测。
+    """
+    dbf_path = Path(shp_path).with_suffix(".dbf")
+    if not dbf_path.exists():
+        return None
+    data = dbf_path.read_bytes()
+    if len(data) < 32:
+        return None
+    record_count = int.from_bytes(data[4:8], "little")
+    header_length = int.from_bytes(data[8:10], "little")
+    record_length = int.from_bytes(data[10:12], "little")
+    fields: list[tuple[str, int]] = []
+    pos = 32
+    while pos + 32 <= len(data) and data[pos] != 0x0D:
+        field_type = chr(data[pos + 11])
+        field_length = data[pos + 16]
+        fields.append((field_type, field_length))
+        pos += 32
+    if not fields or header_length <= 0 or record_length <= 0:
+        return None
+
+    samples: list[bytes] = []
+    for index in range(min(record_count, 30)):
+        start = header_length + index * record_length
+        record = data[start : start + record_length]
+        if len(record) < record_length or record[:1] == b"*":
+            continue
+        offset = 1
+        for field_type, field_length in fields:
+            raw = record[offset : offset + field_length].rstrip(b" \x00")
+            offset += field_length
+            if field_type == "C" and raw:
+                samples.append(raw)
+    if not samples:
+        return None
+    if not any(byte >= 0x80 for raw in samples for byte in raw):
+        return None
+    try:
+        for raw in samples:
+            raw.decode("utf-8")
+        return "utf-8"
+    except UnicodeDecodeError:
+        pass
+    try:
+        for raw in samples:
+            raw.decode("gb18030")
+        return "gb18030"
+    except UnicodeDecodeError:
+        return "gbk"
+
+
+def _open_shp(shp_path: str | Path):
+    import fiona
+
+    return fiona.open(shp_path, encoding=detect_dbf_encoding(shp_path))
+
+
 def make_geometry_transformer(source_crs):
     """源 CRS 能解析且 != 目标坐标系时返回 pyproj Transformer，否则 None。"""
     target_srid = get_target_srid()
@@ -665,7 +728,7 @@ def _process_shp_layer(
         content_type="application/x-esri-shapefile",
         remark=f"from national package shapefile: {Path(shp_path).name}",
     )
-    with fiona.open(shp_path, encoding="gbk") as source:
+    with _open_shp(shp_path) as source:
         transformer = make_geometry_transformer(source.crs)
         row_count = len(source)
         progress.total += row_count
@@ -722,7 +785,7 @@ def _region_dkbms(db: Session, batch: DataImportBatch, tenant_code: str | None) 
 def _load_shp_crs_transformer(shp_path: str):
     import fiona
 
-    with fiona.open(shp_path, encoding="gbk") as source:
+    with _open_shp(shp_path) as source:
         return make_geometry_transformer(source.crs)
 
 
@@ -736,7 +799,7 @@ def _load_shp_point_attributes(shp_path: str, transformer) -> tuple[dict, dict]:
 
     attr_by_coord: dict[tuple, dict] = {}
     coord_by_jzdh: dict[str, tuple] = {}
-    with fiona.open(shp_path, encoding="gbk") as source:
+    with _open_shp(shp_path) as source:
         for feature in source:
             geometry = feature.get("geometry") or {}
             coords = geometry.get("coordinates")
@@ -762,7 +825,7 @@ def _load_shp_line_attributes(shp_path: str, coord_by_jzdh: dict[str, tuple], co
     attr_by_pair: dict[tuple[str, str], dict] = {}
     if not coord_by_jzdh:
         return attr_by_pair
-    with fiona.open(shp_path, encoding="gbk") as source:
+    with _open_shp(shp_path) as source:
         for feature in source:
             raw = json_safe(dict(feature.get("properties") or {}))
             normalized = normalize_row(raw, JZX_ATTR_FIELD_MAP)

@@ -840,10 +840,12 @@ class ParcelImportService:
         samples: list[dict] = []
         total = matched = 0
         try:
-            import fiona
-            from app.services.data_import.gb_package import make_geometry_transformer
+            from app.services.data_import.gb_package import (
+                _open_shp,
+                make_geometry_transformer,
+            )
 
-            with fiona.open(shp_path, encoding="gbk") as source:
+            with _open_shp(shp_path) as source:
                 transformer = make_geometry_transformer(source.crs)
                 for index, feature in enumerate(source, 1):
                     total += 1
@@ -889,15 +891,15 @@ class ParcelImportService:
         updated = skipped = 0
         issues: list[dict] = []
         try:
-            import fiona
             from app.services.data_import.gb_package import (
+                _open_shp,
                 json_safe,
                 make_geometry_transformer,
                 transform_geometry,
             )
             from app.services.survey import survey_service
 
-            with fiona.open(shp_path, encoding="gbk") as source:
+            with _open_shp(shp_path) as source:
                 transformer = make_geometry_transformer(source.crs)
                 for index, feature in enumerate(source, 1):
                     props = dict(feature.get("properties") or {})
