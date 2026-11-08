@@ -18,8 +18,23 @@ class FamilyMemberCreate(FamilyMemberBase):
     pass
 
 
-class FamilyMemberRead(FamilyMemberBase):
-    pass
+class FamilyMemberRead(BaseModel):
+    """家庭成员读模型。
+
+    ⛔ 不沿用 FamilyMemberBase 的 min_length 约束：库内存量数据允许
+    姓名/证件号等字段为空（质检会标记，但读接口必须能返回，
+    否则这类户的「编辑承包方」对话框直接 500 打不开——实测波及
+    2388/7161 户）。完整性由前端 validateFamilyMembers 在保存时把关。
+    """
+
+    name: str = Field(default="", max_length=50)
+    gender: str = Field(default="", max_length=1)
+    idType: str = Field(default="", max_length=1)
+    idNo: str = Field(default="", max_length=20)
+    relationToHead: str = Field(default="", max_length=2)
+    noteCode: str | None = Field(default=None, max_length=1)
+    isCoOwner: str | None = Field(default=None, max_length=1)
+    note: str | None = Field(default=None, max_length=254)
 
 
 class ContractorBase(BaseModel):
@@ -71,6 +86,7 @@ class ContractorRead(BaseModel):
     groupRegionCode: str | None = None
     groupRegionName: str | None = None
     familyMembers: list[FamilyMemberRead]
+    contracts: list[dict] = []
 
 
 class CadastralExportRequest(BaseModel):

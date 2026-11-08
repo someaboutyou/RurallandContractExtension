@@ -419,6 +419,11 @@ class SurveySheetService:
                 )
                 db.add(row)
                 db.flush()
+                # ⛔ 立即回填 existing：空证件号成员的 member_uid 推导会撞成同值
+                # （survey:member:{cbfbm}:{idNo}，idNo 均为空串），同户第二个同 uid
+                # 成员若不复用该行，flush 时触发 uq_member_change_sheet_member
+                # 唯一键冲突 → 摸底表 500（实测 2388 户空证件号波及面）。
+                existing[member.member_uid] = row
             # 身份四件套（姓名/证件号/电话/与户主关系）永远以成员调查结果表为准：
             # 摸底弹窗不允许编辑它们，且历史摸底行（如 upsert_member_sheets 只带
             # member_uid 建的行、旧版面板残留）可能为空 ⇒ 每次渲染前对齐自愈。

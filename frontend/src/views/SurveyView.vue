@@ -563,6 +563,11 @@ onMounted(async () => {
   gap: 10px;
 }
 
+/* 面板宽度紧张时标题会被压缩成逐字断行（“管/理”），中文标题禁断词保持单行。 */
+.batch-panel-header .panel-title {
+  white-space: nowrap;
+}
+
 .batch-footer-actions {
   flex-wrap: wrap;
   gap: 8px;

@@ -307,6 +307,9 @@
     :codes="exportCodes"
     :batch-id="exportBatchId"
   />
+
+  <!-- 数据中心：整库数据质检（不传 region 即整库口径，与承包方管理入口一致） -->
+  <DbQualityCheckDialog v-model="dcQualityCheckVisible" />
 </template>
 
 <script setup>

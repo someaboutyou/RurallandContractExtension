@@ -44,9 +44,12 @@ function buildDefaultEpsg4326TileGrid() {
 async function createSurveyDkResultLayer() {
   const projection = getProjection("EPSG:4326");
   const wmtsUrl =
-    "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:survey_dk_result&style=&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png";
+    // ⛔ 不带 style= 参数：空 style 会覆盖 GetCapabilities 解析出的全限定名
+    // style（erlunyanbao:survey_dk_result），GWC 直接 400，整层瓦片空白。
+    // 与 config/mapLayers.js 主地图的 WMTS URL 保持一致。
+    "/geoserver/erlunyanbao/gwc/service/wmts?layer=erlunyanbao:survey_dk_result&tilematrixset=EPSG:4326&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/png";
   const wmsUrl =
-    "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:survey_dk_result&styles=&format=image/png&transparent=true";
+    "/geoserver/erlunyanbao/wms?service=WMS&version=1.1.1&request=GetMap&layers=erlunyanbao:survey_dk_result&styles=survey_dk_result&format=image/png&transparent=true";
 
   let wmtsSource;
   const capabilities = await fetchWmtsCapabilities();

@@ -6,6 +6,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.db.sequences import next_no as generate_business_no
+from app.models.cbht import Cbht
 from app.models.region import Region
 from app.models.survey import SurveyBatch, SurveyCbfBase, SurveyCbfJtcyBase, SurveyCbfJtcyResult, SurveyCbfResult
 from app.models.user import User
@@ -193,7 +194,51 @@ class ContractorService:
             }
             for item in family_members
         ]
+        summary["contracts"] = self._load_contract_infos(db, contractor)
         return summary
+
+    @staticmethod
+    def _load_contract_infos(db: Session, contractor: SurveyCbfResult) -> list[dict]:
+        """加载该户名下的承包合同（编辑对话框「合同信息」Tab 数据源）。
+
+        优先按 contractor_uid 关联（导入/生成合同都会回填 uid，全库覆盖），
+        老数据兜底按 cbfbm。流转合同在当前数据模型中仅以地块上的 lzhtbm
+        编码存在（无独立 lzht 表），故这里只返回承包合同。
+        """
+        rows = db.scalars(
+            select(Cbht).where(
+                (Cbht.contractor_uid == contractor.contractor_uid)
+                | (Cbht.cbfbm == contractor.cbfbm)
+            ).order_by(Cbht.cbhtbm.asc())
+        ).all()
+
+        def _d(value):
+            return value.date().isoformat() if isinstance(value, datetime) else None
+
+        def _n(value):
+            return float(value) if value is not None else None
+
+        return [
+            {
+                "type": "cbht",
+                "typeLabel": "承包合同",
+                "code": row.cbhtbm,
+                "originalCode": row.ycbhtbm,
+                "issuerCode": row.fbfbm,
+                "contractorCode": row.cbfbm,
+                "contractMode": row.cbfs,
+                "startDate": _d(row.cbqxq),
+                "endDate": _d(row.cbqxz),
+                "totalArea": _n(row.htzmj),
+                "totalAreaMu": _n(row.htzmjm),
+                "originalTotalArea": _n(row.yhtzmj),
+                "originalTotalAreaMu": _n(row.yhtzmjm),
+                "parcelCount": row.cbdkzs,
+                "signDate": _d(row.qdsj),
+                "role": None,
+            }
+            for row in rows
+        ]
 
     def _ensure_edit_batch(self, db: Session, payload: dict, current_user: User) -> SurveyBatch:
         batch = db.scalar(select(SurveyBatch).where(SurveyBatch.status == "active").order_by(SurveyBatch.id.desc()).limit(1))
