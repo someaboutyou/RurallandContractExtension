@@ -446,6 +446,41 @@ export function generateSurveyContract(batchId, contractorUid, payload) {
   );
 }
 
+// 承包合同管理：批次内各承包户的合同关键信息列表（分页）
+export function fetchBatchContractOverview(batchId, params) {
+  return http.get(`/surveys/batches/${batchId}/contract-overview`, { params });
+}
+
+// ── 登记（延包）申请书（集体 / 单户） ─────────────────
+
+// 打印《集体登记申请书》（返回渲染好的 HTML）
+export function fetchCollectiveApplication(batchId) {
+  return http.get(`/surveys/batches/${batchId}/collective-application`);
+}
+
+// 导出《集体登记申请书》Word
+export function exportCollectiveApplicationDocx(batchId) {
+  return http.post(`/surveys/batches/${batchId}/collective-application/export-docx`, null, {
+    responseType: "blob",
+  });
+}
+
+// 打印《单户登记申请书》（第二轮土地承包到期后再延长三十年登记申请表）
+export function fetchHouseholdApplication(batchId, contractorUid) {
+  return http.get(
+    `/surveys/batches/${batchId}/results/${contractorUid}/household-application`
+  );
+}
+
+// 导出《单户登记申请书》Word
+export function exportHouseholdApplicationDocx(batchId, contractorUid) {
+  return http.post(
+    `/surveys/batches/${batchId}/results/${contractorUid}/household-application/export-docx`,
+    null,
+    { responseType: "blob" }
+  );
+}
+
 export function fetchSurveyPlotSketchMap(batchId, contractorUid) {
   return http.get(`/surveys/batches/${batchId}/results/${contractorUid}/plot-sketch-map`, {
     // Rendering includes parcel geometry and nearby-parcel lookup, which can

@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>第二轮土地承包到期后再延长三十年登记申请表（单户）</title>
+<style>
+  /* 《第二轮土地承包到期后再延长三十年登记申请表》（单户登记申请书）母版 ——
+     版式复刻自 CS 版 Template/农村土地承包经营权单户登记申请书.dot：
+     标题 + 15 行申请表（发包方 / 申请人 / 合同编号 / 申请内容 /
+     村民小组 / 村民委员会 / 乡（镇）人民政府 / 县农业农村局四级意见）。
+     A4 纵向一页，正文宋体 12pt（小四），申请内容仿宋 14pt（四号）。 */
+  @page { size: A4 portrait; margin: 0; }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    color: #000;
+    background: #f2f3f5;
+    font-family: "SimSun", "宋体", serif;
+    font-size: 12pt;
+  }
+
+  .page {
+    width: 210mm;
+    height: 297mm;
+    margin: 0 auto;
+    padding: 20mm 18mm;
+    background: #fff;
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .page:last-child { page-break-after: auto; break-after: auto; }
+
+  .doc-title {
+    margin: 0 0 6mm;
+    text-align: center;
+    font-family: "方正小标宋简体", "SimHei", "黑体", serif;
+    font-size: 18pt;
+    line-height: 30pt;
+  }
+
+  table.apply-form {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+
+  table.apply-form th,
+  table.apply-form td {
+    border: 1px solid #000;
+    padding: 2.2mm 2mm;
+    vertical-align: middle;
+    font-size: 12pt;
+    line-height: 20pt;
+    text-align: center;
+    word-break: break-all;
+  }
+
+  td.label { font-weight: normal; }
+
+  td.content-cell {
+    text-align: left;
+    font-family: "仿宋", "FangSong", "仿宋_GB2312", "SimSun", serif;
+    font-size: 14pt;
+    line-height: 26pt;
+  }
+
+  td.opinion-cell {
+    text-align: left;
+    vertical-align: top;
+  }
+
+  td.opinion-cell .seal-line {
+    display: block;
+    text-align: right;
+    padding-right: 4mm;
+  }
+
+  td.sign-cell {
+    text-align: right;
+    font-family: "仿宋", "FangSong", "仿宋_GB2312", "SimSun", serif;
+    vertical-align: bottom;
+  }
+
+  td.sign-cell .sig-line,
+  td.opinion-cell .sig-line {
+    display: block;
+    text-align: left;
+    text-indent: 2em;
+  }
+
+  td.sign-cell .date-line,
+  td.opinion-cell .date-line {
+    display: block;
+    text-align: left;
+    margin-top: 4mm;
+    padding-left: 8mm;
+  }
+
+  /* 横线填值：全角空格 + 下划线（html_docx → w:u），打印后手工填写 */
+  .fill {
+    text-decoration: underline;
+  }
+</style>
+</head>
+<body>
+<section class="page">
+  <p class="doc-title">第二轮土地承包到期后再延长三十年登记申请表</p>
+  <table class="apply-form">
+    <colgroup>
+      <col style="width: 26%">
+      <col style="width: 32%">
+      <col style="width: 18%">
+      <col style="width: 24%">
+    </colgroup>
+    <tr>
+      <td class="label" rowspan="2">发包方负责人姓名</td>
+      <td rowspan="2">{{ fbf_fzr }}</td>
+      <td class="label">联系电话</td>
+      <td>{{ fbf_lxdh }}</td>
+    </tr>
+    <tr>
+      <td class="label">身份证号</td>
+      <td>{{ fbf_zjhm }}</td>
+    </tr>
+    <tr>
+      <td class="label" rowspan="2">申请人姓名</td>
+      <td rowspan="2">{{ cbfmc }}</td>
+      <td class="label">联系电话</td>
+      <td>{{ cbf_lxdh }}</td>
+    </tr>
+    <tr>
+      <td class="label">身份证号</td>
+      <td>{{ cbf_zjhm }}</td>
+    </tr>
+    <tr>
+      <td class="label">合同编号</td>
+      <td colspan="3">{% if contract_code %}{{ contract_code }}{% else %}<span class="fill">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>{% endif %}</td>
+    </tr>
+    <tr>
+      <td class="label">申请内容</td>
+      <td class="content-cell" colspan="3">本人{{ cbfmc }}，第二轮农村土地承包经营权于{{ old_term_end }}到期，按照本村民小组延包方案相关内容，符合延包的条件，特申请第二轮土地承包到期后延长三十年登记。现有家庭人口{{ family_count }}人，承包{{ fbfmc }}集体土地{{ parcel_count }}块共计{{ area_mu }}亩，已签订《农村土地承包合同》，承包方式为家庭承包，承包期{{ contract_years }}年，自{{ contract_term_start }}起至{{ contract_term_end }}止。</td>
+    </tr>
+    <tr>
+      <td class="label" style="height: 20mm;">&nbsp;</td>
+      <td class="sign-cell" colspan="3">
+        <span class="sig-line">申请人：</span>
+        <span class="date-line">&nbsp;&nbsp;&nbsp;&nbsp;年&nbsp;&nbsp;&nbsp;月&nbsp;&nbsp;&nbsp;日</span>
+      </td>
+    </tr>
+    <tr>
+      <td class="label" style="height: 22mm;">村民小组意见</td>
+      <td class="opinion-cell" colspan="3">
+        <span class="seal-line">（公章）</span>
+        <span class="sig-line">负责人：</span>
+        <span class="date-line">&nbsp;&nbsp;&nbsp;&nbsp;年&nbsp;&nbsp;&nbsp;月&nbsp;&nbsp;&nbsp;日</span>
+      </td>
+    </tr>
+    <tr>
+      <td class="label" style="height: 22mm;">村民委员会意见</td>
+      <td class="opinion-cell" colspan="3">
+        <span class="seal-line">（公章）</span>
+        <span class="sig-line">负责人：</span>
+        <span class="date-line">&nbsp;&nbsp;&nbsp;&nbsp;年&nbsp;&nbsp;&nbsp;月&nbsp;&nbsp;&nbsp;日</span>
+      </td>
+    </tr>
+    <tr>
+      <td class="label" style="height: 22mm;">乡（镇）人民政府意见</td>
+      <td class="opinion-cell" colspan="3">
+        <span class="seal-line">（公章）</span>
+        <span class="sig-line">负责人：</span>
+        <span class="date-line">&nbsp;&nbsp;&nbsp;&nbsp;年&nbsp;&nbsp;&nbsp;月&nbsp;&nbsp;&nbsp;日</span>
+      </td>
+    </tr>
+    <tr>
+      <td class="label" style="height: 22mm;">县农业农村局意见</td>
+      <td class="opinion-cell" colspan="3">
+        <span class="seal-line">（公章）</span>
+        <span class="sig-line">负责人：</span>
+        <span class="date-line">&nbsp;&nbsp;&nbsp;&nbsp;年&nbsp;&nbsp;&nbsp;月&nbsp;&nbsp;&nbsp;日</span>
+      </td>
+    </tr>
+  </table>
+</section>
+</body>
+</html>

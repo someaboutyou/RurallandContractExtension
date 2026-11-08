@@ -603,6 +603,251 @@ class ContractTemplateService:
         template = self._env.get_template("registration_application.html")
         return template.render(**ctx)
 
+    # ── 登记（延包）申请书：集体 / 单户（承包合同管理页） ─────────
+
+    def render_collective_application(self, db: Session, *, batch_id: int) -> str:
+        """《农村土地承包经营权证（家庭承包方式）申请书》—— 集体口径（按批次）。
+
+        版式复刻自 CS 版 ``Template/农村土地承包经营权集体登记申请书.dot``，
+        字段口径对齐其书签：县名×3 / 镇名 / 村名 / 组名 / 申请编号 /
+        集体土地总面积 / 承包期限 / 农户数 / 落款日期。
+        承包期限默认取批次内**上次承包合同**（导入合同）的起止范围 —— 与
+        CS 版样张（泗洪：1995-12-31 ~ 2025-12-31）一致；没有导入合同时
+        回退现行延包合同。
+        """
+        from app.models.survey import SurveyBatch, SurveyCbfBase, SurveyCbdkxxBase
+        from app.models.cbht import (
+            CONTRACT_SOURCE_GENERATED,
+            CONTRACT_SOURCE_IMPORTED,
+        )
+
+        batch = db.get(SurveyBatch, batch_id)
+        if batch is None:
+            raise ValueError(f"Survey batch not found: {batch_id}")
+
+        county_name, town_name, village_name, group_name = self._resolve_region_chain(db, batch)
+
+        # 农户数：批次内未注销户去重（与合同总览列表行口径一致）
+        uids = db.scalars(
+            select(SurveyCbfBase.contractor_uid).where(
+                SurveyCbfBase.batch_id == batch_id,
+                SurveyCbfBase.tenant_code == batch.tenant_code,
+                SurveyCbfBase.task_status != "deregistered",
+            ).execution_options(skip_tenant_scope=True)
+        ).all()
+        family_number = len({uid for uid in uids if uid})
+
+        # 集体土地总面积：批次导入地块快照合计（亩）
+        area_rows = db.scalars(
+            select(SurveyCbdkxxBase.htmj).where(
+                SurveyCbdkxxBase.batch_id == batch_id,
+                SurveyCbdkxxBase.tenant_code == batch.tenant_code,
+            ).execution_options(skip_tenant_scope=True)
+        ).all()
+        area_sqm = sum(float(v or 0) for v in area_rows)
+        land_area_mu = f"{area_sqm / 666.67:.2f}" if area_sqm else ""
+
+        term_start, term_end = self._batch_contract_term_range(
+            db, batch_id, batch.tenant_code,
+            source=CONTRACT_SOURCE_IMPORTED, fallback_source=CONTRACT_SOURCE_GENERATED,
+        )
+
+        today = datetime.now()
+        ctx = {
+            "county_name": county_name,
+            "town_name": town_name,
+            "village_name": village_name,
+            "group_name": group_name,
+            "apply_year": str(today.year),
+            "apply_number": "",  # 镇级申请书流水号：默认留空手工编号
+            "sign_year": "",     # 落款日期：默认留空（盖章时手填）
+            "sign_month": "",
+            "sign_day": "",
+            "land_area_mu": land_area_mu,
+            "term_start": term_start,
+            "term_end": term_end,
+            "family_number": str(family_number) if family_number else "",
+        }
+        template = self._env.get_template("collective_registration_application.html")
+        return template.render(**ctx)
+
+    def render_household_application(self, db: Session, *, batch_id: int, contractor_uid: str) -> str:
+        """《第二轮土地承包到期后再延长三十年登记申请表》—— 单户口径。
+
+        版式复刻自 CS 版 ``Template/农村土地承包经营权单户登记申请书.dot``。
+        发包方取该户地块关联 / 合同指向的发包方；申请人取承包方（户主）；
+        期限取现行延包合同（未签订则回退上次承包合同），到期日取上次承包
+        合同的期限止 —— 与 CS 样张「2024年12月31日到期…自2025年1月1日起
+        至2054年12月31日止」的口径一致。
+        """
+        from app.models.survey import SurveyBatch, SurveyCbfBase, SurveyCbdkxxBase
+        from app.models.cbht import (
+            CONTRACT_SOURCE_GENERATED,
+            CONTRACT_SOURCE_IMPORTED,
+        )
+
+        batch = db.get(SurveyBatch, batch_id)
+        if batch is None:
+            raise ValueError(f"Survey batch not found: {batch_id}")
+
+        contractor = _one(
+            db,
+            select(SurveyCbfBase).where(
+                SurveyCbfBase.batch_id == batch_id,
+                SurveyCbfBase.tenant_code == batch.tenant_code,
+                SurveyCbfBase.contractor_uid == contractor_uid,
+            ).order_by(SurveyCbfBase.id.desc()).execution_options(skip_tenant_scope=True),
+        )
+        if contractor is None:
+            raise ValueError(f"Survey contractor not found: batch={batch_id} uid={contractor_uid}")
+
+        # 地块关联（导入快照）：发包方编码 + 合同编码 + 面积
+        relations = db.scalars(
+            select(SurveyCbdkxxBase).where(
+                SurveyCbdkxxBase.batch_id == batch_id,
+                SurveyCbdkxxBase.tenant_code == batch.tenant_code,
+                SurveyCbdkxxBase.cbfbm == contractor.cbfbm,
+            ).execution_options(skip_tenant_scope=True)
+        ).all()
+        first_relation = relations[0] if relations else None
+
+        parcel_count = len(relations)
+        area_sqm = sum(float(r.htmj or 0) for r in relations)
+        area_mu = f"{area_sqm / 666.67:.2f}" if area_sqm else ""
+
+        # 现行延包合同（本批次该户 active 的那条）
+        generated = db.scalars(
+            select(Cbht).where(
+                Cbht.survey_batch_id == batch_id,
+                Cbht.contractor_uid == contractor_uid,
+                Cbht.contract_source == CONTRACT_SOURCE_GENERATED,
+                Cbht.contract_status == "active",
+            ).execution_options(skip_tenant_scope=True)
+        ).all()
+        current_contract = generated[0] if generated else None
+
+        # 上次承包合同编码（导入关联 → 导入合同表）
+        original_code = (first_relation.cbhtbm if first_relation else None) or None
+        if not original_code:
+            original_code = _one(
+                db,
+                select(Cbht).where(
+                    Cbht.cbfbm == contractor.cbfbm,
+                    Cbht.contract_source == CONTRACT_SOURCE_IMPORTED,
+                ).execution_options(skip_tenant_scope=True),
+            )
+            original_code = original_code.cbhtbm if original_code else None
+        original_row = db.get(Cbht, original_code) if original_code else None
+
+        contract_code = (current_contract.cbhtbm if current_contract else None) or original_code or ""
+        term_source = current_contract or original_row
+        old_term_end = _fmt_date_cn(original_row.cbqxz) if original_row and original_row.cbqxz else ""
+
+        # 发包方：合同 → 地块关联 → 发包方成果表
+        issuer_fbfbm = (
+            (current_contract.fbfbm if current_contract else None)
+            or (original_row.fbfbm if original_row else None)
+            or (first_relation.fbfbm if first_relation else None)
+        )
+        issuer = None
+        if issuer_fbfbm:
+            issuer = _one(
+                db,
+                select(SurveyFbfResult).where(SurveyFbfResult.fbfbm == issuer_fbfbm).execution_options(skip_tenant_scope=True),
+            ) or _one(db, select(Fbf).where(Fbf.fbfbm == issuer_fbfbm))
+
+        ctx = {
+            "fbf_fzr": getattr(issuer, "fbffzrxm", "") or "",
+            "fbf_lxdh": getattr(issuer, "lxdh", "") or "",
+            "fbf_zjhm": getattr(issuer, "fzrzjhm", "") or "",
+            "fbfmc": getattr(issuer, "fbfmc", "") or "",
+            "cbfmc": contractor.cbfmc or "",
+            "cbf_lxdh": contractor.lxdh or "",
+            "cbf_zjhm": contractor.cbfzjhm or "",
+            "contract_code": contract_code,
+            "old_term_end": old_term_end,
+            "family_count": str(contractor.cbfcysl or 0),
+            "parcel_count": str(parcel_count) if parcel_count else "",
+            "area_mu": area_mu,
+            "contract_years": self._term_years(term_source),
+            "contract_term_start": _fmt_date_cn(term_source.cbqxq) if term_source and term_source.cbqxq else "",
+            "contract_term_end": _fmt_date_cn(term_source.cbqxz) if term_source and term_source.cbqxz else "",
+        }
+        template = self._env.get_template("household_registration_application.html")
+        return template.render(**ctx)
+
+    def _resolve_region_chain(self, db: Session, batch) -> tuple[str, str, str, str]:
+        """按编码段解析县/镇/村/组名称（region 表缺节点时逐级回落）。
+
+        批次区域码可能是村（12 位）或组（14 位）级：县=前 6 位、镇=前 9 位、
+        村=前 12 位、组=前 14 位。查不到的层级返回空串，模板自行留白。
+        """
+        from app.models.region import Region
+
+        region_code = (getattr(batch, "region_code", None) or "").strip()
+
+        def region_name(code: str) -> str:
+            if not code:
+                return ""
+            row = db.scalars(
+                select(Region).where(Region.code == code).execution_options(skip_tenant_scope=True)
+            ).first()
+            return row.name if row else ""
+
+        if not region_code:
+            # 没有编码就按 region_name 的「 / 」链兜底拆
+            parts = [p.strip() for p in (batch.region_name or "").split("/") if p.strip()]
+            return (
+                parts[2] if len(parts) > 2 else "",
+                parts[3] if len(parts) > 3 else "",
+                parts[4] if len(parts) > 4 else "",
+                parts[5] if len(parts) > 5 else "",
+            )
+
+        county_name = region_name(region_code[:6]) or region_name(region_code[:6].rstrip("0") or "")
+        town_name = region_name(region_code[:9])
+        village_name = region_name(region_code[:12])
+        group_name = region_name(region_code[:14]) if len(region_code) >= 14 else ""
+        return county_name, town_name, village_name, group_name
+
+    def _batch_contract_term_range(
+        self, db: Session, batch_id: int, tenant_code: str,
+        *, source: str, fallback_source: str,
+    ) -> tuple[str, str]:
+        """批次内指定来源合同的期限起止范围（min 起 / max 止，中文日期）。"""
+        rows = db.scalars(
+            select(Cbht).where(
+                Cbht.survey_batch_id == batch_id,
+                Cbht.tenant_code == tenant_code,
+                Cbht.contract_source == source,
+            ).execution_options(skip_tenant_scope=True)
+        ).all()
+        if not rows:
+            rows = db.scalars(
+                select(Cbht).where(
+                    Cbht.survey_batch_id == batch_id,
+                    Cbht.tenant_code == tenant_code,
+                    Cbht.contract_source == fallback_source,
+                ).execution_options(skip_tenant_scope=True)
+            ).all()
+        starts = [r.cbqxq for r in rows if r.cbqxq]
+        ends = [r.cbqxz for r in rows if r.cbqxz]
+        return (
+            _fmt_date_cn(min(starts)) if starts else "",
+            _fmt_date_cn(max(ends)) if ends else "",
+        )
+
+    @staticmethod
+    def _term_years(contract) -> str:
+        """承包年限 = 止 - 起 + 1（本系统口径：止期 = 起期 + N 年 − 1 天）。
+
+        算不出（缺起止或倒挂）回退 30（二轮延包默认 30 年）。
+        """
+        if contract is None or not contract.cbqxq or not contract.cbqxz:
+            return "30"
+        years = contract.cbqxz.year - contract.cbqxq.year + 1
+        return str(years) if years > 0 else "30"
+
     # ── 地籍调查表（cadastral-survey） ────────────────────────────
 
     CADASTRAL_DICT_TYPES = (

@@ -184,6 +184,7 @@ const navItems = [
       { to: "/issuers", label: "发包方管理", permissions: ["issuers.view"] },
       { to: "/survey-contractors", label: "承包方管理", permissions: ["contractors.view"] },
       { to: "/parcels", label: "承包地块管理", permissions: ["contractors.view"] },
+      { to: "/survey-contracts", label: "承包合同管理", permissions: ["contractors.view"] },
       { to: "/survey-templates", label: "空白模板下载", permissions: ["contractors.view"] },
       { to: "/requests", label: "业务申请", permissions: REQUEST_MODULE_PERMISSIONS },
     ],
@@ -272,7 +273,7 @@ const secondaryNavItems = computed(() => {
 });
 const isMapPage = computed(() => route.path === "/gis");
 const isWideContentPage = computed(() =>
-  ["/issuers", "/survey-contractors", "/parcels", "/surveys"].some(
+  ["/issuers", "/survey-contractors", "/survey-contracts", "/parcels", "/surveys"].some(
     (path) => route.path === path || route.path.startsWith(`${path}/`),
   ),
 );

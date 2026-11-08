@@ -1798,6 +1798,115 @@ def print_survey_contract(
     return Response(content=rendered, media_type="text/html; charset=utf-8")
 
 
+@router.get("/batches/{batch_id}/contract-overview", response_model=ApiResponse[dict])
+def list_batch_contract_overview(
+    batch_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=500),
+    keyword: str | None = None,
+    region_code: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """承包合同管理：批次内各承包户的合同关键信息列表（分页）。
+
+    行口径与任务列表一致（批次基线 + 数据权限 + 区域/关键词过滤，排除已注销户）；
+    每行附带该户现行延包合同（无则回退上次承包合同编码）与 ``canSign``。
+    """
+    return {
+        "data": survey_service.list_batch_contract_overview(
+            db, batch_id,
+            page=page, page_size=page_size, keyword=keyword,
+            region_code=region_code, current_user=current_user,
+        )
+    }
+
+
+# ── 登记（延包）申请书：集体 / 单户（承包合同管理页，复刻 CS 版申请书） ──
+
+@router.get("/batches/{batch_id}/collective-application")
+def print_collective_application(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """打印《农村土地承包经营权证（家庭承包方式）申请书》—— 集体口径（按批次）。"""
+    from app.models.survey import SurveyBatch
+    from app.services.data_access_service import data_access_service
+
+    batch = db.get(SurveyBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="调查批次不存在")
+    data_access_service.ensure_code_in_scope(current_user, batch.region_code, detail="survey batch out of scope")
+    html = contract_template_service.render_collective_application(db, batch_id=batch_id)
+    return Response(content=html, media_type="text/html; charset=utf-8")
+
+
+@router.post("/batches/{batch_id}/collective-application/export-docx")
+def export_collective_application_docx(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """导出《集体登记申请书》Word（同一 HTML 母版转写 docx）。"""
+    from app.models.survey import SurveyBatch
+    from app.services.data_access_service import data_access_service
+    from app.services import html_docx
+
+    batch = db.get(SurveyBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="调查批次不存在")
+    data_access_service.ensure_code_in_scope(current_user, batch.region_code, detail="survey batch out of scope")
+
+    html = contract_template_service.render_collective_application(db, batch_id=batch_id)
+    region_tail = "".join((batch.region_name or "").replace("、", "/").split("/")[-3:])
+    filename = f"{region_tail}农村土地承包经营权集体登记申请书.docx"
+    return Response(
+        content=html_docx.build_docx(html),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+@router.get("/batches/{batch_id}/results/{contractor_uid}/household-application")
+def print_household_application(
+    batch_id: int,
+    contractor_uid: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """打印《第二轮土地承包到期后再延长三十年登记申请表》—— 单户口径。"""
+    result = survey_service.get_result(db, batch_id, contractor_uid, current_user)
+    html = contract_template_service.render_household_application(
+        db, batch_id=batch_id, contractor_uid=contractor_uid,
+    )
+    _ = result  # get_result 已完成批次归属 + 区域权限校验
+    return Response(content=html, media_type="text/html; charset=utf-8")
+
+
+@router.post("/batches/{batch_id}/results/{contractor_uid}/household-application/export-docx")
+def export_household_application_docx(
+    batch_id: int,
+    contractor_uid: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """导出《单户登记申请书》Word（同一 HTML 母版转写 docx）。"""
+    from app.services import html_docx
+
+    result = survey_service.get_result(db, batch_id, contractor_uid, current_user)
+    html = contract_template_service.render_household_application(
+        db, batch_id=batch_id, contractor_uid=contractor_uid,
+    )
+    name = result.get("name") or result.get("code") or "承包户"
+    filename = f"{name}农村土地承包经营权单户登记申请书.docx"
+    return Response(
+        content=html_docx.build_docx(html),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
 @router.get("/batches/{batch_id}/results/{contractor_uid}/contracts", response_model=ApiResponse[dict])
 def list_survey_contracts(
     batch_id: int,

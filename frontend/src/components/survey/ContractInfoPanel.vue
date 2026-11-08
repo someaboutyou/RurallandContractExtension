@@ -55,7 +55,6 @@
           type="warning"
           plain
           :disabled="!canGenerate"
-          :loading="generating"
           @click="openGenerateDialog"
         >
           <el-icon><DocumentAdd /></el-icon>
@@ -112,85 +111,25 @@
       </el-tabs>
     </div>
 
-    <!-- 生成延包合同 -->
-    <el-dialog v-model="dialogVisible" title="生成延包合同" width="620px" append-to-body>
-      <el-alert type="info" :closable="false" show-icon class="generate-tip">
-        <template #title>
-          按当前调查信息生成新的延包合同；生成后上一份合同将置为<b>历史状态</b>，仍可随时查看与打印。
-        </template>
-      </el-alert>
-      <el-form :model="termForm" label-width="130px" class="generate-form">
-        <el-form-item label="上次合同到期">
-          <span class="read-only-text">
-            {{ catalog.defaultTermStart || "（无上次承包合同，需人工填写起始日期）" }}
-          </span>
-        </el-form-item>
-        <el-form-item label="承包期限起" required>
-          <el-date-picker
-            v-model="termForm.cbqxq"
-            type="date"
-            value-format="YYYY-MM-DD"
-            placeholder="默认为上次合同到期时间"
-            style="width: 100%"
-          />
-        </el-form-item>
-        <el-form-item label="承包期限（年）">
-          <el-input-number v-model="termForm.years" :min="1" :max="100" :step="1" />
-        </el-form-item>
-        <el-form-item label="承包期限止">
-          <el-date-picker
-            v-model="termForm.cbqxz"
-            type="date"
-            value-format="YYYY-MM-DD"
-            placeholder="按起期 + 年限自动计算，可修改"
-            style="width: 100%"
-            @change="endTouched = true"
-          />
-        </el-form-item>
-        <el-form-item label="签订日期">
-          <el-date-picker
-            v-model="termForm.qdsj"
-            type="date"
-            value-format="YYYY-MM-DD"
-            style="width: 100%"
-          />
-        </el-form-item>
-        <el-form-item label="承包方式">
-          <el-select v-model="termForm.cbfs" style="width: 100%">
-            <el-option
-              v-for="(label, value) in CBFS_OPTIONS"
-              :key="value"
-              :label="label"
-              :value="value"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="合同面积/地块">
-          <span class="read-only-text">
-            {{ formatNumber(activeContract?.htzmj) }} ㎡（{{ activeContract?.cbdkzs ?? 0 }} 个地块，按当前调查信息计算）
-          </span>
-        </el-form-item>
-        <el-form-item v-if="catalog.currentCode" label="现有延包合同">
-          <span class="read-only-text warn">{{ catalog.currentCode }}（生成后置为历史）</span>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="generating" @click="submitGenerate">确认生成</el-button>
-      </template>
-    </el-dialog>
+    <!-- 生成延包合同：与承包合同管理页共用同一对话框组件（单户模式） -->
+    <SurveyContractGenerateDialog
+      ref="generateDialog"
+      :batch-id="batchId"
+      :batch-status="batchStatus"
+      @completed="onGenerateCompleted"
+    />
   </div>
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { DocumentAdd, Printer, Upload } from "@element-plus/icons-vue";
+import SurveyContractGenerateDialog from "./SurveyContractGenerateDialog.vue";
 import {
   fetchSurveyContractDetail,
   fetchSurveyContracts,
   fetchSurveyPhase2,
-  generateSurveyContract,
   printSurveyContract,
   uploadSurveyAttachment,
   downloadSurveyAttachment,
@@ -214,7 +153,6 @@ const CBFS_OPTIONS = {
 
 const loading = ref(false);
 const detailLoading = ref(false);
-const generating = ref(false);
 const catalog = ref({ contracts: [], currentCode: null, originalCode: null, defaultTermStart: null, defaultYears: 30 });
 const activeCode = ref(null);
 const detail = ref(null);
@@ -224,9 +162,7 @@ const attachments = ref([]);
 const attLoading = ref(false);
 const uploadRef = ref(null);
 
-const dialogVisible = ref(false);
-const endTouched = ref(false);
-const termForm = reactive({ cbqxq: "", cbqxz: "", years: 30, qdsj: "", cbfs: "001" });
+const generateDialog = ref(null);
 
 const contracts = computed(() => catalog.value.contracts || []);
 const activeContract = computed(() => contracts.value.find((item) => item.cbhtbm === activeCode.value) || null);
@@ -251,22 +187,18 @@ function formatNumber(value) {
   return Number(value).toFixed(2);
 }
 
-function todayString() {
-  const now = new Date();
-  const month = `${now.getMonth() + 1}`.padStart(2, "0");
-  const day = `${now.getDate()}`.padStart(2, "0");
-  return `${now.getFullYear()}-${month}-${day}`;
+// 生成延包合同：表单与提交逻辑都在共用对话框里（单户模式）
+function openGenerateDialog() {
+  generateDialog.value?.open({
+    contractors: [{ contractorUid: props.contractorUid }],
+  });
 }
 
-// 止期 = 起期 + 年限 − 1 天，使打印件上的「承包期限」正好等于所填年限
-function computeTermEnd(start, years) {
-  if (!start || !years) return "";
-  const date = new Date(`${start}T00:00:00`);
-  date.setFullYear(date.getFullYear() + Number(years));
-  date.setDate(date.getDate() - 1);
-  const month = `${date.getMonth() + 1}`.padStart(2, "0");
-  const day = `${date.getDate()}`.padStart(2, "0");
-  return `${date.getFullYear()}-${month}-${day}`;
+function onGenerateCompleted({ successCount, lastCode }) {
+  if (successCount > 0) {
+    loadContracts(lastCode);
+    loadAttachments();
+  }
 }
 
 async function loadContracts(preferCode) {
@@ -323,63 +255,6 @@ async function loadAttachments() {
     attachments.value = [];
   } finally {
     attLoading.value = false;
-  }
-}
-
-function openGenerateDialog() {
-  const start = catalog.value.defaultTermStart || "";
-  termForm.cbqxq = start;
-  termForm.years = catalog.value.defaultYears || 30;
-  termForm.cbqxz = computeTermEnd(start, termForm.years);
-  termForm.qdsj = todayString();
-  // 上次承包合同的承包方式码值与合同表口径可能不同，选不到时回落「家庭承包」
-  const cbfs = activeContract.value?.cbfs || "";
-  termForm.cbfs = CBFS_OPTIONS[cbfs] ? cbfs : "001";
-  endTouched.value = false;
-  dialogVisible.value = true;
-}
-
-function syncTermEnd() {
-  if (endTouched.value) return;
-  termForm.cbqxz = computeTermEnd(termForm.cbqxq, termForm.years);
-}
-
-async function submitGenerate() {
-  if (!termForm.cbqxq) {
-    ElMessage.warning("请填写承包期限起始日期");
-    return;
-  }
-  if (termForm.cbqxz && termForm.cbqxz < termForm.cbqxq) {
-    ElMessage.warning("承包期限止不能早于起始日期");
-    return;
-  }
-  if (catalog.value.currentCode) {
-    try {
-      await ElMessageBox.confirm(
-        `生成后现有延包合同（${catalog.value.currentCode}）将置为历史状态，是否继续？`,
-        "确认生成延包合同",
-        { type: "warning" }
-      );
-    } catch {
-      return;
-    }
-  }
-  generating.value = true;
-  try {
-    const { data } = await generateSurveyContract(props.batchId, props.contractorUid, {
-      cbqxq: termForm.cbqxq,
-      cbqxz: termForm.cbqxz || null,
-      years: termForm.years,
-      qdsj: termForm.qdsj || null,
-      cbfs: termForm.cbfs || null,
-    });
-    dialogVisible.value = false;
-    ElMessage.success(`延包合同已生成：${data.data?.cbhtbm || ""}`);
-    await loadContracts(data.data?.cbhtbm);
-  } catch (error) {
-    ElMessage.error(error?.response?.data?.detail || "合同生成失败");
-  } finally {
-    generating.value = false;
   }
 }
 
@@ -464,13 +339,6 @@ watch(
 watch(activeCode, () => {
   loadDetail();
 });
-
-watch(
-  () => [termForm.cbqxq, termForm.years],
-  () => {
-    syncTermEnd();
-  }
-);
 </script>
 
 <style scoped>
@@ -516,12 +384,6 @@ watch(
   width: 100%;
   height: 100%;
   border: none;
-}
-.generate-tip {
-  margin-bottom: 12px;
-}
-.generate-form {
-  margin-top: 4px;
 }
 .read-only-text {
   font-size: 13px;

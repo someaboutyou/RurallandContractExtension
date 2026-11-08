@@ -79,6 +79,20 @@ class ContractTemplateAdminService:
             "proxy-declaration": {"name": "户主委托书模板", "filename": "proxy_declaration.html", "group": "声明与申请"},
             "no-objection-declaration": {"name": "公示无异议声明书模板", "filename": "no_objection_declaration.html", "group": "声明与申请"},
             "survey-application": {"name": "测绘申请书模板", "filename": "survey_application.html", "group": "声明与申请"},
+            # 登记申请书（2026-11-08）：复刻 CS 版 Template/*.dot，承包合同管理页
+            # 可按批次（集体）/按户（单户）填充数据打印或导出 Word。
+            "collective-registration-application": {
+                "name": "集体登记申请书模板",
+                "filename": "collective_registration_application.html",
+                "group": "声明与申请",
+                "note": "农村土地承包经营权证（家庭承包方式）申请书：封面 + 正文。变量：县/镇/村/组名、申请编号（镇农地证请［年］第 N 号）、集体土地总面积、承包期限、农户数、落款日期。版式复刻自 CS 版集体登记申请书.dot。",
+            },
+            "household-registration-application": {
+                "name": "单户登记申请书模板",
+                "filename": "household_registration_application.html",
+                "group": "声明与申请",
+                "note": "第二轮土地承包到期后再延长三十年登记申请表：发包方/申请人信息、合同编号、申请内容、四级意见栏（村民小组/村委会/乡镇政府/县农业农村局）。变量：发包方负责人、申请人、合同编号、人口/地块/面积/期限。版式复刻自 CS 版单户登记申请书.dot。",
+            },
         }
 
     def get_contract_template(self) -> dict:
@@ -342,6 +356,29 @@ class ContractTemplateAdminService:
             "member_min_rows": CADASTRAL_MEMBER_MIN_ROWS,
             "points_per_page": CADASTRAL_POINTS_PER_PAGE,
             "packets": [_sample_cadastral_packet(parcels, family_members)],
+            # ── 集体/单户登记申请书预览样例（值一律脱敏，禁止真实个人信息） ──
+            "county_name": "××县",
+            "town_name": "××镇",
+            "village_name": "××居",
+            "group_name": "一××组",
+            "apply_year": "2026",
+            "apply_number": "1",
+            "sign_year": "",
+            "sign_month": "",
+            "sign_day": "",
+            "land_area_mu": "729.13",
+            "term_start": "1995年12月31日",
+            "term_end": "2025年12月31日",
+            "family_number": "89",
+            "fbf_zjhm": "342221********4238",
+            "cbf_lxdh": "153****6993",
+            "contract_code": "000000103201010028J",
+            "old_term_end": "2028年12月31日",
+            "family_count": "5",
+            "parcel_count": "3",
+            "area_mu": "2.83",
+            "contract_term_start": "2025年1月1日",
+            "contract_term_end": "2054年12月31日",
             # ── 两张摸底表的预览样例（字段与 survey/sheet.py 的上下文同键） ──
             **_sample_sheet_context(),
             # ── 村组公示签字表预览样例（值一律脱敏，禁止真实个人信息） ──

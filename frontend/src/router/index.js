@@ -20,6 +20,7 @@ const DataImportView = () => import("../views/DataImportView.vue");
 const DataExportView = () => import("../views/DataExportView.vue");
 const SurveyView = () => import("../views/SurveyView.vue");
 const SurveyContractorView = () => import("../views/SurveyContractorView.vue");
+const ContractManagementView = () => import("../views/ContractManagementView.vue");
 const SurveyTemplateView = () => import("../views/SurveyTemplateView.vue");
 const GisView = () => import("../views/GisView.vue");
 const RequestView = () => import("../views/RequestView.vue");
@@ -50,6 +51,7 @@ const appChildren = [
   { path: "data-exports", name: "data-exports", component: DataExportView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
   { path: "surveys", name: "surveys", component: SurveyView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
   { path: "survey-contractors", name: "survey-contractors", component: SurveyContractorView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
+  { path: "survey-contracts", name: "survey-contracts", component: ContractManagementView, meta: { requiresAuth: true, permissions: ["contractors.view"] } },
   { path: "requests", name: "requests", component: RequestView, meta: { requiresAuth: true, permissions: REQUEST_MODULE_PERMISSIONS } },
   {
     path: "data-center",

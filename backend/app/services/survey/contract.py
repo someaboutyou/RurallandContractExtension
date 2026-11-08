@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.cbht import (
@@ -152,6 +152,148 @@ class SurveyServiceContractMixin:
             entry = self._serialize_contract_row(contract, code=new_code, db=db, batch_id=batch_id, result=result)
             entry["isCurrent"] = True
         return {**entry, "originalCode": original_code, "originalHistoryCode": getattr(original_history, "cbhtbm", None)}
+
+    # ── 批次合同总览（承包合同管理页） ─────────────────
+
+    def list_batch_contract_overview(
+        self,
+        db: Session,
+        batch_id: int,
+        *,
+        page: int,
+        page_size: int,
+        keyword: str | None,
+        region_code: str | None,
+        current_user: User,
+    ) -> dict:
+        """批次内各承包户的合同关键信息列表（承包合同管理页右表）。
+
+        行口径与 ``list_tasks`` 一致：批次基线 + 数据权限 scope + 区域/关键词过滤，
+        排除已注销户；同一承包方多行时取最新一行。合同侧取该户在本批次的
+        现行延包合同（没有则回退上次承包合同编码，``signed=False``）。
+        """
+        from app.models.survey import SurveyCbfBase  # 惰性导入保持模块依赖不变
+
+        batch = self._ensure_batch(db, batch_id)
+        normalized_region_code = data_access_service.normalize_region_code(region_code)
+        effective_region_code = normalized_region_code or data_access_service.normalize_region_code(batch.region_code)
+        if normalized_region_code:
+            data_access_service.ensure_region_filter_in_scope(current_user, normalized_region_code)
+
+        filters = self._tenant_filters(SurveyCbfBase, current_user)
+        filters.append(SurveyCbfBase.batch_id == batch_id)
+        filters.extend(data_access_service.build_code_scope_filters(SurveyCbfBase.cbfbm, current_user))
+        if effective_region_code:
+            filters.append(SurveyCbfBase.cbfbm.like(f"{effective_region_code}%"))
+        if keyword:
+            pattern = f"%{keyword.strip()}%"
+            filters.append(or_(SurveyCbfBase.cbfbm.ilike(pattern), SurveyCbfBase.cbfmc.ilike(pattern)))
+        filters.append(SurveyCbfBase.task_status != "deregistered")
+
+        rows = db.scalars(
+            select(SurveyCbfBase)
+            .where(*filters)
+            .order_by(SurveyCbfBase.cbfbm.asc(), SurveyCbfBase.id.desc())
+            .execution_options(skip_tenant_scope=True)
+        ).all()
+        latest: dict[str, SurveyCbfBase] = {}
+        for item in rows:
+            latest.setdefault(item.contractor_uid, item)
+        ordered = sorted(latest.values(), key=lambda item: (item.cbfbm or "", -item.id))
+        total = len(ordered)
+        page_items = ordered[(page - 1) * page_size : page * page_size]
+
+        overview = self._contract_overview_map(db, batch_id, page_items, batch_status=batch.status)
+        items = [overview[uid] for uid in (item.contractor_uid for item in page_items) if uid in overview]
+        return {"items": items, "total": total, "page": page, "pageSize": page_size}
+
+    def _contract_overview_map(self, db: Session, batch_id: int, page_items: list, *, batch_status: str) -> dict[str, dict]:
+        """为一页承包户批量装配合同关键信息（两条批量查询，避免 N+1）。"""
+        uids = [item.contractor_uid for item in page_items]
+        cbfbms = {item.cbfbm for item in page_items}
+        base_by_uid = {item.contractor_uid: item for item in page_items if item.contractor_uid}
+        # 批次结束（finished）后不能生成，与 generate_extension_contract 的拦截同源
+        can_sign = batch_status != "finished"
+
+        # 1) 本批次生成过的延包合同，按户取现行（active）优先，其次最近生成的一条
+        generated: dict[str, Cbht] = {}
+        if uids:
+            for row in db.scalars(
+                select(Cbht)
+                .where(
+                    Cbht.survey_batch_id == batch_id,
+                    Cbht.contractor_uid.in_(uids),
+                    Cbht.contract_source == CONTRACT_SOURCE_GENERATED,
+                )
+                .execution_options(skip_tenant_scope=True)
+            ).all():
+                existing = generated.get(row.contractor_uid)
+                if existing is None:
+                    generated[row.contractor_uid] = row
+                    continue
+                existing_active = existing.contract_status == CONTRACT_STATUS_ACTIVE
+                row_active = row.contract_status == CONTRACT_STATUS_ACTIVE
+                if row_active and not existing_active:
+                    generated[row.contractor_uid] = row
+                elif row_active == existing_active and (row.generated_at or datetime.min.replace(tzinfo=timezone.utc)) > (
+                    existing.generated_at or datetime.min.replace(tzinfo=timezone.utc)
+                ):
+                    generated[row.contractor_uid] = row
+
+        # 2) 上次承包合同编码：地块关联（未被改写的导入值）→ 导入的合同表
+        original_by_cbfbm: dict[str, str] = {}
+        if cbfbms:
+            for cbfbm, code in db.execute(
+                select(SurveyCbdkxxResult.cbfbm, SurveyCbdkxxResult.cbhtbm)
+                .where(
+                    SurveyCbdkxxResult.cbfbm.in_(cbfbms),
+                    SurveyCbdkxxResult.cbhtbm.isnot(None),
+                    SurveyCbdkxxResult.result_status != "removed",
+                )
+                .execution_options(skip_tenant_scope=True)
+            ).all():
+                original_by_cbfbm.setdefault(cbfbm, code)
+            for row in db.scalars(
+                select(Cbht)
+                .where(
+                    Cbht.cbfbm.in_(cbfbms),
+                    Cbht.contract_source == CONTRACT_SOURCE_IMPORTED,
+                )
+                .execution_options(skip_tenant_scope=True)
+            ).all():
+                if row.cbfbm and not original_by_cbfbm.get(row.cbfbm):
+                    original_by_cbfbm[row.cbfbm] = row.cbhtbm
+
+        overview: dict[str, dict] = {}
+        for uid, base in base_by_uid.items():
+            current = generated.get(uid)
+            original_code = original_by_cbfbm.get(base.cbfbm)
+            signed = bool(current and current.contract_status == CONTRACT_STATUS_ACTIVE)
+            row = current if current is not None else None
+            overview[uid] = {
+                "contractorUid": uid,
+                "cbfbm": base.cbfbm,
+                "cbfmc": base.cbfmc,
+                "taskStatus": base.task_status,
+                "signed": signed,
+                # 合同编码：现行延包合同优先，没有则展示上次承包合同编码
+                "contractCode": (current.cbhtbm if current else None) or original_code,
+                "contractSourceText": ("延包合同" if current else None) or ("上次承包合同" if original_code else None),
+                "contractStatusText": ("现行" if signed else "历史") if current else None,
+                "cbqxq": self._contract_iso(row.cbqxq) if row else None,
+                "cbqxz": self._contract_iso(row.cbqxz) if row else None,
+                "qdsj": self._contract_iso(row.qdsj) if row else None,
+                "cbdkzs": row.cbdkzs if row else None,
+                "htzmj": float(row.htzmj) if row and row.htzmj is not None else None,
+                "htzmjm": float(row.htzmjm) if row and row.htzmjm is not None else None,
+                "generatedBy": row.generated_by if row else None,
+                "generatedAt": self._contract_iso_datetime(row.generated_at) if row and row.generated_at else None,
+                "originalCode": original_code,
+                # 批次结束（finished）后不能生成，与 generate_extension_contract 的拦截同源
+                "canSign": can_sign,
+                "batchStatus": batch_status,
+            }
+        return overview
 
     # ── 内部：合同清单 ────────────────────────────────
 

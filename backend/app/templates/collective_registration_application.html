@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>农村土地承包经营权集体登记申请书</title>
+<style>
+  /* 《农村土地承包经营权集体登记申请书》母版 —— 版式复刻自 CS 版
+     Template/农村土地承包经营权集体登记申请书.dot（书签填充，样张：
+     泗洪县青阳镇宏伟居一组，编号「青阳镇农地证请［2026］第 1 号」）。
+     A4 纵向两页：封面 + 正文；正文仿宋 16pt（三号），行距 exact 30pt，
+     首行缩进 2 字符。可编辑变量见模板管理员说明（打印模板管理页）。 */
+  @page { size: A4 portrait; margin: 0; }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    color: #000;
+    background: #f2f3f5;
+    font-family: "SimSun", "宋体", serif;
+    font-size: 16pt;
+  }
+
+  .page {
+    width: 210mm;
+    height: 297mm;
+    margin: 0 auto;
+    padding: 25.4mm 31.75mm;
+    background: #fff;
+    page-break-after: always;
+    break-after: page;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .page:last-child { page-break-after: auto; break-after: auto; }
+
+  .cover-main {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .cover-line1 {
+    margin: 0;
+    font-family: "方正小标宋简体", "SimHei", "黑体", serif;
+    font-size: 26pt;
+    line-height: 44pt;
+  }
+
+  .cover-line2 {
+    margin: 0;
+    font-family: "方正小标宋简体", "SimHei", "黑体", serif;
+    font-size: 16pt;
+    line-height: 34pt;
+  }
+
+  .cover-title {
+    margin: 8mm 0 0;
+    font-family: "方正小标宋简体", "SimHei", "黑体", serif;
+    font-size: 48pt;
+    line-height: 70pt;
+    letter-spacing: 6pt;
+  }
+
+  .cover-org {
+    margin: 0;
+    text-align: center;
+    font-family: "方正小标宋简体", "SimHei", "黑体", serif;
+    font-size: 18pt;
+    line-height: 34pt;
+  }
+
+  .doc-title {
+    margin: 0 0 6mm;
+    text-align: center;
+    font-family: "方正小标宋简体", "SimHei", "黑体", serif;
+    font-size: 22pt;
+    line-height: 36pt;
+  }
+
+  .apply-no {
+    margin: 0 0 4mm;
+    text-align: left;
+    font-family: "仿宋", "FangSong", "仿宋_GB2312", "SimSun", serif;
+    font-size: 16pt;
+    line-height: 30pt;
+  }
+
+  .body {
+    margin: 0;
+    text-indent: 11.3mm;
+    font-family: "仿宋", "FangSong", "仿宋_GB2312", "SimSun", serif;
+    font-size: 16pt;
+    line-height: 30pt;
+  }
+
+  .appendix {
+    margin: 4mm 0 0;
+    text-indent: 11.3mm;
+    font-family: "仿宋", "FangSong", "仿宋_GB2312", "SimSun", serif;
+    font-size: 16pt;
+    line-height: 30pt;
+  }
+
+  .sign-org {
+    margin: 18mm 0 0;
+    text-align: right;
+    font-family: "仿宋", "FangSong", "仿宋_GB2312", "SimSun", serif;
+    font-size: 16pt;
+    line-height: 30pt;
+    padding-right: 8mm;
+  }
+
+  .sign-date {
+    margin: 6mm 0 0;
+    text-align: right;
+    font-family: "仿宋", "FangSong", "仿宋_GB2312", "SimSun", serif;
+    font-size: 16pt;
+    line-height: 30pt;
+    padding-right: 8mm;
+  }
+
+  /* 横线填值：全角空格 + 下划线（html_docx → w:u），打印后手工填写 */
+  .fill {
+    text-decoration: underline;
+  }
+</style>
+</head>
+<body>
+
+<!-- 第 1 页：封面 -->
+<section class="page">
+  <div class="cover-main">
+    <p class="cover-line1">农村土地承包经营权证</p>
+    <p class="cover-line2">（家庭承包方式）</p>
+    <p class="cover-title">申&nbsp;&nbsp;请&nbsp;&nbsp;书</p>
+  </div>
+  <p class="cover-org">{{ county_name }}人民政府制</p>
+</section>
+
+<!-- 第 2 页：正文 -->
+<section class="page">
+  <p class="doc-title">农村土地承包经营权证登记申请书</p>
+  <p class="apply-no">{{ town_name }}农地证请［{{ apply_year }}］第 {% if apply_number %}{{ apply_number }}{% else %}<span class="fill">&nbsp;&nbsp;&nbsp;&nbsp;</span>{% endif %} 号</p>
+  <p class="body">{{ county_name }}人民政府：</p>
+  <p class="body">根据农办经[2012]19号《农业部办公厅关于印发农村土地承包经营权登记试点工作规程（试行）的通知》和省市有关文件精神，我们组织人员逐户开展了调查摸底，相关测绘作业单位按照有关规定和程序，对各户承包土地权利人、四至、面积进行了调查和测绘。经张榜公示无异议后重新签订了《农村土地承包合同》，承包方式为农户家庭承包，涉及农村集体土地{{ land_area_mu }}亩,承包期限自&nbsp;{{ term_start }}&nbsp;起至&nbsp;{{ term_end }}&nbsp;止。经审核,&nbsp;{{ village_name }}&nbsp;{% if group_name %}{{ group_name }}&nbsp;{% endif %}有&nbsp;{{ family_number }}&nbsp;个农户符合《农村土地承包经营权证管理办法》有关规定，请准予登记。</p>
+  <p class="appendix">附：农村土地承包情况登记表</p>
+  <p class="sign-org">{{ county_name }}人民政府（章）</p>
+  <p class="sign-date">{% if sign_year %}{{ sign_year }}{% else %}&nbsp;&nbsp;&nbsp;&nbsp;{% endif %}年&nbsp;&nbsp;&nbsp;{{ sign_month }}&nbsp;&nbsp;月&nbsp;&nbsp;&nbsp;{{ sign_day }}&nbsp;&nbsp;日</p>
+</section>
+</body>
+</html>
