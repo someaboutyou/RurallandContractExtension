@@ -870,23 +870,6 @@ a {
   inset: 0;
 }
 
-.gis-scene-title {
-  position: absolute;
-  top: 18px;
-  left: 50%;
-  z-index: 3;
-  transform: translateX(-50%);
-  padding: 6px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 999px;
-  background: rgba(14, 39, 66, 0.28);
-  backdrop-filter: blur(18px);
-  color: #eef7ff;
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-}
-
 .gis-map-surface.is-basemap-image {
   background:
     radial-gradient(circle at 25% 22%, rgba(212, 189, 128, 0.22), transparent 18%),
@@ -933,26 +916,25 @@ a {
 }
 
 .gis-map-vignette,
-.gis-map-crosshair,
-.gis-scene-title {
+.gis-map-crosshair {
   pointer-events: none;
 }
 
 .gis-search-dock {
   position: absolute;
-  top: 18px;
-  left: 18px;
+  top: 12px;
+  left: 12px;
   z-index: 4;
-  width: min(720px, calc(100% - 330px));
+  width: min(600px, calc(100% - 330px));
   display: grid;
-  gap: 10px;
+  gap: 6px;
 }
 
 .gis-search-bar {
   display: grid;
-  grid-template-columns: 190px minmax(220px, 1fr) 104px;
-  gap: 12px;
-  padding: 10px;
+  grid-template-columns: 150px minmax(180px, 1fr) 92px;
+  gap: 8px;
+  padding: 6px;
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: var(--radius-lg);
   background: rgba(12, 35, 58, 0.28);
@@ -963,9 +945,10 @@ a {
 .gis-search-select,
 .gis-search-input,
 .gis-search-button {
-  height: 42px;
+  height: 32px;
   border-radius: var(--radius-md);
   font: inherit;
+  font-size: 13px;
 }
 
 .gis-search-select,
@@ -978,12 +961,12 @@ a {
 }
 
 .gis-search-select {
-  padding: 0 12px;
+  padding: 0 10px;
   cursor: pointer;
 }
 
 .gis-search-input {
-  padding: 0 14px;
+  padding: 0 10px;
 }
 
 .gis-search-input::placeholder {
@@ -1029,8 +1012,8 @@ a {
 
 .gis-search-button-icon,
 .gis-search-button-icon svg {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
 }
 
 .gis-search-panel {
@@ -1216,12 +1199,12 @@ a {
 
 .gis-floating-toolbar {
   position: absolute;
-  top: 86px;
-  left: 18px;
+  top: 58px;
+  left: 12px;
   z-index: 3;
   display: flex;
-  gap: 6px;
-  padding: 4px;
+  gap: 4px;
+  padding: 3px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: var(--radius-lg);
   background: rgba(10, 33, 58, 0.32);
@@ -1231,8 +1214,8 @@ a {
 
 .gis-floating-tool {
   position: relative;
-  width: 36px;
-  height: 36px;
+  width: 30px;
+  height: 30px;
   padding: 0;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: var(--radius-lg);
@@ -1259,8 +1242,8 @@ a {
 
 .gis-tool-icon {
   display: inline-flex;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   line-height: 1;
 }
 
@@ -1301,8 +1284,8 @@ a {
 .gis-floating-panel {
   position: absolute;
   z-index: 3;
-  width: 280px;
-  padding: 10px;
+  width: 260px;
+  padding: 8px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: var(--radius-xl);
   background: rgba(11, 34, 58, 0.34);
@@ -1311,12 +1294,12 @@ a {
 }
 
 .gis-floating-panel--left {
-  top: 150px;
-  left: 18px;
+  top: 100px;
+  left: 12px;
 }
 
 .gis-floating-panel.secondary {
-  left: 312px;
+  left: 284px;
 }
 
 .gis-panel-head {
@@ -1324,18 +1307,19 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .gis-floating-panel-title,
 .gis-property-title {
-  font-size: 18px;
+  font-size: 14px;
   font-weight: 700;
   color: #eef7ff;
 }
 
 .gis-panel-toggle {
-  padding: 4px 6px;
+  padding: 2px 6px;
+  font-size: 12px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.08);
@@ -3174,13 +3158,6 @@ a {
 
   .workflow-step-list {
     grid-template-columns: 1fr;
-  }
-
-  .gis-scene-title {
-    position: static;
-    transform: none;
-    margin: 18px auto 0;
-    width: fit-content;
   }
 
   .gis-search-dock {

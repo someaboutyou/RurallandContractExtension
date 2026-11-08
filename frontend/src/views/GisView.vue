@@ -5,8 +5,6 @@
         <div ref="mapRootRef" class="gis-ol-map"></div>
         <div class="gis-map-vignette"></div>
 
-        <div class="gis-scene-title">{{ ui.title }}</div>
-
         <div class="gis-search-dock">
           <div class="gis-search-bar">
             <select v-model="searchType" class="gis-search-select" :aria-label="ui.searchType">
@@ -429,7 +427,6 @@ import { basemapConfigs as fallbackBasemaps, vectorLayerConfigs as fallbackVecto
 import { sqmToMu, formatSqmsAsMu } from "../utils/areaUnits";
 
 const ui = {
-  title: "\u519c\u6751\u627f\u5305\u7ecf\u8425\u6743 GIS \u4e00\u5f20\u56fe",
   reset: "\u590d\u4f4d",
   layerControl: "\u56fe\u5c42\u63a7\u5236",
   expand: "\u5c55\u5f00",
