@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import HTTPException, status
@@ -29,7 +30,9 @@ from sqlalchemy.orm import Session
 
 from app.models.survey import (
     SurveyCbdkxxResult,
+    SurveyCbfResult,
     SurveyDkResult,
+    SurveyFbfResult,
     SurveyJzdResult,
     SurveyJzxResult,
 )
@@ -411,6 +414,8 @@ def _assemble_boundary(
                 "jzxlb": row.jzxlb if row else None,
                 "jzxwz": row.jzxwz if row else None,
                 "jzxsm": row.jzxsm if row else None,
+                "neighborPerson": row.neighbor_person if row else None,
+                "neighborRefer": row.neighbor_refer if row else None,
                 "registered": row is not None,
             }
         )
@@ -678,12 +683,242 @@ class SurveyServiceBoundaryMixin:
             row.jzxlb = (item.get("jzxlb") or "").strip() or None
             row.jzxwz = (item.get("jzxwz") or "").strip() or None
             row.jzxsm = (item.get("jzxsm") or "").strip() or None
+            row.neighbor_person = (item.get("neighborPerson") or "").strip() or None
+            row.neighbor_refer = (item.get("neighborRefer") or "").strip() or None
 
         db.flush()
         db.commit()
         return self.get_parcel_boundary(db, batch_id, contractor_uid, dkbm, current_user)
 
     # ── 内部实现 ────────────────────────────────────────────────────────────
+
+    def initialize_parcels_boundary(
+        self, db: Session, payload: dict, current_user: User
+    ) -> dict:
+        """批量初始化界址点 / 界址线（对齐 CS 版初始数据-界址数据）。
+
+        - 以地块图形外环顶点生成界址点，共用点只建一条；
+        - 相邻点生成界址线，共用线只建一条；
+        - 支持按角度过滤近共线拐点（CS 默认 160°–200°）；
+        - 可统一写入界标类型、界址线类别、界址线位置与界址线长度说明。
+        """
+        mark_type = str(payload.get("markType") or "").strip() or None
+        line_type = str(payload.get("lineType") or "").strip() or None
+        line_position = str(payload.get("linePosition") or "").strip() or None
+        filter_by_angle = bool(payload.get("filterByAngle", True))
+        min_angle = float(payload.get("minAngle") or 160.0)
+        max_angle = float(payload.get("maxAngle") or 200.0)
+        write_length = bool(payload.get("writeLineLength", True))
+        neighbor_distance = float(payload.get("neighborDistance") or 1.5)
+        write_neighbor = bool(payload.get("writeNeighbor", True))
+
+        items: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for item in payload.get("items") or []:
+            cbfbm = str(item.get("cbfbm") or "").strip()
+            dkbm = str(item.get("dkbm") or "").strip()
+            if not cbfbm or not dkbm or (cbfbm, dkbm) in seen:
+                continue
+            seen.add((cbfbm, dkbm))
+            data_access_service.ensure_code_in_scope(
+                current_user, cbfbm, detail="承包方不在当前数据权限范围内"
+            )
+            items.append((cbfbm, dkbm))
+        if not items:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请先勾选承包地块")
+
+        processed = 0
+        point_codes: set[str] = set()
+        line_pairs: set[tuple[str, str]] = set()
+        skipped = 0
+        for cbfbm, dkbm in items:
+            relation = db.scalars(
+                select(SurveyCbdkxxResult)
+                .where(
+                    SurveyCbdkxxResult.cbfbm == cbfbm,
+                    SurveyCbdkxxResult.dkbm == dkbm,
+                    SurveyCbdkxxResult.result_status.notin_(("removed", "split_source")),
+                )
+                .order_by(SurveyCbdkxxResult.id.desc())
+            ).first()
+            parcel = db.scalars(
+                select(SurveyDkResult)
+                .where(
+                    SurveyDkResult.dkbm == dkbm,
+                    SurveyDkResult.result_status.notin_(("removed", "split_source")),
+                )
+                .order_by(SurveyDkResult.id.desc())
+            ).first()
+            if relation is None or parcel is None:
+                skipped += 1
+                continue
+            rings_map = load_parcel_rings(db, [dkbm])
+            rings = rings_map.get(dkbm) or []
+            if not rings:
+                skipped += 1
+                continue
+            filtered_rings = [
+                self._filter_ring_by_angle(ring, min_angle, max_angle)
+                if filter_by_angle else ring
+                for ring in rings
+            ]
+            coords = [coord for ring in filtered_rings for coord in ring]
+            if not coords:
+                skipped += 1
+                continue
+            points_map = self._ensure_boundary_points(
+                db,
+                coords,
+                tenant_code=parcel.tenant_code,
+                region_code=parcel.region_code,
+                dkbm=dkbm,
+            )
+            lines_map = self._ensure_boundary_lines(
+                db,
+                filtered_rings,
+                points_map,
+                tenant_code=parcel.tenant_code,
+                region_code=parcel.region_code,
+                dkbm=dkbm,
+            )
+            processed += 1
+
+            issuer_name = db.scalar(
+                select(SurveyFbfResult.fbfmc)
+                .where(
+                    SurveyFbfResult.tenant_code == parcel.tenant_code,
+                    SurveyFbfResult.fbfbm == relation.fbfbm,
+                )
+                .order_by(SurveyFbfResult.id.desc())
+            ) or ""
+            contractor_name = db.scalar(
+                select(SurveyCbfResult.cbfmc)
+                .where(
+                    SurveyCbfResult.tenant_code == parcel.tenant_code,
+                    SurveyCbfResult.cbfbm == relation.cbfbm,
+                )
+                .order_by(SurveyCbfResult.id.desc())
+            ) or ""
+            target_srid = db.scalar(
+                text("SELECT ST_SRID(geom) FROM survey_dk_result WHERE id = :id"),
+                {"id": parcel.id},
+            )
+            coordinate_by_code: dict[str, tuple[Decimal, Decimal]] = {
+                point.jzdh: coord for coord, point in points_map.items()
+            }
+            requested_pairs: list[tuple[str, str]] = []
+            for ring in filtered_rings:
+                total = len(ring)
+                for index in range(total):
+                    first = points_map.get(ring[index])
+                    second = points_map.get(ring[(index + 1) % total])
+                    if first is not None and second is not None:
+                        requested_pairs.append(_order_pair(first.jzdh, second.jzdh))
+            requested_pairs = list(dict.fromkeys(requested_pairs))
+            for point in points_map.values():
+                if mark_type and point.jblx != mark_type:
+                    point.jblx = mark_type
+                point_codes.add(point.jzdh)
+            for pair in requested_pairs:
+                line = lines_map.get(pair)
+                if line is None:
+                    continue
+                if line_type and line.jzxlb != line_type:
+                    line.jzxlb = line_type
+                if line_position and line.jzxwz != line_position:
+                    line.jzxwz = line_position
+                if write_length:
+                    first = coordinate_by_code.get(line.qdjzdh)
+                    second = coordinate_by_code.get(line.zdjzdh)
+                    if first and second:
+                        length = math.hypot(
+                            float(second[0] - first[0]), float(second[1] - first[1])
+                        )
+                        description = f"{length:.2f}"
+                        if line.jzxsm != description:
+                            line.jzxsm = description
+                if write_neighbor and target_srid:
+                    first = coordinate_by_code.get(line.qdjzdh)
+                    second = coordinate_by_code.get(line.zdjzdh)
+                    if first and second:
+                        neighbor_name = db.scalar(
+                            text(
+                                "WITH line AS ("
+                                "  SELECT ST_SetSRID(ST_MakeLine("
+                                "    ST_MakePoint(:x1, :y1), ST_MakePoint(:x2, :y2)"
+                                "  ), :srid) AS geom"
+                                ") "
+                                "SELECT c.cbfmc "
+                                "FROM survey_dk_result d "
+                                "JOIN survey_cbdkxx_result r ON r.dkbm = d.dkbm "
+                                "  AND r.tenant_code = d.tenant_code "
+                                "JOIN survey_cbf_result c ON c.cbfbm = r.cbfbm "
+                                "  AND c.tenant_code = r.tenant_code "
+                                "CROSS JOIN line "
+                                "WHERE d.tenant_code = :tenant "
+                                "  AND d.dkbm <> :self_dkbm "
+                                "  AND d.result_status NOT IN "
+                                "      ('removed', 'split_source', 'cancelled', 'extinct') "
+                                "  AND ST_Intersects(d.geom, ST_Buffer(line.geom, :distance)) "
+                                "ORDER BY ST_Length(ST_Intersection("
+                                "  ST_Boundary(d.geom), line.geom)) DESC NULLS LAST "
+                                "LIMIT 1"
+                            ),
+                            {
+                                "x1": float(second[1]),
+                                "y1": float(second[0]),
+                                "x2": float(first[1]),
+                                "y2": float(first[0]),
+                                "srid": int(target_srid),
+                                "tenant": parcel.tenant_code,
+                                "self_dkbm": dkbm,
+                                "distance": neighbor_distance,
+                            },
+                        )
+                        person = neighbor_name or issuer_name
+                        refer = neighbor_name or contractor_name
+                        if person and line.neighbor_person != person:
+                            line.neighbor_person = person
+                        if refer and line.neighbor_refer != refer:
+                            line.neighbor_refer = refer
+                line_pairs.add(pair)
+
+        db.commit()
+        return {
+            "processed": processed,
+            "points": len(point_codes),
+            "lines": len(line_pairs),
+            "skipped": skipped,
+        }
+
+    @staticmethod
+    def _filter_ring_by_angle(
+        ring: list[tuple[Decimal, Decimal]], min_angle: float, max_angle: float
+    ) -> list[tuple[Decimal, Decimal]]:
+        """过滤近共线拐点：内角落在 [min, max] 的顶点不落界址点。"""
+        if len(ring) < 4:
+            return ring
+        low = max(0.0, float(min_angle))
+        high = min(180.0, float(max_angle))
+        kept: list[tuple[Decimal, Decimal]] = []
+        total = len(ring)
+        for index, point in enumerate(ring):
+            previous = ring[index - 1]
+            nxt = ring[(index + 1) % total]
+            ax = float(previous[0] - point[0])
+            ay = float(previous[1] - point[1])
+            bx = float(nxt[0] - point[0])
+            by = float(nxt[1] - point[1])
+            norm = math.hypot(ax, ay) * math.hypot(bx, by)
+            if norm <= 0:
+                kept.append(point)
+                continue
+            cosine = max(-1.0, min(1.0, (ax * bx + ay * by) / norm))
+            angle = math.degrees(math.acos(cosine))
+            if low <= angle <= high:
+                continue
+            kept.append(point)
+        return kept if len(kept) >= 3 else ring
 
     @staticmethod
     def _validate_boundary_codes(

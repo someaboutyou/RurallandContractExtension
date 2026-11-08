@@ -49,6 +49,7 @@
             <el-dropdown-menu>
               <el-dropdown-item command="survey">地块调查表</el-dropdown-item>
               <el-dropdown-item command="sketch">地块示意图</el-dropdown-item>
+              <el-dropdown-item command="vector">矢量数据</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -80,6 +81,7 @@
             </template>
           </el-table-column>
           <el-table-column prop="dkbm" label="地块编码" min-width="190" show-overflow-tooltip />
+          <el-table-column prop="imageNumber" label="图幅编号" min-width="170" show-overflow-tooltip />
           <el-table-column label="二轮合同面积(亩)" min-width="140" align="right">
             <template #default="{ row }">{{ formatAreaValue(row.twoRoundArea) }}</template>
           </el-table-column>
@@ -146,6 +148,11 @@
       :rows="selectedRows"
       @initialized="load"
     />
+
+    <ParcelVectorExportDialog
+      v-model="vectorVisible"
+      :rows="selectedRows"
+    />
   </section>
 </template>
 
@@ -156,6 +163,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import AddParcelDialog from "../components/survey/AddParcelDialog.vue";
 import ParcelImportDialog from "../components/survey/ParcelImportDialog.vue";
 import ParcelInitializeDialog from "../components/survey/ParcelInitializeDialog.vue";
+import ParcelVectorExportDialog from "../components/survey/ParcelVectorExportDialog.vue";
 import ContractorResultDialog from "../components/survey/view/ContractorResultDialog.vue";
 import SurveyBatchPanel from "../components/survey/SurveyBatchPanel.vue";
 import {
@@ -193,6 +201,7 @@ const batchPanelCollapsed = ref(false);
 const batchId = computed(() => activeBatch.value?.id ?? null);
 const importVisible = ref(false);
 const initializeVisible = ref(false);
+const vectorVisible = ref(false);
 const selectedBatch = computed(() => activeBatch.value);
 
 const addParcelDialog = ref(null);
@@ -252,6 +261,7 @@ function toParcelRow(parcel, group) {
     contractorUid: group?.contractorUid || "",
     dkmc: parcel.dkmc,
     dkbm: parcel.dkbm,
+    imageNumber: parcel.image_number || "",
     twoRoundArea: twoRoundAreaMu(parcel),
     actualArea: actualAreaMu(parcel),
     delayArea: delayAreaMu(parcel),
@@ -433,6 +443,10 @@ async function handleExportCommand(command) {
   const itemsToExport = selectedExportItems();
   if (!itemsToExport.length) {
     ElMessage.warning("请先勾选承包地块");
+    return;
+  }
+  if (command === "vector") {
+    vectorVisible.value = true;
     return;
   }
   exporting.value = true;

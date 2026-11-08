@@ -524,14 +524,17 @@ class BatchFormExportService:
                 ]
                 if parcel:
                     values += [
-                        parcel.dkmc or "", parcel.dkbm or "", "",
+                        parcel.dkmc or "", parcel.dkbm or "", parcel.image_number or "",
                         _mu(relation.htmj), _mu(parcel.scmj),
                         parcel.dkdz or "", parcel.dknz or "", parcel.dkxz or "", parcel.dkbz or "",
                         parcel.tdyt or "", parcel.dldj or "", parcel.tdlylx or "", parcel.sfjbnt or "",
                         parcel.zjrxm or "", parcel.dklb or "", parcel.dkbzxx or "",
-                        result.cbfdcy or "", result.cbfdcrq.date().isoformat() if result.cbfdcrq else "",
-                        result.cbfdcjs or "", result.gsshr or "",
-                        result.gsshrq.date().isoformat() if result.gsshrq else "", result.gsjs or "",
+                        parcel.survey_person or result.cbfdcy or "",
+                        parcel.survey_date.isoformat() if parcel.survey_date else (result.cbfdcrq.date().isoformat() if result.cbfdcrq else ""),
+                        parcel.survey_note or result.cbfdcjs or "",
+                        parcel.check_person or result.gsshr or "",
+                        parcel.check_date.isoformat() if parcel.check_date else (result.gsshrq.date().isoformat() if result.gsshrq else ""),
+                        parcel.check_opinion or result.gsjs or "",
                     ]
                 else:
                     values += [""] * 22
@@ -867,6 +870,20 @@ class BatchFormExportService:
                     values[31] = parcel.dkbz or ""
                     values[32] = parcel.dkbzxx or ""
                     values[33] = result.remark or ""
+                    values[39] = parcel.survey_person or result.cbfdcy or ""
+                    values[40] = (
+                        parcel.survey_date.isoformat()
+                        if parcel.survey_date
+                        else (result.cbfdcrq.date().isoformat() if result.cbfdcrq else "")
+                    )
+                    values[41] = parcel.survey_note or result.cbfdcjs or ""
+                    values[42] = parcel.check_person or result.gsshr or ""
+                    values[43] = (
+                        parcel.check_date.isoformat()
+                        if parcel.check_date
+                        else (result.gsshrq.date().isoformat() if result.gsshrq else "")
+                    )
+                    values[44] = parcel.check_opinion or result.gsjs or ""
                 for column in range(len(headers)):
                     if column in merged_columns:
                         continue

@@ -1,10 +1,13 @@
-﻿import logging
+﻿import json
 import logging
-from datetime import datetime, timezone
+import logging
+import math
+from datetime import date, datetime, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from uuid import uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.models.survey import (
@@ -13,20 +16,21 @@ from app.models.survey import (
     SurveyCbdkxxResult,
     SurveyChangeRecord,
     SurveyDkResult,
+    SurveyJzdResult,
+    SurveyJzxResult,
 )
 from app.models.user import User
 from app.services.data_access_service import data_access_service
 from app.services.survey.parcel_geometry import SQM_PER_MU
-
-from decimal import Decimal
 
 logger = logging.getLogger(__name__)
 
 class SurveyServiceParcelOpsMixin:
     _PARCEL_SNAPSHOT_FIELDS = (
         "parcel_uid", "tenant_code", "region_code", "bsm", "ysdm", "dkbm", "dkmc",
-        "syqxz", "dklb", "tdlylx", "dldj", "tdyt", "sfjbnt", "scmj", "dkdz",
-        "dkxz", "dknz", "dkbz", "dkbzxx", "zjrxm", "survey_status", "result_status",
+        "image_number", "syqxz", "dklb", "tdlylx", "dldj", "tdyt", "sfjbnt", "scmj", "dkdz",
+        "dkxz", "dknz", "dkbz", "dkbzxx", "zjrxm", "survey_person", "survey_date",
+        "survey_note", "check_person", "check_date", "check_opinion", "survey_status", "result_status",
         "is_changed", "change_type", "change_reason", "source_import_batch_id",
         "source_import_row_id", "last_import_batch_id", "last_import_row_id", "initialized_at",
         "remark",
@@ -45,7 +49,7 @@ class SurveyServiceParcelOpsMixin:
             value = getattr(item, field, None)
             if field in {"scmj", "htmj", "yhtmj", "htmjm", "yhtmjm"} and value is not None:
                 value = str(value)
-            elif isinstance(value, datetime):
+            elif isinstance(value, (datetime, date)):
                 value = value.isoformat()
             snapshot[field] = value
         return snapshot
@@ -55,6 +59,10 @@ class SurveyServiceParcelOpsMixin:
         initialized_at = values.get("initialized_at")
         if isinstance(initialized_at, str):
             values["initialized_at"] = datetime.fromisoformat(initialized_at)
+        for field in ("survey_date", "check_date"):
+            value = values.get(field)
+            if isinstance(value, str) and value:
+                values[field] = date.fromisoformat(value)
         return values
 
     def update_parcel_attributes(self, db: Session, contractor_uid: str, cbfbm: str, updates: list[dict]) -> bool:
@@ -256,6 +264,869 @@ class SurveyServiceParcelOpsMixin:
         return {
             "processed": processed,
             "updated": updated,
+            "skipped": skipped,
+            "contractors": len(affected_contractors),
+        }
+
+    def initialize_image_numbers(self, db: Session, payload: dict, current_user: User) -> dict:
+        """图幅编号初始化（对齐 CS 版承包台账-初始数据-图幅编号）。
+
+        按地块图形的投影坐标计算公里格网编号：
+        - 1:2000 → 1km 格网；1:1000 → 500m；1:500 → 250m；
+        - 默认 Y-X 顺序（CS `IsUseYX=false`），可切换 X-Y；
+        - 默认取顶点 + 外接矩形角点，勾选「初始化全部图幅编号」时对长边加密取点。
+        """
+        scale = payload.get("scale") or "1:2000"
+        scale_index, step_m, decimals = {
+            "1:2000": (0, 1000.0, 1),
+            "1:1000": (1, 500.0, 1),
+            "1:500": (2, 250.0, 2),
+        }[scale]
+        use_yx = bool(payload.get("useYX"))
+        initial_all = bool(payload.get("initialAll"))
+
+        def normalize_x(value: float) -> float:
+            # 数据采用带带号的高斯投影（如 39,610,254），CS 口径不含带号，先去掉百万位带号。
+            if value >= 1_000_000:
+                return value - math.floor(value / 1_000_000) * 1_000_000
+            return value
+
+        def grid_value(km: float) -> float:
+            integer = math.floor(km)
+            frac = km - integer
+            if scale_index == 2:
+                if frac <= 0.25:
+                    frac = 0.0
+                elif frac <= 0.5:
+                    frac = 0.25
+                elif frac <= 0.75:
+                    frac = 0.5
+                else:
+                    frac = 0.75
+            elif scale_index == 1:
+                frac = 0.0 if frac <= 0.5 else 0.5
+            else:
+                frac = 0.0
+            return integer + frac
+
+        def sheet_code(point: tuple[float, float]) -> str:
+            x_km = normalize_x(point[0]) / 1000.0
+            y_km = point[1] / 1000.0
+            x_text = f"{grid_value(x_km):.{decimals}f}"
+            y_text = f"{grid_value(y_km):.{decimals}f}"
+            return f"{x_text}-{y_text}" if use_yx else f"{y_text}-{x_text}"
+
+        def densify(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+            result: list[tuple[float, float]] = []
+            count = len(points)
+            for index, point in enumerate(points):
+                result.append(point)
+                nxt = points[(index + 1) % count]
+                dx = nxt[0] - point[0]
+                dy = nxt[1] - point[1]
+                length = math.hypot(dx, dy)
+                if length <= step_m:
+                    continue
+                steps = int(length // step_m)
+                for step_index in range(1, steps + 1):
+                    ratio = step_index * step_m / length
+                    if ratio < 1:
+                        result.append((point[0] + dx * ratio, point[1] + dy * ratio))
+            return result
+
+        def geometry_points(raw: str) -> list[tuple[float, float]]:
+            try:
+                data = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                return []
+            geometry_type = data.get("type")
+            coordinates = data.get("coordinates") or []
+            rings: list[list] = []
+            if geometry_type == "Polygon":
+                rings = coordinates
+            elif geometry_type == "MultiPolygon":
+                rings = [ring for polygon in coordinates for ring in polygon]
+            elif geometry_type == "Point":
+                return [(float(coordinates[0]), float(coordinates[1]))] if coordinates else []
+            points: list[tuple[float, float]] = []
+            for ring in rings:
+                for coordinate in ring:
+                    if isinstance(coordinate, (list, tuple)) and len(coordinate) >= 2:
+                        points.append((float(coordinate[0]), float(coordinate[1])))
+            return points
+
+        processed = 0
+        updated = 0
+        skipped = 0
+        affected_contractors: set[str] = set()
+        seen: set[tuple[str, str]] = set()
+        for item in payload.get("items") or []:
+            cbfbm = str(item.get("cbfbm") or "").strip()
+            dkbm = str(item.get("dkbm") or "").strip()
+            if not cbfbm or not dkbm or (cbfbm, dkbm) in seen:
+                continue
+            seen.add((cbfbm, dkbm))
+            data_access_service.ensure_code_in_scope(
+                current_user, cbfbm, detail="承包方不在当前数据权限范围内"
+            )
+            relation = db.scalars(
+                select(SurveyCbdkxxResult)
+                .where(
+                    SurveyCbdkxxResult.cbfbm == cbfbm,
+                    SurveyCbdkxxResult.dkbm == dkbm,
+                    SurveyCbdkxxResult.result_status != "removed",
+                )
+                .order_by(SurveyCbdkxxResult.id.desc())
+            ).first()
+            if relation is None:
+                skipped += 1
+                continue
+            parcel = db.scalars(
+                select(SurveyDkResult)
+                .where(
+                    SurveyDkResult.dkbm == dkbm,
+                    SurveyDkResult.result_status != "removed",
+                )
+                .order_by(SurveyDkResult.id.desc())
+            ).first()
+            if parcel is None:
+                skipped += 1
+                continue
+            raw_geometry = db.scalar(
+                text("SELECT ST_AsGeoJSON(geom, 15, 0) FROM survey_dk_result WHERE id = :id"),
+                {"id": parcel.id},
+            )
+            points = geometry_points(raw_geometry) if raw_geometry else []
+            if not points:
+                skipped += 1
+                continue
+            processed += 1
+            sample = densify(points) if initial_all else list(points)
+            if not initial_all:
+                xs = [point[0] for point in points]
+                ys = [point[1] for point in points]
+                sample.extend(
+                    [
+                        (min(xs), min(ys)),
+                        (max(xs), min(ys)),
+                        (max(xs), max(ys)),
+                        (min(xs), max(ys)),
+                    ]
+                )
+            codes: list[str] = []
+            for point in sample:
+                code = sheet_code(point)
+                if code not in codes:
+                    codes.append(code)
+            value = "、".join(codes)
+            if value and parcel.image_number != value:
+                parcel.image_number = value
+                parcel.is_changed = True
+                updated += 1
+                affected_contractors.add(cbfbm)
+
+        db.commit()
+        return {
+            "processed": processed,
+            "updated": updated,
+            "skipped": skipped,
+            "contractors": len(affected_contractors),
+        }
+
+    def initialize_parcel_survey_info(self, db: Session, payload: dict, current_user: User) -> dict:
+        """地块调查信息初始化（对齐 CS 版初始数据-调查信息）。
+
+        支持：调查员/调查日期/调查记事、审核员/审核日期/审核意见、指界人
+        （固定值或按户主），并支持「仅初始化空值」「仅处理承包地块」。
+        """
+        survey_date = payload.get("surveyDate")
+        check_date = payload.get("checkDate")
+        if survey_date and check_date and survey_date > check_date:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="调查日期必须小于审核日期",
+            )
+        text_values = {
+            "survey_person": payload.get("surveyPerson"),
+            "survey_note": payload.get("surveyNote"),
+            "check_person": payload.get("checkPerson"),
+            "check_opinion": payload.get("checkOpinion"),
+        }
+        text_values = {key: value for key, value in text_values.items() if value is not None}
+        refer_person = str(payload.get("referPerson") or "").strip()
+        refer_by_owner = bool(payload.get("referPersonByOwner"))
+        init_refer = bool(refer_person or refer_by_owner)
+        initialize_null = bool(payload.get("initializeNull"))
+        only_contract = bool(payload.get("onlyContractParcels"))
+        if not (text_values or survey_date or check_date or init_refer):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请至少选择一个初始化项")
+
+        def empty(value) -> bool:
+            return value is None or not str(value).strip()
+
+        owner_names: dict[str, str] = {}
+        processed = 0
+        updated = 0
+        skipped = 0
+        affected_contractors: set[str] = set()
+        seen: set[tuple[str, str]] = set()
+        for item in payload.get("items") or []:
+            cbfbm = str(item.get("cbfbm") or "").strip()
+            dkbm = str(item.get("dkbm") or "").strip()
+            if not cbfbm or not dkbm or (cbfbm, dkbm) in seen:
+                continue
+            seen.add((cbfbm, dkbm))
+            data_access_service.ensure_code_in_scope(
+                current_user, cbfbm, detail="承包方不在当前数据权限范围内"
+            )
+            relation = db.scalars(
+                select(SurveyCbdkxxResult)
+                .where(
+                    SurveyCbdkxxResult.cbfbm == cbfbm,
+                    SurveyCbdkxxResult.dkbm == dkbm,
+                    SurveyCbdkxxResult.result_status != "removed",
+                )
+                .order_by(SurveyCbdkxxResult.id.desc())
+            ).first()
+            if relation is None:
+                skipped += 1
+                continue
+            parcel = db.scalars(
+                select(SurveyDkResult)
+                .where(
+                    SurveyDkResult.dkbm == dkbm,
+                    SurveyDkResult.result_status != "removed",
+                )
+                .order_by(SurveyDkResult.id.desc())
+            ).first()
+            if parcel is None:
+                skipped += 1
+                continue
+            if only_contract and not empty(parcel.dklb) and str(parcel.dklb) != "10":
+                skipped += 1
+                continue
+            processed += 1
+            changed = False
+            for field, value in text_values.items():
+                current = getattr(parcel, field)
+                if initialize_null and not empty(current):
+                    continue
+                target = str(value).strip() or None
+                if current != target:
+                    setattr(parcel, field, target)
+                    changed = True
+            if survey_date is not None:
+                if not initialize_null or parcel.survey_date is None:
+                    if parcel.survey_date != survey_date:
+                        parcel.survey_date = survey_date
+                        changed = True
+            if check_date is not None:
+                if not initialize_null or parcel.check_date is None:
+                    if parcel.check_date != check_date:
+                        parcel.check_date = check_date
+                        changed = True
+            if init_refer:
+                if not initialize_null or empty(parcel.zjrxm):
+                    if refer_by_owner:
+                        if cbfbm not in owner_names:
+                            owner_names[cbfbm] = db.scalar(
+                                select(SurveyCbfResult.cbfmc)
+                                .where(SurveyCbfResult.cbfbm == cbfbm)
+                                .order_by(SurveyCbfResult.id.desc())
+                            ) or ""
+                        target_refer = owner_names[cbfbm]
+                    else:
+                        target_refer = refer_person
+                    if target_refer and parcel.zjrxm != target_refer:
+                        parcel.zjrxm = target_refer
+                        changed = True
+            if changed:
+                parcel.is_changed = True
+                updated += 1
+                affected_contractors.add(cbfbm)
+
+        db.commit()
+        return {
+            "processed": processed,
+            "updated": updated,
+            "skipped": skipped,
+            "contractors": len(affected_contractors),
+        }
+
+    def initialize_parcel_code_boundary(self, db: Session, payload: dict, current_user: User) -> dict:
+        """地块编码与四至获取（对齐 CS 版初始数据）。
+
+        - 地块编码：全部重新生成 / 重编合并部分，可从上往下从左往右排序，
+          可保留原 5 位调查编码（发包方编码 + 调查编码）；
+        - 四至：取括号前内容；按空间相邻关系获取周边地块并写入四至。
+        """
+        mode = payload.get("landCodeMode") or "none"
+        sort_by_position = bool(payload.get("sortByPosition"))
+        keep_survey_number = bool(payload.get("keepSurveyNumber"))
+        trim_neighbor = bool(payload.get("trimNeighborNote"))
+        fill_neighbors = bool(payload.get("fillNeighbors"))
+        if mode not in ("all", "merge") and not trim_neighbor and not fill_neighbors:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请至少选择一个初始化项")
+
+        targets: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for item in payload.get("items") or []:
+            cbfbm = str(item.get("cbfbm") or "").strip()
+            dkbm = str(item.get("dkbm") or "").strip()
+            if not cbfbm or not dkbm or (cbfbm, dkbm) in seen:
+                continue
+            seen.add((cbfbm, dkbm))
+            data_access_service.ensure_code_in_scope(
+                current_user, cbfbm, detail="承包方不在当前数据权限范围内"
+            )
+            relation = db.scalars(
+                select(SurveyCbdkxxResult)
+                .where(
+                    SurveyCbdkxxResult.cbfbm == cbfbm,
+                    SurveyCbdkxxResult.dkbm == dkbm,
+                    SurveyCbdkxxResult.result_status != "removed",
+                )
+                .order_by(SurveyCbdkxxResult.id.desc())
+            ).first()
+            if relation is None:
+                continue
+            parcel = db.scalars(
+                select(SurveyDkResult)
+                .where(
+                    SurveyDkResult.dkbm == dkbm,
+                    SurveyDkResult.result_status != "removed",
+                )
+                .order_by(SurveyDkResult.id.desc())
+            ).first()
+            if parcel is None:
+                continue
+            targets.append(
+                {
+                    "parcel": parcel,
+                    "relation": relation,
+                    "zone": (relation.fbfbm or dkbm[:14] or "").strip(),
+                }
+            )
+
+        if not targets:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未找到可初始化的地块")
+
+        def envelope(parcel: SurveyDkResult) -> tuple[float, float, float, float] | None:
+            row = db.execute(
+                text(
+                    "SELECT ST_XMin(geom), ST_YMin(geom), ST_XMax(geom), ST_YMax(geom) "
+                    "FROM survey_dk_result WHERE id = :id"
+                ),
+                {"id": parcel.id},
+            ).first()
+            if row is None or row[0] is None:
+                return None
+            return (float(row[0]), float(row[1]), float(row[2]), float(row[3]))
+
+        def order_targets(items: list[dict]) -> list[dict]:
+            if not sort_by_position:
+                return sorted(items, key=lambda item: item["parcel"].dkbm or "")
+            envs = {id(item["parcel"]): envelope(item["parcel"]) for item in items}
+            with_shape = [item for item in items if envs.get(id(item["parcel"]))]
+            if not with_shape:
+                return sorted(items, key=lambda item: item["parcel"].dkbm or "")
+            min_height = min(env[3] - env[1] for env in (envs[id(item["parcel"])] for item in with_shape))
+            if min_height <= 0:
+                min_height = 5.0
+            min_x = min(env[0] for env in (envs[id(item["parcel"])] for item in with_shape))
+            max_x = max(env[2] for env in (envs[id(item["parcel"])] for item in with_shape))
+            min_y = min(env[1] for env in (envs[id(item["parcel"])] for item in with_shape))
+            max_y = max(env[3] for env in (envs[id(item["parcel"])] for item in with_shape))
+            row_count = max(1, int(math.ceil((max_y - min_y) / min_height)))
+            ordered: list[dict] = []
+            used: set[int] = set()
+            for row_index in range(row_count + 1):
+                band_top = max_y - row_index * min_height
+                band_bottom = band_top - min_height
+                candidates = []
+                for item in with_shape:
+                    env = envs[id(item["parcel"])]
+                    key = id(item["parcel"])
+                    if key in used:
+                        continue
+                    if env[3] >= band_bottom and env[1] <= band_top:
+                        candidates.append(item)
+                candidates.sort(key=lambda item: envs[id(item["parcel"])][0])
+                for item in candidates:
+                    ordered.append(item)
+                    used.add(id(item["parcel"]))
+            ordered.extend(item for item in items if id(item["parcel"]) not in used)
+            _ = (min_x, max_x)
+            return ordered
+
+        zones: dict[str, list[dict]] = {}
+        for item in targets:
+            if item["zone"]:
+                zones.setdefault(item["zone"], []).append(item)
+
+        renumbered = 0
+        renumbered_parcel_ids: set[int] = set()
+        for zone, zone_items in zones.items():
+            if mode not in ("all", "merge"):
+                continue
+            # CS 口径：地块编码按**发包方（村组）全部地块**统一处理，勾选记录只用于确定范围。
+            zone_relations = db.scalars(
+                select(SurveyCbdkxxResult).where(
+                    SurveyCbdkxxResult.fbfbm == zone,
+                    SurveyCbdkxxResult.result_status != "removed",
+                )
+            ).all()
+            zone_dkbms = [rel.dkbm for rel in zone_relations if rel.dkbm]
+            zone_dk_rows = db.scalars(
+                select(SurveyDkResult)
+                .where(
+                    SurveyDkResult.dkbm.in_(zone_dkbms or [""]),
+                    SurveyDkResult.result_status != "removed",
+                )
+                .order_by(SurveyDkResult.dkbm.asc(), SurveyDkResult.id.desc())
+            ).all()
+            dk_map: dict[str, SurveyDkResult] = {}
+            for row in zone_dk_rows:
+                dk_map.setdefault(row.dkbm, row)
+            zone_work = [
+                {"parcel": dk_map[rel.dkbm], "relation": rel, "zone": zone}
+                for rel in zone_relations
+                if rel.dkbm in dk_map
+            ]
+            if not zone_work:
+                continue
+            ordered = order_targets(zone_work)
+            if mode == "merge":
+                renovate = [
+                    item for item in ordered
+                    if not (item["parcel"].dkbm or "").startswith(zone)
+                ]
+            else:
+                renovate = list(ordered)
+            if not renovate:
+                continue
+
+            existing_codes = {item["parcel"].dkbm for item in zone_work if item["parcel"].dkbm}
+            target_old_codes = {item["parcel"].dkbm for item in renovate}
+            suffixes: set[int] = set()
+            for code in existing_codes:
+                if code and len(code) == 19 and code[:14] == zone and code[14:].isdigit():
+                    suffixes.add(int(code[14:]))
+            non_target_suffixes = {
+                int(code[14:])
+                for code in existing_codes
+                if code not in target_old_codes
+                and len(code) == 19
+                and code[:14] == zone
+                and code[14:].isdigit()
+            }
+            next_index = 1 if mode == "all" else (max(suffixes) + 1 if suffixes else 1)
+            assignments: list[tuple[dict, str, str]] = []
+            assigned: set[int] = set()
+            for item in renovate:
+                old_code = item["parcel"].dkbm or ""
+                if keep_survey_number:
+                    tail = old_code[14:] if len(old_code) == 19 else old_code
+                    candidate = int(tail) if tail.isdigit() else next_index
+                else:
+                    candidate = next_index
+                while candidate in non_target_suffixes or candidate in assigned:
+                    candidate += 1
+                new_code = f"{zone}{candidate:05d}"
+                assigned.add(candidate)
+                if not keep_survey_number:
+                    next_index = candidate + 1
+                if new_code != old_code:
+                    assignments.append((item, old_code, new_code))
+
+            if not assignments:
+                continue
+            # 两阶段更新，避免 (tenant_code, dkbm) 唯一约束在互换编码时瞬时冲突。
+            for index, (item, _, _) in enumerate(assignments, start=1):
+                # 临时编码必须保留 14 位区域前缀，否则会话钩子会按“区域越权”拒绝写入。
+                temp_code = f"{zone}T{index:04d}"
+                item["parcel"].dkbm = temp_code
+                item["relation"].dkbm = temp_code
+            db.flush()
+            for item, _, new_code in assignments:
+                item["parcel"].dkbm = new_code
+                item["relation"].dkbm = new_code
+                item["parcel"].is_changed = True
+                item["relation"].is_changed = True
+                item["_renumbered"] = True
+                renumbered_parcel_ids.add(item["parcel"].id)
+            db.flush()
+            for _, old_code, new_code in assignments:
+                renumbered += 1
+                db.execute(
+                    update(SurveyJzdResult)
+                    .where(SurveyJzdResult.source_dkbm == old_code)
+                    .values(source_dkbm=new_code)
+                )
+                db.execute(
+                    update(SurveyJzxResult)
+                    .where(SurveyJzxResult.source_dkbm == old_code)
+                    .values(source_dkbm=new_code)
+                )
+
+        processed = 0
+        updated = 0
+        skipped = 0
+        affected_contractors: set[str] = set()
+        for item in targets:
+            parcel = item["parcel"]
+            relation = item["relation"]
+            processed += 1
+            changed = parcel.id in renumbered_parcel_ids
+            if trim_neighbor:
+                for field in ("dkdz", "dknz", "dkxz", "dkbz"):
+                    value = getattr(parcel, field)
+                    if not value:
+                        continue
+                    text_value = str(value)
+                    for separator in ("(", "（"):
+                        if separator in text_value:
+                            text_value = text_value.split(separator, 1)[0].strip()
+                    if text_value != value:
+                        setattr(parcel, field, text_value or None)
+                        changed = True
+            if fill_neighbors:
+                center = db.execute(
+                    text(
+                        "SELECT ST_X(ST_Centroid(geom)), ST_Y(ST_Centroid(geom)) "
+                        "FROM survey_dk_result WHERE id = :id"
+                    ),
+                    {"id": parcel.id},
+                ).first()
+                if center is not None and center[0] is not None:
+                    neighbors = db.execute(
+                        text(
+                            "SELECT c.cbfmc, "
+                            "ST_X(ST_Centroid(d.geom)) - :tx AS dx, "
+                            "ST_Y(ST_Centroid(d.geom)) - :ty AS dy "
+                            "FROM survey_dk_result d "
+                            "JOIN survey_cbdkxx_result r ON r.dkbm = d.dkbm AND r.tenant_code = d.tenant_code "
+                            "JOIN survey_cbf_result c ON c.cbfbm = r.cbfbm AND c.tenant_code = r.tenant_code "
+                            "WHERE d.tenant_code = :tenant AND d.id <> :pid "
+                            "AND d.result_status <> 'removed' "
+                            "AND ST_Intersects(d.geom, ST_Buffer((SELECT geom FROM survey_dk_result WHERE id = :pid), 0.5))"
+                        ),
+                        {
+                            "tenant": parcel.tenant_code,
+                            "pid": parcel.id,
+                            "tx": center[0],
+                            "ty": center[1],
+                        },
+                    ).all()
+                    direction_names: dict[str, list[str]] = {
+                        "dkdz": [], "dknz": [], "dkxz": [], "dkbz": []
+                    }
+                    for name, dx, dy in neighbors:
+                        label = (name or "").strip()
+                        if not label:
+                            continue
+                        if abs(float(dx)) >= abs(float(dy)):
+                            field = "dkdz" if float(dx) > 0 else "dkxz"
+                        else:
+                            field = "dkbz" if float(dy) > 0 else "dknz"
+                        if label not in direction_names[field]:
+                            direction_names[field].append(label)
+                    for field, names in direction_names.items():
+                        if not names:
+                            continue
+                        target_value = "、".join(names)
+                        if getattr(parcel, field) != target_value:
+                            setattr(parcel, field, target_value)
+                            changed = True
+            if changed:
+                parcel.is_changed = True
+                relation.is_changed = True
+                updated += 1
+                affected_contractors.add(relation.cbfbm)
+
+        db.commit()
+        return {
+            "processed": processed,
+            "updated": updated,
+            "renumbered": renumbered,
+            "skipped": skipped,
+            "contractors": len(affected_contractors),
+        }
+
+    @staticmethod
+    def _format_area(value, decimals: int, round_mode: str):
+        if value is None:
+            return None
+        if round_mode == "cut":
+            factor = 10**decimals
+            return math.trunc(float(value) * factor) / factor
+        quantum = Decimal(1).scaleb(-decimals)
+        return float(
+            Decimal(str(value)).quantize(quantum, rounding=ROUND_HALF_UP)
+        )
+
+    def calculate_parcel_areas(self, db: Session, payload: dict, current_user: User) -> dict:
+        """面积量算（CS 初始数据-面积量算）：平面面积 × 0.0015 → 亩。"""
+        decimals = int(payload.get("decimals", 2))
+        round_mode = payload.get("roundMode") or "round"
+        to_actual = bool(payload.get("toActualArea"))
+        to_aware = bool(payload.get("toAwareArea"))
+        if not (to_actual or to_aware):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请选择面积量算方式")
+
+        processed = 0
+        updated = 0
+        skipped = 0
+        affected_contractors: set[str] = set()
+        seen: set[tuple[str, str]] = set()
+        for item in payload.get("items") or []:
+            cbfbm = str(item.get("cbfbm") or "").strip()
+            dkbm = str(item.get("dkbm") or "").strip()
+            if not cbfbm or not dkbm or (cbfbm, dkbm) in seen:
+                continue
+            seen.add((cbfbm, dkbm))
+            data_access_service.ensure_code_in_scope(
+                current_user, cbfbm, detail="承包方不在当前数据权限范围内"
+            )
+            relation = db.scalars(
+                select(SurveyCbdkxxResult)
+                .where(
+                    SurveyCbdkxxResult.cbfbm == cbfbm,
+                    SurveyCbdkxxResult.dkbm == dkbm,
+                    SurveyCbdkxxResult.result_status != "removed",
+                )
+                .order_by(SurveyCbdkxxResult.id.desc())
+            ).first()
+            if relation is None:
+                skipped += 1
+                continue
+            parcel = db.scalars(
+                select(SurveyDkResult)
+                .where(
+                    SurveyDkResult.dkbm == dkbm,
+                    SurveyDkResult.result_status != "removed",
+                )
+                .order_by(SurveyDkResult.id.desc())
+            ).first()
+            if parcel is None:
+                skipped += 1
+                continue
+            area_m2 = db.scalar(
+                text("SELECT ST_Area(geom) FROM survey_dk_result WHERE id = :id"),
+                {"id": parcel.id},
+            )
+            if area_m2 is None:
+                skipped += 1
+                continue
+            processed += 1
+            area_mu = self._format_area(float(area_m2) * 0.0015, decimals, round_mode)
+            changed = False
+            if to_actual and area_mu is not None:
+                new_scmj = Decimal(str(area_mu * 666.6666667)).quantize(Decimal("0.01"))
+                if parcel.scmj != new_scmj:
+                    parcel.scmj = new_scmj
+                    parcel.is_changed = True
+                    changed = True
+            if to_aware and area_mu is not None:
+                new_mu = Decimal(str(area_mu)).quantize(Decimal("0.01"))
+                if relation.htmjm != new_mu:
+                    relation.htmjm = new_mu
+                    relation.is_changed = True
+                    changed = True
+            if changed:
+                updated += 1
+                affected_contractors.add(cbfbm)
+
+        db.commit()
+        return {
+            "processed": processed,
+            "updated": updated,
+            "skipped": skipped,
+            "contractors": len(affected_contractors),
+        }
+
+    def truncate_parcel_areas(self, db: Session, payload: dict, current_user: User) -> dict:
+        """面积截取（CS 初始数据-面积截取）：按小数位整理实测/确权/二轮合同面积。"""
+        decimals = int(payload.get("decimals", 2))
+        round_mode = payload.get("roundMode") or "round"
+        to_actual = bool(payload.get("actualArea"))
+        to_aware = bool(payload.get("awareArea"))
+        to_table = bool(payload.get("tableArea"))
+        if not (to_actual or to_aware or to_table):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请选择面积截取项")
+
+        divisor = Decimal(str(SQM_PER_MU))
+        processed = 0
+        updated = 0
+        skipped = 0
+        affected_contractors: set[str] = set()
+        seen: set[tuple[str, str]] = set()
+        for item in payload.get("items") or []:
+            cbfbm = str(item.get("cbfbm") or "").strip()
+            dkbm = str(item.get("dkbm") or "").strip()
+            if not cbfbm or not dkbm or (cbfbm, dkbm) in seen:
+                continue
+            seen.add((cbfbm, dkbm))
+            data_access_service.ensure_code_in_scope(
+                current_user, cbfbm, detail="承包方不在当前数据权限范围内"
+            )
+            relation = db.scalars(
+                select(SurveyCbdkxxResult)
+                .where(
+                    SurveyCbdkxxResult.cbfbm == cbfbm,
+                    SurveyCbdkxxResult.dkbm == dkbm,
+                    SurveyCbdkxxResult.result_status != "removed",
+                )
+                .order_by(SurveyCbdkxxResult.id.desc())
+            ).first()
+            if relation is None:
+                skipped += 1
+                continue
+            parcel = db.scalars(
+                select(SurveyDkResult)
+                .where(
+                    SurveyDkResult.dkbm == dkbm,
+                    SurveyDkResult.result_status != "removed",
+                )
+                .order_by(SurveyDkResult.id.desc())
+            ).first()
+            if parcel is None:
+                skipped += 1
+                continue
+            processed += 1
+            changed = False
+            if to_actual and parcel.scmj is not None:
+                current_mu = float(Decimal(str(parcel.scmj)) / divisor)
+                new_mu = self._format_area(current_mu, decimals, round_mode)
+                new_scmj = Decimal(str(new_mu * 666.6666667)).quantize(Decimal("0.01"))
+                if parcel.scmj != new_scmj:
+                    parcel.scmj = new_scmj
+                    parcel.is_changed = True
+                    changed = True
+            if to_aware and relation.htmjm is not None:
+                new_mu = self._format_area(float(relation.htmjm), decimals, round_mode)
+                new_value = Decimal(str(new_mu)).quantize(Decimal(1).scaleb(-decimals))
+                if relation.htmjm != new_value:
+                    relation.htmjm = new_value
+                    relation.is_changed = True
+                    changed = True
+            if to_table and relation.yhtmjm is not None:
+                new_mu = self._format_area(float(relation.yhtmjm), decimals, round_mode)
+                new_value = Decimal(str(new_mu)).quantize(Decimal(1).scaleb(-decimals))
+                if relation.yhtmjm != new_value:
+                    relation.yhtmjm = new_value
+                    relation.is_changed = True
+                    changed = True
+            if changed:
+                updated += 1
+                affected_contractors.add(cbfbm)
+
+        db.commit()
+        return {
+            "processed": processed,
+            "updated": updated,
+            "skipped": skipped,
+            "contractors": len(affected_contractors),
+        }
+
+    def analyze_basic_farmland(self, db: Session, payload: dict, current_user: User) -> dict:
+        """基本农田分析（对齐 CS 版初始数据-基本农田）。
+
+        以勾选地块与永久基本农田保护图斑（``yjjbntbhtb``）做空间相交分析：
+        相交 → 是否基本农田 = 是（1），否则 = 否（0）。
+        """
+        layer_total = db.scalar(text('SELECT count(*) FROM public.yjjbntbhtb')) or 0
+        layer_srid = db.scalar(
+            text('SELECT ST_SRID("Shape") FROM public.yjjbntbhtb WHERE "Shape" IS NOT NULL LIMIT 1')
+        )
+        if not layer_total or layer_srid is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="未获得基本农田保护图斑数据",
+            )
+
+        processed = 0
+        updated = 0
+        yes_count = 0
+        no_count = 0
+        skipped = 0
+        affected_contractors: set[str] = set()
+        seen: set[tuple[str, str]] = set()
+        for item in payload.get("items") or []:
+            cbfbm = str(item.get("cbfbm") or "").strip()
+            dkbm = str(item.get("dkbm") or "").strip()
+            if not cbfbm or not dkbm or (cbfbm, dkbm) in seen:
+                continue
+            seen.add((cbfbm, dkbm))
+            data_access_service.ensure_code_in_scope(
+                current_user, cbfbm, detail="承包方不在当前数据权限范围内"
+            )
+            relation = db.scalars(
+                select(SurveyCbdkxxResult)
+                .where(
+                    SurveyCbdkxxResult.cbfbm == cbfbm,
+                    SurveyCbdkxxResult.dkbm == dkbm,
+                    SurveyCbdkxxResult.result_status != "removed",
+                )
+                .order_by(SurveyCbdkxxResult.id.desc())
+            ).first()
+            parcel = db.scalars(
+                select(SurveyDkResult)
+                .where(
+                    SurveyDkResult.dkbm == dkbm,
+                    SurveyDkResult.result_status != "removed",
+                )
+                .order_by(SurveyDkResult.id.desc())
+            ).first()
+            if relation is None or parcel is None:
+                skipped += 1
+                continue
+            target_srid = db.scalar(
+                text("SELECT ST_SRID(geom) FROM survey_dk_result WHERE id = :id"),
+                {"id": parcel.id},
+            )
+            if not target_srid:
+                skipped += 1
+                continue
+            intersects = db.scalar(
+                text(
+                    'SELECT EXISTS ('
+                    '  SELECT 1 FROM public.yjjbntbhtb b '
+                    '  WHERE b."Shape" IS NOT NULL AND ST_Intersects('
+                    '    CASE '
+                    '      WHEN :layer_srid = 0 THEN ST_SetSRID(b."Shape", :target_srid) '
+                    '      WHEN :layer_srid = :target_srid THEN b."Shape" '
+                    '      ELSE ST_Transform(b."Shape", :target_srid) '
+                    '    END, '
+                    '    (SELECT geom FROM survey_dk_result WHERE id = :pid)'
+                    '  )'
+                    ')'
+                ),
+                {
+                    "layer_srid": int(layer_srid),
+                    "target_srid": int(target_srid),
+                    "pid": parcel.id,
+                },
+            )
+            processed += 1
+            new_value = "1" if intersects else "0"
+            if new_value == "1":
+                yes_count += 1
+            else:
+                no_count += 1
+            if parcel.sfjbnt != new_value:
+                parcel.sfjbnt = new_value
+                parcel.is_changed = True
+                relation.is_changed = True
+                updated += 1
+                affected_contractors.add(cbfbm)
+
+        db.commit()
+        return {
+            "processed": processed,
+            "updated": updated,
+            "yes": yes_count,
+            "no": no_count,
             "skipped": skipped,
             "contractors": len(affected_contractors),
         }

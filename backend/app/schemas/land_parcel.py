@@ -4,6 +4,7 @@ from pydantic import BaseModel
 class LandParcelItem(BaseModel):
     dkbm: str
     dkmc: str | None = None
+    image_number: str | None = None
     htmj: str | None = None
     yhtmj: str | None = None
     htmjm: str | None = None
@@ -21,6 +22,12 @@ class LandParcelItem(BaseModel):
     dkbz: str | None = None
     dkbzxx: str | None = None
     zjrxm: str | None = None
+    survey_person: str | None = None
+    survey_date: str | None = None
+    survey_note: str | None = None
+    check_person: str | None = None
+    check_date: str | None = None
+    check_opinion: str | None = None
     fbfbm: str | None = None
     fbfmc: str | None = None
     cbjyqqdfs: str | None = None

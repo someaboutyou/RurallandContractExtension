@@ -64,6 +64,7 @@ def upgrade_schema(engine: Engine) -> None:
     _upgrade_survey_cbf_base_task_columns(engine)
     _upgrade_survey_contractor_lock(engine)
     _upgrade_survey_parcel_uniqueness(engine)
+    _upgrade_survey_parcel_image_number(engine)
     _upgrade_survey_boundary_uniqueness(engine)
     _upgrade_cbht_contract_columns(engine)
     _upgrade_gb_import_trace_columns(engine)
@@ -2003,6 +2004,36 @@ def _upgrade_survey_parcel_uniqueness(engine: Engine) -> None:
                 connection.exec_driver_sql(
                     f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} ON {table_name} ({columns})"
                 )
+
+
+def _upgrade_survey_parcel_image_number(engine: Engine) -> None:
+    """承包地块结果表补「图幅编号」与地块调查信息列；界址线补邻宗地信息列。"""
+    inspector = inspect(engine)
+    if inspector.has_table("survey_dk_result"):
+        columns = {c["name"] for c in inspector.get_columns("survey_dk_result")}
+        additions = (
+            ("image_number", "VARCHAR(255)"),
+            ("survey_person", "VARCHAR(50)"),
+            ("survey_date", "DATE"),
+            ("survey_note", "VARCHAR(300)"),
+            ("check_person", "VARCHAR(50)"),
+            ("check_date", "DATE"),
+            ("check_opinion", "VARCHAR(300)"),
+        )
+        with engine.begin() as connection:
+            for name, column_type in additions:
+                _add_column_if_missing(
+                    connection, columns, "survey_dk_result", name, column_type
+                )
+    if inspector.has_table("survey_jzx_result"):
+        jzx_columns = {c["name"] for c in inspector.get_columns("survey_jzx_result")}
+        with engine.begin() as connection:
+            _add_column_if_missing(
+                connection, jzx_columns, "survey_jzx_result", "neighbor_person", "VARCHAR(100)"
+            )
+            _add_column_if_missing(
+                connection, jzx_columns, "survey_jzx_result", "neighbor_refer", "VARCHAR(100)"
+            )
 
 
 def _upgrade_survey_boundary_uniqueness(engine: Engine) -> None:

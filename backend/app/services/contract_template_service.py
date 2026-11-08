@@ -1241,6 +1241,7 @@ class ContractTemplateService:
             parcels.append({
                 "dkbm": relation.dkbm or "",
                 "dkmc": dk.dkmc if dk else "",
+                "sheet_no": (dk.image_number if dk else "") or "",
                 "dklb_text": category_options.get(dk.dklb if dk else "", ""),
                 "fbfbm": relation.fbfbm or "",
                 "htmjm": f"{htmjm:.2f}" if htmjm else "",
@@ -1263,10 +1264,14 @@ class ContractTemplateService:
                     for label, codes in CADASTRAL_LANDUSE_OPTIONS
                 ],
                 "basic_farmland": (dk.sfjbnt if dk else "") == "1",
-                "survey_note": "经调查该地块信息准确无误。",
-                "audit_note": "同意。",
-                "auditor": "",
-                "audit_date_text": "",
+                "survey_note": (dk.survey_note if dk else "") or "",
+                "audit_note": (dk.check_opinion if dk else "") or "",
+                "auditor": (dk.check_person if dk else "") or "",
+                "audit_date_text": (
+                    dk.check_date.strftime("%Y年%m月%d日")
+                    if dk is not None and dk.check_date
+                    else ""
+                ),
             })
         return parcels
 

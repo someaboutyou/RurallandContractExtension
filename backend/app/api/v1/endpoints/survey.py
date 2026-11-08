@@ -70,9 +70,17 @@ from app.schemas.survey import (
     SurveyParcelGeometryValidateRequest,
     SurveyParcelBoundaryRead,
     SurveyParcelBoundaryUpdate,
+    SurveyParcelAreaCalculateRequest,
+    SurveyParcelAreaTruncateRequest,
+    SurveyParcelBasicFarmlandRequest,
+    SurveyParcelBoundaryInitializeRequest,
+    SurveyParcelCodeBoundaryRequest,
+    SurveyParcelImageNumberRequest,
     SurveyParcelInitializeRequest,
+    SurveyParcelSurveyInfoRequest,
     SurveyPendingOperation,
     SurveyQualityCheckStart,
+    ParcelVectorExportRequest,
 )
 from app.services.contract_template_service import contract_template_service
 from app.services.dictionary_service import (
@@ -536,6 +544,134 @@ def initialize_parcel_attributes(
             db, payload.model_dump(), current_user
         )
     }
+
+
+@router.post("/parcels/calculate-area", response_model=ApiResponse[dict])
+def calculate_parcel_areas(
+    payload: SurveyParcelAreaCalculateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """面积量算（CS 初始数据-面积量算）：平面面积换算为实测/确权面积。"""
+    return {
+        "data": survey_service.calculate_parcel_areas(
+            db, payload.model_dump(), current_user
+        )
+    }
+
+
+@router.post("/parcels/truncate-area", response_model=ApiResponse[dict])
+def truncate_parcel_areas(
+    payload: SurveyParcelAreaTruncateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """面积截取（CS 初始数据-面积截取）：按小数位整理面积。"""
+    return {
+        "data": survey_service.truncate_parcel_areas(
+            db, payload.model_dump(), current_user
+        )
+    }
+
+
+@router.post("/parcels/initialize-code-boundary", response_model=ApiResponse[dict])
+def initialize_parcel_code_boundary(
+    payload: SurveyParcelCodeBoundaryRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """地块编码与四至获取（对齐 CS 版初始数据-地块编码/获取四至）。"""
+    return {
+        "data": survey_service.initialize_parcel_code_boundary(
+            db, payload.model_dump(), current_user
+        )
+    }
+
+
+@router.post("/parcels/initialize-survey-info", response_model=ApiResponse[dict])
+def initialize_parcel_survey_info(
+    payload: SurveyParcelSurveyInfoRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """地块调查信息初始化（对齐 CS 版初始数据-调查信息）。"""
+    return {
+        "data": survey_service.initialize_parcel_survey_info(
+            db, payload.model_dump(), current_user
+        )
+    }
+
+
+@router.post("/parcels/initialize-image-number", response_model=ApiResponse[dict])
+def initialize_parcel_image_numbers(
+    payload: SurveyParcelImageNumberRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """承包地块图幅编号初始化（对齐 CS 版承包台账-初始数据-图幅编号）。"""
+    return {
+        "data": survey_service.initialize_image_numbers(
+            db, payload.model_dump(), current_user
+        )
+    }
+
+
+@router.post("/parcels/analyze-basic-farmland", response_model=ApiResponse[dict])
+def analyze_parcel_basic_farmland(
+    payload: SurveyParcelBasicFarmlandRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """基本农田分析（CS 初始数据-基本农田）：与永久基本农田保护图斑空间相交。"""
+    return {
+        "data": survey_service.analyze_basic_farmland(
+            db, payload.model_dump(), current_user
+        )
+    }
+
+
+@router.post("/parcels/initialize-boundary", response_model=ApiResponse[dict])
+def initialize_parcel_boundary(
+    payload: SurveyParcelBoundaryInitializeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """界址初始化（对齐 CS 版初始数据-界址数据）：批量生成界址点/界址线。"""
+    return {
+        "data": survey_service.initialize_parcels_boundary(
+            db, payload.model_dump(), current_user
+        )
+    }
+
+
+@router.post("/parcels/export-vector")
+def export_parcel_vector(
+    payload: ParcelVectorExportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """承包地块矢量数据导出：承包地块 / 界址点 / 界址线（Shapefile / GDB）。"""
+    from urllib.parse import quote
+
+    from app.services.parcel_vector_export_service import (
+        parcel_vector_export_service,
+    )
+
+    try:
+        filename, content = parcel_vector_export_service.export(
+            db,
+            [item.model_dump() for item in payload.items],
+            payload.layers,
+            payload.format,
+            current_user,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
 
 
 @router.post("/parcels/export-docx")

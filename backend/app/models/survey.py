@@ -1,7 +1,7 @@
-﻿from datetime import datetime
+﻿from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, Integer, JSON, Numeric, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Integer, JSON, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TenantScopedMixin, TimestampMixin
@@ -387,6 +387,8 @@ class SurveyDkResult(TenantScopedMixin, TimestampMixin, Base):
     ysdm: Mapped[str] = mapped_column(String(6), nullable=False)
     dkbm: Mapped[str] = mapped_column(String(19), nullable=False, index=True)
     dkmc: Mapped[str] = mapped_column(String(50), nullable=False)
+    #: 图幅编号（1:2000/1:1000/1:500 公里格网，按地块图形初始化）。
+    image_number: Mapped[str | None] = mapped_column(String(255), nullable=True)
     syqxz: Mapped[str | None] = mapped_column(String(2), nullable=True)
     dklb: Mapped[str] = mapped_column(String(2), nullable=False)
     tdlylx: Mapped[str | None] = mapped_column(String(3), nullable=True)
@@ -400,6 +402,13 @@ class SurveyDkResult(TenantScopedMixin, TimestampMixin, Base):
     dkbz: Mapped[str | None] = mapped_column(String(50), nullable=True)
     dkbzxx: Mapped[str | None] = mapped_column(String(300), nullable=True)
     zjrxm: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    #: 地块调查信息（CS 版 LandExpand：调查员/日期/记事、审核员/日期/意见）。
+    survey_person: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    survey_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    survey_note: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    check_person: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    check_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    check_opinion: Mapped[str | None] = mapped_column(String(300), nullable=True)
     survey_status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_surveyed")
     result_status: Mapped[str] = mapped_column(String(32), nullable=False, default="normal")
     is_changed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -650,6 +659,9 @@ class SurveyJzxResult(TenantScopedMixin, TimestampMixin, Base):
     jzxwz: Mapped[str | None] = mapped_column(String(2), nullable=True)
     #: 界址线说明
     jzxsm: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: 邻宗地权利人 / 邻宗地指界人（CS 版界址线属性）。
+    neighbor_person: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    neighbor_refer: Mapped[str | None] = mapped_column(String(100), nullable=True)
     #: 首次生成该界址线的地块编码；仅用于追溯与区域归属推导，不参与判重
     source_dkbm: Mapped[str | None] = mapped_column(String(19), nullable=True, index=True)
     source_import_batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True)

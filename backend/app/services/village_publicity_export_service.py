@@ -343,7 +343,7 @@ class VillagePublicityExportService:
                     parcel_cells = [
                         (21, _text(dk.dkmc) if dk else "", dict(wrap=True, left=True)),
                         (22, _text(link.dkbm), {}),
-                        (23, "", {}),  # 图幅编号：库无此字段
+                        (23, _text(getattr(dk, "image_number", None)) if dk else "", {}),
                         (24, _mu(link.htmj), {}),
                         (25, _mu(dk.scmj) if dk else None, {}),
                     ]
@@ -361,14 +361,14 @@ class VillagePublicityExportService:
                         (34, (_text(dk.sfjbnt) == "1" and "是" or (_text(dk.sfjbnt) == "0" and "否" or "")) if dk else "", {}),
                         (35, _text(dk.zjrxm) if dk else "", {}),
                         (36, _dict_text(maps, "dklb", dk.dklb) if dk else "", {}),
-                        (37, "", {}),  # 备注：库无此字段
+                        (37, _text(dk.dkbzxx) if dk else "", {}),
                         (38, "", {}),  # 地块修改意见：公示时留白
-                        (39, "", {}),  # 地块调查员：库无 per-地块调查员
-                        (40, "", {}),
-                        (41, "", {}),
-                        (42, "", {}),
-                        (43, "", {}),
-                        (44, "", {}),
+                        (39, _text(dk.survey_person) if dk else "", {}),
+                        (40, dk.survey_date.isoformat() if dk and dk.survey_date else "", {}),
+                        (41, _text(dk.survey_note) if dk else "", {}),
+                        (42, _text(dk.check_person) if dk else "", {}),
+                        (43, dk.check_date.isoformat() if dk and dk.check_date else "", {}),
+                        (44, _text(dk.check_opinion) if dk else "", {}),
                         (45, "", {}),  # 签字人(按印)：公示后手签
                     ])
                 else:

@@ -1,4 +1,4 @@
-﻿from datetime import datetime
+﻿from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -454,6 +454,8 @@ class SurveyBoundaryLineUpdate(BaseModel):
     jzxlb: str | None = Field(default=None, max_length=2)
     jzxwz: str | None = Field(default=None, max_length=2)
     jzxsm: str | None = Field(default=None, max_length=200)
+    neighborPerson: str | None = Field(default=None, max_length=100)
+    neighborRefer: str | None = Field(default=None, max_length=100)
 
 
 class SurveyParcelBoundaryUpdate(BaseModel):
@@ -493,6 +495,8 @@ class SurveyBoundaryLineRead(BaseModel):
     jzxlb: str | None = None
     jzxwz: str | None = None
     jzxsm: str | None = None
+    neighborPerson: str | None = None
+    neighborRefer: str | None = None
     registered: bool = False
 
 
@@ -664,6 +668,104 @@ class SurveyParcelAttributeUpdate(BaseModel):
 class SurveyParcelInitializeItem(BaseModel):
     cbfbm: str = Field(min_length=1, max_length=18)
     dkbm: str = Field(min_length=1, max_length=19)
+
+
+class SurveyParcelImageNumberRequest(BaseModel):
+    """图幅编号初始化（对齐 CS 版承包台账-初始数据-图幅编号）。"""
+
+    items: list[SurveyParcelInitializeItem] = Field(min_length=1, max_length=2000)
+    #: 比例尺：1:2000（1km 格网）/ 1:1000（500m）/ 1:500（250m）。
+    scale: Literal["1:2000", "1:1000", "1:500"] = "1:2000"
+    #: true = X-Y，false = Y-X（CS 默认 Y-X）。
+    useYX: bool = False
+    #: 对边长超过格网尺寸的边加密取点，保证覆盖全部相交图幅。
+    initialAll: bool = False
+
+
+class SurveyParcelSurveyInfoRequest(BaseModel):
+    """地块调查信息初始化（对齐 CS 版初始数据-调查信息）。"""
+
+    items: list[SurveyParcelInitializeItem] = Field(min_length=1, max_length=2000)
+    surveyPerson: str | None = Field(default=None, max_length=50)
+    surveyDate: date | None = None
+    surveyNote: str | None = Field(default=None, max_length=300)
+    checkPerson: str | None = Field(default=None, max_length=50)
+    checkDate: date | None = None
+    checkOpinion: str | None = Field(default=None, max_length=300)
+    referPerson: str | None = Field(default=None, max_length=100)
+    referPersonByOwner: bool = False
+    #: 仅填充当前为空的字段（CS「初始化空值」）。
+    initializeNull: bool = False
+    #: 仅处理地块类别为 10（承包地块）的记录。
+    onlyContractParcels: bool = False
+
+
+class SurveyParcelCodeBoundaryRequest(BaseModel):
+    """地块编码与四至获取（对齐 CS 版初始数据-地块编码/获取四至）。"""
+
+    items: list[SurveyParcelInitializeItem] = Field(min_length=1, max_length=2000)
+    #: none=不重编；all=全部重新生成；merge=重编合并部分（仅非本发包方编码前缀）。
+    landCodeMode: Literal["none", "all", "merge"] = "none"
+    #: 地块编码从上往下、从左往右排序。
+    sortByPosition: bool = False
+    #: 发包方编码 + 调查编码（保留原 5 位调查编码）。
+    keepSurveyNumber: bool = False
+    #: 获取四至（取括号前的内容）。
+    trimNeighborNote: bool = False
+    #: 获取地块周边相邻地块并写入四至。
+    fillNeighbors: bool = False
+
+
+class SurveyParcelAreaCalculateRequest(BaseModel):
+    """面积量算（CS 初始数据-面积量算）：平面面积换算为亩。"""
+
+    items: list[SurveyParcelInitializeItem] = Field(min_length=1, max_length=2000)
+    decimals: int = Field(default=2, ge=0, le=2)
+    roundMode: Literal["round", "cut"] = "round"
+    toActualArea: bool = False
+    toAwareArea: bool = False
+
+
+class SurveyParcelAreaTruncateRequest(BaseModel):
+    """面积截取（CS 初始数据-面积截取）：按指定小数位整理亩值。"""
+
+    items: list[SurveyParcelInitializeItem] = Field(min_length=1, max_length=2000)
+    decimals: int = Field(default=2, ge=0, le=2)
+    roundMode: Literal["round", "cut"] = "round"
+    actualArea: bool = False
+    awareArea: bool = False
+    tableArea: bool = False
+
+
+class ParcelVectorExportRequest(BaseModel):
+    """承包地块矢量数据导出（承包地块 / 界址点 / 界址线）。"""
+
+    items: list[SurveyParcelInitializeItem] = Field(min_length=1, max_length=2000)
+    layers: list[Literal["dk", "jzd", "jzx"]] = Field(min_length=1, max_length=3)
+    format: Literal["shp", "gdb"] = "shp"
+
+
+class SurveyParcelBoundaryInitializeRequest(BaseModel):
+    """界址初始化（对齐 CS 版初始数据-界址数据）。"""
+
+    items: list[SurveyParcelInitializeItem] = Field(min_length=1, max_length=2000)
+    markType: str | None = Field(default=None, max_length=2)
+    lineType: str | None = Field(default=None, max_length=2)
+    linePosition: str | None = Field(default=None, max_length=2)
+    filterByAngle: bool = True
+    minAngle: float = Field(default=160.0, ge=0, le=200)
+    maxAngle: float = Field(default=200.0, ge=0, le=200)
+    writeLineLength: bool = True
+    #: 邻宗地判定距离（米），CS 默认 1.5。
+    neighborDistance: float = Field(default=1.5, ge=0, le=100)
+    #: 写入邻宗地权利人 / 邻宗地指界人。
+    writeNeighbor: bool = True
+
+
+class SurveyParcelBasicFarmlandRequest(BaseModel):
+    """基本农田分析（对齐 CS 版初始数据-基本农田）。"""
+
+    items: list[SurveyParcelInitializeItem] = Field(min_length=1, max_length=2000)
 
 
 class SurveyParcelInitializeRequest(BaseModel):

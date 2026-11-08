@@ -370,6 +370,63 @@ export function initializeParcelAttributes(payload) {
   return http.post("/surveys/parcels/initialize", payload, { timeout: 180000 });
 }
 
+/** 承包地块图幅编号初始化（CS 初始数据-图幅编号）。 */
+export function initializeParcelImageNumbers(payload) {
+  return http.post("/surveys/parcels/initialize-image-number", payload, {
+    timeout: 300000,
+  });
+}
+
+/** 承包地块调查信息初始化（CS 初始数据-调查信息）。 */
+export function initializeParcelSurveyInfo(payload) {
+  return http.post("/surveys/parcels/initialize-survey-info", payload, {
+    timeout: 180000,
+  });
+}
+
+/** 承包地块编码与四至获取（CS 初始数据-地块编码/获取四至）。 */
+export function initializeParcelCodeBoundary(payload) {
+  return http.post("/surveys/parcels/initialize-code-boundary", payload, {
+    timeout: 300000,
+  });
+}
+
+/** 面积量算（CS 初始数据-面积量算）。 */
+export function calculateParcelAreas(payload) {
+  return http.post("/surveys/parcels/calculate-area", payload, {
+    timeout: 300000,
+  });
+}
+
+/** 面积截取（CS 初始数据-面积截取）。 */
+export function truncateParcelAreas(payload) {
+  return http.post("/surveys/parcels/truncate-area", payload, {
+    timeout: 180000,
+  });
+}
+
+/** 承包地块矢量数据导出（承包地块/界址点/界址线，Shapefile 或 GDB）。 */
+export function exportParcelVector(payload) {
+  return http.post("/surveys/parcels/export-vector", payload, {
+    responseType: "blob",
+    timeout: 600000,
+  });
+}
+
+/** 界址初始化（CS 初始数据-界址数据）：批量生成界址点/界址线。 */
+export function initializeParcelBoundary(payload) {
+  return http.post("/surveys/parcels/initialize-boundary", payload, {
+    timeout: 600000,
+  });
+}
+
+/** 基本农田分析（CS 初始数据-基本农田）。 */
+export function analyzeParcelBasicFarmland(payload) {
+  return http.post("/surveys/parcels/analyze-basic-farmland", payload, {
+    timeout: 300000,
+  });
+}
+
 /** 导出选中地块的《承包地块调查表》Word（一个返回 docx，多个返回 zip）。 */
 export function exportParcelSurveyDocx(payload) {
   return http.post("/surveys/parcels/export-docx", payload, {

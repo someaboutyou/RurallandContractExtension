@@ -195,6 +195,28 @@
                 />
               </template>
             </el-table-column>
+            <el-table-column label="邻宗地权利人" min-width="130">
+              <template #default="{ row }">
+                <el-input
+                  v-model="row.neighborPerson"
+                  size="small"
+                  maxlength="100"
+                  :disabled="!canEdit"
+                  placeholder="选填"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="邻宗地指界人" min-width="130">
+              <template #default="{ row }">
+                <el-input
+                  v-model="row.neighborRefer"
+                  size="small"
+                  maxlength="100"
+                  :disabled="!canEdit"
+                  placeholder="选填"
+                />
+              </template>
+            </el-table-column>
           </el-table>
         </el-tab-pane>
       </el-tabs>
@@ -334,6 +356,8 @@ async function handleSave() {
         jzxlb: item.jzxlb || null,
         jzxwz: item.jzxwz || null,
         jzxsm: item.jzxsm || null,
+        neighborPerson: item.neighborPerson || null,
+        neighborRefer: item.neighborRefer || null,
       })),
     };
     const { data } = await saveParcelBoundary(
