@@ -534,12 +534,12 @@ export function fetchHouseholdApplication(batchId, contractorUid) {
   );
 }
 
-// 导出《单户登记申请书》Word
-export function exportHouseholdApplicationDocx(batchId, contractorUid) {
+// 导出《单户登记申请书》Word（config 可覆盖 timeout 等，批量下载逐户调用时放宽超时）
+export function exportHouseholdApplicationDocx(batchId, contractorUid, config = {}) {
   return http.post(
     `/surveys/batches/${batchId}/results/${contractorUid}/household-application/export-docx`,
     null,
-    { responseType: "blob" }
+    { responseType: "blob", ...config }
   );
 }
 
@@ -555,6 +555,15 @@ export function printSurveyContract(batchId, contractorUid, cbhtbm) {
   return http.post(
     `/surveys/batches/${batchId}/results/${contractorUid}/contract/print`,
     cbhtbm ? { cbhtbm } : {}
+  );
+}
+
+// 导出现行延包合同 Word（未生成延包合同时后端 404，批量导出据此逐户提示）
+export function exportSurveyContractDocx(batchId, contractorUid, config = {}) {
+  return http.post(
+    `/surveys/batches/${batchId}/results/${contractorUid}/contract/export-docx`,
+    null,
+    { responseType: "blob", ...config }
   );
 }
 

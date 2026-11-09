@@ -309,6 +309,12 @@ def _matches(element, rule: _Rule) -> bool:
     return True
 
 
+#: 参与「border-bottom → 下划线」等价的行内标签。表格单元（td/th）一律排除。
+_INLINE_FILL_TAGS = frozenset(
+    ("span", "a", "i", "b", "em", "strong", "label", "small", "u", "sub", "sup")
+)
+
+
 class StyleResolver:
     """按「层叠 + 优先级 + 行内 style」解析元素上的最终声明。
 
@@ -340,6 +346,14 @@ class StyleResolver:
         inline = element.get("style")
         if inline:
             out.update(_parse_decls(inline))
+
+        # 「横线填值」的另一种写法：行内元素自带 border-bottom 实线（如合同
+        # 模板的 <span class="line">）→ 等价为 text-decoration: underline。
+        # 只对行内标签生效 —— td/th 的边框是表格线，绝不能变成下划线。
+        if _tag_of(element) in _INLINE_FILL_TAGS:
+            border_bottom = (out.get("border-bottom") or "").lower()
+            if "solid" in border_bottom or "double" in border_bottom:
+                out.setdefault("text-decoration", "underline")
 
         self._cache[key] = (element, out)
         return out
@@ -382,6 +396,27 @@ def _normalize_text(text: str, keep_newlines: bool) -> str:
     return text
 
 
+def _fill_line_placeholder(element, styles: StyleResolver) -> str | None:
+    """空的「横线填值」元素 → 按 min-width 宽度折算的全角空格串。
+
+    Word 的下划线只画在有字符的地方：`<span class="line">` 里没填值时若不垫
+    空格，横线就整个消失。宽度按 ``min-width + 左右 padding`` 除以全角字宽
+    （字号本身）估算，宁可多一两格也不让线短一截。
+    """
+    decls = styles.resolve(element)
+    if "underline" not in (decls.get("text-decoration") or ""):
+        return None
+    if "".join(element.itertext()).strip():
+        return None  # 已有真实内容，不需要垫
+    width_mm = to_mm(decls.get("min-width")) or 0.0
+    for side in ("padding-left", "padding-right"):
+        width_mm += to_mm(decls.get(side)) or 0.0
+    font_mm = ((to_pt(decls.get("font-size")) or 10.5) * 25.4) / 72.0
+    if width_mm <= 0:
+        return "\u3000"
+    return "\u3000" * max(1, round(width_mm / font_mm))
+
+
 def iter_cell_text(element, styles: StyleResolver):
     """按文档顺序产出 ``(文本, 所属元素)``；``<br>`` 与保留的换行产出 ``("\\n", 元素)``。"""
     decls = styles.resolve(element)
@@ -397,7 +432,11 @@ def iter_cell_text(element, styles: StyleResolver):
             if _tag_of(child) == "br":
                 yield "\n", node
             else:
-                yield from walk(child)
+                placeholder = _fill_line_placeholder(child, styles)
+                if placeholder is not None:
+                    yield placeholder, child
+                else:
+                    yield from walk(child)
             if child.tail:
                 yield _normalize_text(child.tail, keep_newlines), node
 
@@ -538,6 +577,7 @@ def _paragraph(
     spacing: dict[str, str] | None = None,
     runs: list[etree._Element] | None = None,
     ind_first_line: str | None = None,
+    ind_left: str | None = None,
     sect_pr: etree._Element | None = None,
 ) -> etree._Element:
     para = etree.Element(q("p"))
@@ -547,9 +587,12 @@ def _paragraph(
         for key, value in spacing.items():
             node.set(q(key), value)
     # CT_PPr 是有序序列：spacing → ind → jc → rPr → sectPr，顺序错了 Word 会忽略
-    if ind_first_line is not None:
+    if ind_first_line is not None or ind_left is not None:
         node = etree.SubElement(ppr, q("ind"))
-        node.set(q("firstLine"), ind_first_line)
+        if ind_left is not None:
+            node.set(q("left"), ind_left)
+        if ind_first_line is not None:
+            node.set(q("firstLine"), ind_first_line)
     if jc:
         node = etree.SubElement(ppr, q("jc"))
         node.set(q("val"), jc)
@@ -718,7 +761,15 @@ def _build_grid(table) -> list[list[_Cell]]:
             col += span
         return col
 
-    for tr in table:
+    row_groups = [child for child in table if _tag_of(child) in ("thead", "tbody", "tfoot")]
+    if row_groups:
+        # 行组包裹（contract.html 等模板的行都在 thead/tbody 里）：按文档顺序
+        # 遍历行组里的 tr。⚠️ 只认 table 的直接子级行组，别用 table.iter("tr") ——
+        # 那会把单元格里嵌套表格的行也收进来。
+        trs = [tr for group in row_groups for tr in group if _tag_of(tr) == "tr"]
+    else:
+        trs = [tr for tr in table if _tag_of(tr) == "tr"]
+    for tr in trs:
         if _tag_of(tr) != "tr":
             continue
         row: list[_Cell] = []
@@ -964,10 +1015,15 @@ def _build_cell(
     if line:
         spacing["line"], spacing["lineRule"] = line
     elif runs:
+        # ⚠️ _exact_line_twips 返回 str、_required_line_twips 返回 int，
+        # 直接 max(str, int) 会 TypeError（表格 CSS 没写 line-height 时才走到
+        # 这条分支，此前被静默丢表掩盖，2026-11-09 合同表格修复时首次触发）。
         spacing["line"] = str(
             max(
-                _exact_line_twips(
-                    line_height_mm({}, to_pt(decls.get("font-size")) or default_pt)
+                int(
+                    _exact_line_twips(
+                        line_height_mm({}, to_pt(decls.get("font-size")) or default_pt)
+                    )
                 ),
                 _required_line_twips(run_props),
             )
@@ -1040,11 +1096,25 @@ def _spacer_paragraph(height_mm: float) -> etree._Element:
     return _paragraph(spacing={"line": _exact_line_twips(height_mm), "lineRule": "exact"})
 
 
-def _emit_cover(page, styles: StyleResolver, content_height_mm: float, body: list) -> None:
-    """封面：`.cover-head` 撑高 + 标题 + 副题 + 落款贴底（对应 CSS 的 `margin-top: auto`）。"""
+def _emit_cover(
+    page,
+    styles: StyleResolver,
+    content_height_mm: float,
+    body: list,
+    *,
+    pad_bottom_mm: float = 0.0,
+) -> None:
+    """封面：`.cover-head` 撑高 + 标题 + 副题 + 落款贴底（对应 CSS 的 `margin-top: auto`）。
+
+    另支持合同封面的两类元素：
+    * ``.cover-codes`` —— 右上角编号块（``margin-left`` 整块右移，逐行成段）；
+    * ``.cover-org`` —— ``position: absolute; bottom: N`` 贴底落款（用撑高空段近似）。
+    """
     above_mm = 0.0
     foot_nodes: list = []
     foot_decls: dict[str, str] = {}
+    org_node = None
+    org_decls: dict[str, str] = {}
 
     for child in page:
         if not isinstance(child.tag, str):
@@ -1059,27 +1129,83 @@ def _emit_cover(page, styles: StyleResolver, content_height_mm: float, body: lis
             para, used_mm = _title_paragraph(child, styles, default_pt=21.0)
             body.append(para)
             above_mm += used_mm
+        elif "cover-codes" in classes:
+            top_gap = to_mm(decls.get("margin-top")) or 0.0
+            if top_gap > 0.5:
+                body.append(_spacer_paragraph(top_gap))
+                above_mm += top_gap
+            left_twips = _mm_to_twips(to_mm(decls.get("margin-left")) or 0.0)
+            line_mm = line_height_mm(decls, to_pt(decls.get("font-size")) or 10.0)
+            for row in child:
+                if not isinstance(row.tag, str):
+                    continue
+                runs: list[etree._Element] = []
+                for piece, owner in iter_cell_text(row, styles):
+                    if piece == "\n":
+                        runs.append(_break_run())
+                        continue
+                    runs.append(
+                        _simple_run(
+                            piece,
+                            _run_properties(styles.resolve_run(owner), {}, default_pt=10.0),
+                        )
+                    )
+                body.append(
+                    _paragraph(
+                        spacing={
+                            "before": "0",
+                            "after": "0",
+                            "line": _exact_line_twips(line_mm),
+                            "lineRule": "exact",
+                        },
+                        runs=runs or None,
+                        ind_left=str(left_twips) if left_twips else None,
+                    )
+                )
+                above_mm += line_mm
+        elif "cover-org" in classes:
+            org_node = child
+            org_decls = decls
         elif "cover-foot" in classes:
             foot_decls = decls
             foot_nodes = list(child)
 
-    if not foot_nodes:
-        return
-
-    props = _run_properties(foot_decls, {}, default_pt=14.0)
-    line_mm = line_height_mm(foot_decls, to_pt(foot_decls.get("font-size")) or 14.0)
-    pad_bottom = to_mm(foot_decls.get("padding-bottom")) or 0.0
-    spacer = content_height_mm - above_mm - line_mm * len(foot_nodes) - pad_bottom
-    if spacer > 1:
-        body.append(_spacer_paragraph(spacer))
-
-    for node in foot_nodes:
-        text = "".join(node.itertext()).strip()
+    if foot_nodes:
+        props = _run_properties(foot_decls, {}, default_pt=14.0)
+        line_mm = line_height_mm(foot_decls, to_pt(foot_decls.get("font-size")) or 14.0)
+        pad_bottom = to_mm(foot_decls.get("padding-bottom")) or 0.0
+        spacer = content_height_mm - above_mm - line_mm * len(foot_nodes) - pad_bottom
+        if spacer > 1:
+            body.append(_spacer_paragraph(spacer))
+        for node in foot_nodes:
+            text = "".join(node.itertext()).strip()
+            body.append(
+                _paragraph(
+                    jc="center",
+                    spacing={"before": "0", "after": "0", "line": _exact_line_twips(line_mm), "lineRule": "exact"},
+                    runs=[_simple_run(text, props)],
+                )
+            )
+    elif org_node is not None:
+        line_mm = line_height_mm(org_decls, to_pt(org_decls.get("font-size")) or 10.0)
+        # absolute bottom:N 以 .page 的 padding-box 为基准；正文区底边比页面底边
+        # 高出 pad_bottom_mm，所以落款离正文区底边 = N - pad_bottom。
+        bottom_mm = to_mm(org_decls.get("bottom")) or 0.0
+        spacer = content_height_mm - above_mm - line_mm - max(0.0, bottom_mm - pad_bottom_mm)
+        if spacer > 1:
+            body.append(_spacer_paragraph(spacer))
+        text = "".join(org_node.itertext()).strip().replace("\u00a0", " ")
+        props = _run_properties(org_decls, {}, default_pt=10.0)
         body.append(
             _paragraph(
-                jc="center",
-                spacing={"before": "0", "after": "0", "line": _exact_line_twips(line_mm), "lineRule": "exact"},
-                runs=[_simple_run(text, props)],
+                jc=_alignment(org_decls.get("text-align")) or "center",
+                spacing={
+                    "before": "0",
+                    "after": "0",
+                    "line": _exact_line_twips(line_mm),
+                    "lineRule": "exact",
+                },
+                runs=[_simple_run(text, props)] if text else None,
             )
         )
 
@@ -1107,7 +1233,12 @@ def _emit_flow(elements, styles: StyleResolver, out: list, *, content_width: int
             continue
         tag = _tag_of(element)
         if tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
-            out.append(_title_paragraph(element, styles, default_pt=16.0)[0])
+            # h1（表单大标题）默认居中；h2 及以下（正文条款标题，如合同
+            # "一、承包土地情况"）打印件里是左对齐，默认值跟着改左。
+            align = "center" if tag == "h1" else None
+            out.append(
+                _title_paragraph(element, styles, default_pt=16.0, default_align=align)[0]
+            )
         elif tag == "table":
             table = _build_table(
                 element, styles, default_pt=10.5, content_width=content_width
@@ -1147,7 +1278,13 @@ class HtmlDocxBuilder:
 
             items: list[etree._Element] = []
             if "cover" in _classes_of(page):
-                _emit_cover(page, styles, content_height, items)
+                _emit_cover(
+                    page,
+                    styles,
+                    content_height,
+                    items,
+                    pad_bottom_mm=to_mm(page_decls.get("padding-bottom")) or 0.0,
+                )
             else:
                 _emit_flow(page, styles, items, content_width=content_width)
 

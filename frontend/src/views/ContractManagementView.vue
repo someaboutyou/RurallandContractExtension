@@ -20,6 +20,17 @@
               :loading="collecting"
               @click="handleBatchSign"
             >批量签订</el-button>
+            <el-button
+              :disabled="!activeBatch || !rows.length"
+              plain
+              @click="handleBatchApplicationDownload"
+            >批量下载单户申请书</el-button>
+            <el-button
+              :disabled="!activeBatch"
+              :loading="contractExporting"
+              plain
+              @click="handleBatchContractExport"
+            >导出合同</el-button>
             <el-dropdown trigger="click" :disabled="!activeBatch" @command="(cmd) => handleCollectiveApplication(cmd)">
               <el-button :disabled="!activeBatch" :loading="applicationLoading" plain>
                 集体申请书<el-icon class="el-icon--right"><ArrowDown /></el-icon>
@@ -120,6 +131,20 @@
       @completed="onSignCompleted"
     />
 
+    <!-- 批量下载单户申请书：逐户进度 + 打包 zip -->
+    <HouseholdApplicationBatchDialog
+      ref="applicationBatchDialog"
+      :batch-id="activeBatch?.id || null"
+      :zip-name="`${batchRegionTail()}单户登记申请书`"
+    />
+
+    <!-- 批量导出延包合同：逐户进度 + 打包 zip（只导已生成延包合同的户） -->
+    <SurveyContractBatchExportDialog
+      ref="contractExportDialog"
+      :batch-id="activeBatch?.id || null"
+      :zip-name="`${batchRegionTail()}延包合同`"
+    />
+
     <!-- 查看合同：复用承包方调查录入「合同信息」面板（版本切换/打印/生成/附件同一套） -->
     <el-dialog
       v-model="contractInfoVisible"
@@ -148,6 +173,8 @@ import { ArrowDown, Search } from "@element-plus/icons-vue";
 
 import SurveyBatchPanel from "../components/survey/SurveyBatchPanel.vue";
 import SurveyContractGenerateDialog from "../components/survey/SurveyContractGenerateDialog.vue";
+import HouseholdApplicationBatchDialog from "../components/survey/HouseholdApplicationBatchDialog.vue";
+import SurveyContractBatchExportDialog from "../components/survey/SurveyContractBatchExportDialog.vue";
 import ContractInfoPanel from "../components/survey/ContractInfoPanel.vue";
 
 import {
@@ -174,6 +201,8 @@ const taskKeyword = ref("");
 const selectedRows = ref([]);
 const rowTableRef = ref(null);
 const generateDialog = ref(null);
+const applicationBatchDialog = ref(null);
+const contractExportDialog = ref(null);
 // 查看合同对话框（复用 ContractInfoPanel）
 const contractInfoVisible = ref(false);
 const contractInfoTarget = ref(null);
@@ -305,6 +334,20 @@ async function handleCollectiveApplication(command) {
 
 async function handleHouseholdApplication(row, command) {
   if (!row?.contractorUid || !activeBatch.value) return;
+  // 未生成延包合同的户：申请书期限默认「自申请之日起 30 年」，先向用户提示确认
+  if (!row.signed) {
+    const now = new Date();
+    try {
+      const end = new Date(now.getFullYear() + 30, now.getMonth(), now.getDate() - 1);
+      await ElMessageBox.confirm(
+        `该承包户尚未生成延包合同，申请书中的承包期限将默认自申请之日（${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日）起至 ${end.getFullYear()}年${end.getMonth() + 1}月${end.getDate()}日止（30 年）。是否继续？`,
+        "单户申请书",
+        { type: "warning", confirmButtonText: "继续", cancelButtonText: "取消" },
+      );
+    } catch {
+      return; // 用户取消
+    }
+  }
   applicationLoading.value = true;
   try {
     if (command === "print") {
@@ -388,8 +431,112 @@ async function collectAllRows() {
   return all;
 }
 
+// 工具栏批量下载申请书（设计原则与批量签订一致）：
+// - 勾选了承包户 → 下载所选；
+// - 未勾选 → 确认后下载当前批次全部承包户的申请书，打包为 zip。
+// 逐户走与列表「单户申请书 → 导出 Word」同一接口，模板完全一致。
+async function handleBatchApplicationDownload() {
+  if (!activeBatch.value) return;
+  if (selectedRows.value.length) {
+    applicationBatchDialog.value?.open({
+      contractors: selectedRows.value.map((row) => ({
+        contractorUid: row.contractorUid,
+        cbfmc: row.cbfmc,
+        cbfbm: row.cbfbm,
+      })),
+    });
+    return;
+  }
+  // 未勾选：拉全批次列表（翻页收集，带当前搜索条件）
+  collecting.value = true;
+  let all = [];
+  try {
+    all = await collectAllRows();
+  } catch {
+    ElMessage.error("获取批次承包户列表失败");
+    return;
+  } finally {
+    collecting.value = false;
+  }
+  if (!all.length) {
+    ElMessage.info("当前批次暂无承包户");
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      `未勾选承包户，将下载当前批次全部承包户的单户申请书：共 ${all.length} 户，打包为一个压缩包。其中未生成延包合同的户，期限默认自申请之日起 30 年。是否继续？`,
+      "批量下载单户申请书",
+      { type: "warning", confirmButtonText: "继续", cancelButtonText: "取消" },
+    );
+  } catch {
+    return; // 用户取消
+  }
+  applicationBatchDialog.value?.open({
+    contractors: all.map((row) => ({
+      contractorUid: row.contractorUid,
+      cbfmc: row.cbfmc,
+      cbfbm: row.cbfbm,
+    })),
+  });
+}
+
 function onSignCompleted({ successCount }) {
   if (successCount > 0) loadRows();
+}
+
+const contractExporting = ref(false);
+
+// 工具栏「导出合同」（打包 zip）：
+// - 勾选了承包户 → 导出所选；
+// - 未勾选 → 确认后导出当前批次全部承包户的合同。
+// ⚠️ 口径：只导出**已生成延包合同**（row.signed）的户。库里可能存在导入的
+// 「现行合同」（二轮承包合同标 active），不算已生成合同——未生成的户在
+// 确认弹窗里点名提示并跳过；导出过程中后端再次校验，兜底落入失败清单。
+async function handleBatchContractExport() {
+  if (!activeBatch.value) return;
+  let targets = selectedRows.value;
+  if (!targets.length) {
+    // 未勾选：拉全批次列表（翻页收集，带当前搜索条件）
+    contractExporting.value = true;
+    try {
+      targets = await collectAllRows();
+    } catch {
+      ElMessage.error("获取批次承包户列表失败");
+      return;
+    } finally {
+      contractExporting.value = false;
+    }
+  }
+  if (!targets.length) {
+    ElMessage.info("当前批次暂无承包户");
+    return;
+  }
+  const pending = targets.filter((row) => row.signed);
+  const missing = targets.length - pending.length;
+  if (!pending.length) {
+    ElMessage.warning("所选承包户均未生成延包合同，请先生成合同");
+    return;
+  }
+  const scopeText = selectedRows.value.length
+    ? `将导出所选 ${pending.length} 户的现行延包合同`
+    : `未勾选承包户，将导出当前批次全部已生成延包合同的承包户：共 ${pending.length} 户`;
+  const missingText = missing ? `，另有 ${missing} 户尚未生成延包合同，将跳过` : "";
+  try {
+    await ElMessageBox.confirm(
+      `${scopeText}${missingText}，打包为一个压缩包（Word 件不含末页「承包地块示意图」）。是否继续？`,
+      "导出合同",
+      { type: "warning", confirmButtonText: "继续", cancelButtonText: "取消" },
+    );
+  } catch {
+    return; // 用户取消
+  }
+  contractExportDialog.value?.open({
+    contractors: pending.map((row) => ({
+      contractorUid: row.contractorUid,
+      cbfmc: row.cbfmc,
+      cbfbm: row.cbfbm,
+    })),
+  });
 }
 </script>
 

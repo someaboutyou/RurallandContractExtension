@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
-from datetime import date
+from datetime import date, datetime, timezone
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
@@ -14,7 +14,7 @@ from sqlalchemy import select as sa_select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_permission
-from app.models.cbht import CONTRACT_SOURCE_GENERATED, Cbht
+from app.models.cbht import CONTRACT_SOURCE_GENERATED, CONTRACT_STATUS_ACTIVE, Cbht
 from app.models.survey import SurveyCbdkxxBase, SurveyCbdkxxResult, SurveyCbfResult
 from app.models.user import User
 from app.schemas.pagination import PageResponse
@@ -1947,6 +1947,81 @@ def print_survey_contract(
         parcels_by_contractor=bool(contract and contract.contract_source == CONTRACT_SOURCE_GENERATED),
     )
     return Response(content=rendered, media_type="text/html; charset=utf-8")
+
+
+def _strip_contract_sketch(html_text: str) -> str:
+    """Word 导出用：摘掉「承包地块示意图」页与前端绘图脚本。
+
+    示意图的地图是浏览器端 JS 读 ``data-plots`` 现场画的 SVG，
+    ``html_docx`` 只转写文字与表格，SVG 带过去只剩空白框。
+    Word 件保留封面 + 合同正文；示意图页走打印 / 预览 / PDF 入口。
+    """
+    from lxml import html as lxml_html
+
+    document = lxml_html.fromstring(html_text)
+    sketch_pages = document.xpath(
+        "//*[contains(concat(' ', normalize-space(@class), ' '), ' sketch-page ')]"
+    )
+    for element in sketch_pages:
+        parent = element.getparent()
+        if parent is not None:
+            parent.remove(element)
+    for element in document.xpath("//script"):
+        parent = element.getparent()
+        if parent is not None:
+            parent.remove(element)
+    return lxml_html.tostring(document, encoding="unicode")
+
+
+@router.post("/batches/{batch_id}/results/{contractor_uid}/contract/export-docx")
+def export_survey_contract_docx(
+    batch_id: int,
+    contractor_uid: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.view")),
+):
+    """导出该承包方的现行延包合同 Word（同一 HTML 母版转写 docx）。
+
+    ⚠️ 只导出**本平台生成的延包合同**（``contract_source=generated``、现行）。
+    库里可能存在导入的「现行合同」（二轮承包合同被标 active），它不算
+    「已生成合同」——没有现行延包合同时返回 404，批量导出前端据此逐户提示。
+    """
+    from app.services import html_docx
+
+    result = survey_service.get_result(db, batch_id, contractor_uid, current_user)
+    generated_rows = db.scalars(
+        sa_select(Cbht)
+        .where(
+            Cbht.survey_batch_id == batch_id,
+            Cbht.contractor_uid == contractor_uid,
+            Cbht.contract_source == CONTRACT_SOURCE_GENERATED,
+        )
+        .execution_options(skip_tenant_scope=True)
+    ).all()
+    active_rows = [row for row in generated_rows if row.contract_status == CONTRACT_STATUS_ACTIVE]
+    if not active_rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="该承包户尚未生成延包合同",
+        )
+    # 现行有多条时取最近生成的一条（与批次总览「现行优先、其次最新」口径一致）
+    contract = max(
+        active_rows,
+        key=lambda row: row.generated_at or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    cbfbm = result.get("code", "")
+    data_batch_id = result.get("batchId") or batch_id
+    rendered = contract_template_service.render_survey_contract(
+        db, cbhtbm=contract.cbhtbm, batch_id=data_batch_id, cbfbm=cbfbm,
+        parcels_by_contractor=True,
+    )
+    name = result.get("name") or result.get("code") or "承包户"
+    filename = f"{name}农村土地（耕地）承包合同.docx"
+    return Response(
+        content=html_docx.build_docx(_strip_contract_sketch(rendered)),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
 
 
 @router.get("/batches/{batch_id}/contract-overview", response_model=ApiResponse[dict])
