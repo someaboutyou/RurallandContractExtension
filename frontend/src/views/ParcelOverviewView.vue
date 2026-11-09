@@ -194,6 +194,8 @@ const pageSize = ref(20);
 const keyword = ref("");
 const selectedRows = ref([]);
 const currentRow = ref(null);
+// 点击选中的地块编码：列表里用加重颜色标出，便于和弹窗内的地块、地图图形对应。
+const highlightedDkbm = ref("");
 
 // 左侧调查批次面板：选中批次后列表只显示该批次范围内承包户的地块。
 const activeBatch = ref(null);
@@ -300,8 +302,22 @@ function buildGroup(group) {
 
 const treeRows = computed(() => items.value.map(buildGroup));
 
+// 已勾选的地块编码：勾选状态下同样用加重颜色显示。
+const selectedDkbmSet = computed(() => new Set(
+  selectedRows.value.filter((row) => !row.isGroup && row.dkbm).map((row) => row.dkbm),
+));
+
 function isSelectableRow(row) {
   return !row.isGroup;
+}
+
+// 承包方汇总行用浅蓝底，普通地块行白底，点击或勾选的地块用加重颜色。
+function rowClassName({ row }) {
+  if (row?.isGroup) return "parcel-group-row";
+  if (row?.dkbm && (row.dkbm === highlightedDkbm.value || selectedDkbmSet.value.has(row.dkbm))) {
+    return "parcel-child-row parcel-row-active";
+  }
+  return "parcel-child-row";
 }
 
 function handleSelectionChange(rows) {
@@ -310,6 +326,12 @@ function handleSelectionChange(rows) {
 
 function handleRowClick(row) {
   currentRow.value = row;
+  // 点击地块记录即切换到该地块的加重颜色显示；点承包方汇总行则清除选中强调。
+  if (!row?.isGroup && row?.dkbm) {
+    highlightedDkbm.value = row.dkbm;
+  } else {
+    highlightedDkbm.value = "";
+  }
 }
 
 function resolveTargetGroup() {
@@ -404,6 +426,7 @@ function handleRowDblClick(row) {
     ElMessage.warning("缺少承包方标识，无法进入编辑");
     return;
   }
+  highlightedDkbm.value = row.dkbm || "";
   contractorDialog.value?.openForResult(
     selectedBatch.value,
     {
@@ -412,7 +435,7 @@ function handleRowDblClick(row) {
       cbfbm: row.cbfbm,
       cbfmc: row.cbfmc,
     },
-    { panel: "parcels" }
+    { panel: "parcels", dkbm: row.dkbm || "" }
   );
 }
 
@@ -553,11 +576,9 @@ onMounted(async () => {
   }
 }
 
-.parcel-group-row {
-  background: #dfe9f5;
-}
-
-.parcel-group-row :deep(td) {
+/* el-table 的 <tr> 由 el-table 内部渲染，不带本组件的 scoped 标记；
+   必须从带标记的 .table-shell 用 :deep 下钻，否则行样式不生效。 */
+.table-shell :deep(.parcel-group-row > td) {
   background: #dfe9f5 !important;
   font-weight: 600;
 }
@@ -566,7 +587,13 @@ onMounted(async () => {
   font-weight: 600;
 }
 
-.parcel-child-row :deep(td) {
+.table-shell :deep(.parcel-child-row > td) {
   background: #fff;
+}
+
+/* 点击选中的地块：只改底色和文字颜色，不改变行高。 */
+.table-shell :deep(.parcel-row-active > td) {
+  background: #ffd591 !important;
+  color: #8a3b00;
 }
 </style>

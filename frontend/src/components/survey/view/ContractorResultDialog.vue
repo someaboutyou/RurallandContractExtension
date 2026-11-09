@@ -41,7 +41,7 @@
       </section>
 
       <section v-show="activePanel === 'parcels'" class="survey-panel-section">
-        <ParcelInfoPanel v-if="isPanelMounted('parcels')" :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :parcels="parcelsForPanel" :persisted-dkbms="persistedParcelDkbms" :parcels-loading="parcelsLoading" :can-manage="canManage && canWrite" :is-result-locked="dataReadOnly" :saved-swap-records="savedSwapRecords" :saved-split-records="savedSplitRecords" :saved-remove-records="savedRemoveRecords" :can-rollback-saved-parcel-change="canRollbackSavedParcelChange" :rollback-change-loading-id="rollbackingSavedChangeId" :persisting-dkbm="persistingParcelDkbm" @swap-parcels="handleOpSwapParcels" @add-parcel="handlePendingOperation" @split-parcel="handlePendingOperation" @remove-parcel="handleOpRemoveParcel" @rollback-saved-swap="handleRollbackSavedSwap" @rollback-saved-split="handleRollbackSavedSplit" @rollback-saved-remove="handleRollbackSavedRemove" @undo-pending-remove="handleUndoPendingRemoveFromPanel" @persist-parcel="handlePersistPendingParcel" />
+        <ParcelInfoPanel v-if="isPanelMounted('parcels')" :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :parcels="parcelsForPanel" :highlight-dkbm="focusParcelDkbm" :persisted-dkbms="persistedParcelDkbms" :parcels-loading="parcelsLoading" :can-manage="canManage && canWrite" :is-result-locked="dataReadOnly" :saved-swap-records="savedSwapRecords" :saved-split-records="savedSplitRecords" :saved-remove-records="savedRemoveRecords" :can-rollback-saved-parcel-change="canRollbackSavedParcelChange" :rollback-change-loading-id="rollbackingSavedChangeId" :persisting-dkbm="persistingParcelDkbm" @swap-parcels="handleOpSwapParcels" @add-parcel="handlePendingOperation" @split-parcel="handlePendingOperation" @remove-parcel="handleOpRemoveParcel" @rollback-saved-swap="handleRollbackSavedSwap" @rollback-saved-split="handleRollbackSavedSplit" @rollback-saved-remove="handleRollbackSavedRemove" @undo-pending-remove="handleUndoPendingRemoveFromPanel" @persist-parcel="handlePersistPendingParcel" />
       </section>
 
       <section v-show="activePanel === 'plotSketchMap'" class="survey-panel-section">
@@ -228,6 +228,8 @@ const removeParcelDialog = ref(null);
 const parcels = ref([]);
 const parcelsLoaded = ref(false);
 const selectedParcel = ref(null);
+// 从「承包地块管理」双击进入时带过来的地块编码：地块清单里加重显示，地图定位到该地块。
+const focusParcelDkbm = ref("");
 const parcelsLoading = ref(false);
 const flashDkbm = ref(null);
 let flashTimer = null;
@@ -1149,7 +1151,7 @@ async function reloadSurveyResult() {
 
 // ---- Open / Close ----
 async function openForResult(batch, row, options = {}) {
-  isCreatingContractorResult.value = false; activeTask.value = row; selectedParcel.value = null; parcels.value = []; persistedParcelDkbms.value = []; parcelsLoaded.value = false;
+  isCreatingContractorResult.value = false; activeTask.value = row; selectedParcel.value = null; focusParcelDkbm.value = options.dkbm || ""; parcels.value = []; persistedParcelDkbms.value = []; parcelsLoaded.value = false;
   previewAttachmentVisible.value = false; previewAttachment.value = null; attachmentPreviewIndex.value = -1;
   pendingOperations.value = []; savedSwapChanges.value = []; savedSplitChanges.value = []; savedRemoveChanges.value = []; savedParcelChangeLoading.value = false; rollbackingSavedChangeId.value = null;
   const { data } = await fetchSurveyResult(row.batchId, row.contractorUid);
@@ -1165,7 +1167,7 @@ async function openForResult(batch, row, options = {}) {
 }
 
 function openForCreate(batch) {
-  isCreatingContractorResult.value = true; activeTask.value = null; selectedParcel.value = null; parcels.value = []; persistedParcelDkbms.value = [];
+  isCreatingContractorResult.value = true; activeTask.value = null; selectedParcel.value = null; focusParcelDkbm.value = ""; parcels.value = []; persistedParcelDkbms.value = [];
   diffRows.value = []; savedSwapChanges.value = []; savedSplitChanges.value = []; savedRemoveChanges.value = []; savedParcelChangeLoading.value = false;
   pendingOperations.value = []; rollbackingSavedChangeId.value = null;
   Object.assign(resultForm, createEmptyResult(), { code: batch?.regionCode || props.activeRegionCode || "", groupRegionCode: batch?.regionCode || props.activeRegionCode || "", groupRegionName: batch?.regionName || props.activeRegionLabel || "", resultStatus: "added", changeType: "add_contractor", isChanged: false });
@@ -1176,6 +1178,7 @@ function openForCreate(batch) {
 
 function close() {
   emit("update:modelValue", false); isCreatingContractorResult.value = false;
+  focusParcelDkbm.value = "";
   previewAttachmentVisible.value = false; previewAttachment.value = null; attachmentPreviewIndex.value = -1;
   pendingOperations.value = []; savedSwapChanges.value = []; savedSplitChanges.value = []; savedRemoveChanges.value = []; savedParcelChangeLoading.value = false; rollbackingSavedChangeId.value = null;
 }

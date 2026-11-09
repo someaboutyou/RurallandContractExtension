@@ -224,7 +224,7 @@
           size="small"
           highlight-current-row
           v-loading="parcelsLoading"
-          :row-class-name="parcelRowClassName"
+          :row-class-name="parcelTableRowClassName"
           @row-click="selectParcel"
           :max-height="parcelTableMaxHeight"
         >
@@ -688,6 +688,8 @@ const props = defineProps({
   batchId: { type: Number, required: true },
   contractorUid: { type: String, required: true },
   parcels: { type: Array, default: () => [] },
+  // 外部（承包地块管理双击）指定的地块编码：清单行加重显示，地图定位到该地块。
+  highlightDkbm: { type: String, default: "" },
   // 服务端已落库的地块编码（由 ContractorResultDialog 在 loadSurveyParcels 时记下）。
   persistedDkbms: { type: Array, default: () => [] },
   parcelsLoading: { type: Boolean, default: false },
@@ -908,6 +910,16 @@ function selectParcel(parcel) {
   selectParcelInSplitMode(parcel);
 }
 
+// 当前选中的地块：点击其他记录时加重颜色跟着切换；首次进入用外部指定地块兜底。
+const activeParcelDkbm = computed(() => selectedParcel.value?.dkbm || props.highlightDkbm);
+
+// 选中的地块在清单里用加重颜色显示（只改颜色，不改变行高）。
+function parcelTableRowClassName(context) {
+  const base = parcelRowClassName(context);
+  const active = context?.row?.dkbm && context.row.dkbm === activeParcelDkbm.value;
+  return [base, active ? "parcel-row-active" : ""].filter(Boolean).join(" ");
+}
+
 // --- 界址点 / 界址线维护 ---
 //
 // ⛔ 入口闸门 vs 后端闸门（`boundary.py::_ensure_parcel_in_batch`）：
@@ -998,6 +1010,16 @@ function handleBasemapChange(key) {
 }
 
 // --- Lifecycle ---
+// 定位当前选中的地块：首次进入用外部指定地块，之后点击哪条记录就定位/高亮哪条。
+function focusActiveParcel(list) {
+  const preferred = selectedParcel.value?.dkbm || props.highlightDkbm;
+  const parcel = preferred ? (list || []).find((item) => item?.dkbm === preferred) : null;
+  if (!parcel) return false;
+  selectedParcel.value = parcel;
+  draftMap.focusParcel(parcel.dkbm);
+  return true;
+}
+
 async function renderParcelsOnMap(list) {
   await nextTick();
   if (!draftMap.mapReady.value) await draftMap.initMap();
@@ -1008,6 +1030,8 @@ async function renderParcelsOnMap(list) {
   if (!mapRoot.value?.clientWidth || !mapRoot.value?.clientHeight) return;
   draftMap.updateMapSize();
   draftMap.loadParcels(list || []);
+  // 有选中地块时聚焦该地块；没有选中才把范围适配到本地块全部图形。
+  if (focusActiveParcel(list)) return;
   if (list?.length) draftMap.fitToParcels();
 }
 
@@ -1020,6 +1044,16 @@ watch(
     }
   },
   { immediate: false, deep: true },
+);
+
+// 外部指定地块变化（例如从列表双击另一块地进入）时重新定位与高亮。
+watch(
+  () => props.highlightDkbm,
+  async (dkbm) => {
+    if (!dkbm) return;
+    selectedParcel.value = null;
+    await renderParcelsOnMap(props.parcels);
+  },
 );
 
 onMounted(async () => {
@@ -1366,6 +1400,14 @@ onBeforeUnmount(() => {
 .parcel-list :deep(.el-table__row.parcel-row-removed.current-row > .el-table__cell),
 .parcel-list :deep(.el-table__row.parcel-row-removed:hover > .el-table__cell) {
   background-color: #e9e9eb;
+}
+
+/* 选中地块：只改底色和文字颜色，不改变行高（历史地块也照此强调）。 */
+.parcel-list :deep(.el-table__row.parcel-row-active > .el-table__cell),
+.parcel-list :deep(.el-table__row.parcel-row-active.current-row > .el-table__cell),
+.parcel-list :deep(.el-table__row.parcel-row-active:hover > .el-table__cell) {
+  background-color: #ffd591;
+  color: #8a3b00;
 }
 
 .parcel-detail.is-removed :deep(.el-descriptions__body),
