@@ -1,3 +1,4 @@
+import base64
 import io
 import logging
 import os
@@ -1949,12 +1950,14 @@ def print_survey_contract(
     return Response(content=rendered, media_type="text/html; charset=utf-8")
 
 
-def _strip_contract_sketch(html_text: str) -> str:
-    """Word 导出用：摘掉「承包地块示意图」页与前端绘图脚本。
+def _prepare_contract_docx_html(html_text: str) -> str:
+    """Word 导出用的 HTML 预处理：示意图页整页渲染成 PNG 内嵌，正文原样转写。
 
-    示意图的地图是浏览器端 JS 读 ``data-plots`` 现场画的 SVG，
-    ``html_docx`` 只转写文字与表格，SVG 带过去只剩空白框。
-    Word 件保留封面 + 合同正文；示意图页走打印 / 预览 / PDF 入口。
+    示意图的地图是浏览器端 JS 读 ``data-plots`` 现场画的 SVG，``html_docx``
+    无法转写 SVG。这里按打印版式用 Pillow 把每个 ``.sketch-page`` 复刻成
+    横版 A4 整页 PNG，替换为 ``<section class="page landscape">`` 内嵌图片页
+    （``html_docx`` 支持 data URI 图片）。单个页面渲染失败时退回整页摘除，
+    绝不让 Word 导出中断。
     """
     from lxml import html as lxml_html
 
@@ -1962,10 +1965,41 @@ def _strip_contract_sketch(html_text: str) -> str:
     sketch_pages = document.xpath(
         "//*[contains(concat(' ', normalize-space(@class), ' '), ' sketch-page ')]"
     )
-    for element in sketch_pages:
-        parent = element.getparent()
-        if parent is not None:
-            parent.remove(element)
+    if sketch_pages:
+        try:
+            from app.services import sketch_png
+
+            pages = sketch_png.parse_sketch_sections(html_text)
+            for element, page in zip(sketch_pages, pages):
+                try:
+                    png = sketch_png.render_sketch_page_png(page)
+                except Exception:
+                    parent = element.getparent()
+                    if parent is not None:
+                        parent.remove(element)
+                    continue
+                encoded = base64.b64encode(png).decode("ascii")
+                # 整页插图：横版节（页边距 0），图略缩 1mm 防止溢出到下一页
+                replacement = (
+                    '<section class="page landscape" '
+                    'style="width:297mm;height:210mm;padding:0;">'
+                    f'<img src="data:image/png;base64,{encoded}" '
+                    'style="width:296mm;height:209mm" alt="承包地块示意图"/>'
+                    "</section>"
+                )
+                fragment = lxml_html.fragment_fromstring(replacement)
+                parent = element.getparent()
+                if parent is not None:
+                    element.addnext(fragment)
+                    parent.remove(element)
+        except Exception:
+            # 渲染链路整体不可用（如 Pillow 缺失）：退回旧行为——整页摘除
+            for element in document.xpath(
+                "//*[contains(concat(' ', normalize-space(@class), ' '), ' sketch-page ')]"
+            ):
+                parent = element.getparent()
+                if parent is not None:
+                    parent.remove(element)
     for element in document.xpath("//script"):
         parent = element.getparent()
         if parent is not None:
@@ -2018,7 +2052,7 @@ def export_survey_contract_docx(
     name = result.get("name") or result.get("code") or "承包户"
     filename = f"{name}农村土地（耕地）承包合同.docx"
     return Response(
-        content=html_docx.build_docx(_strip_contract_sketch(rendered)),
+        content=html_docx.build_docx(_prepare_contract_docx_html(rendered)),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
     )

@@ -314,6 +314,14 @@ _INLINE_FILL_TAGS = frozenset(
     ("span", "a", "i", "b", "em", "strong", "label", "small", "u", "sub", "sup")
 )
 
+#: 图片命名空间（wp: drawing 内联、a: DrawingML、pic: 图片扩展）
+WP_NS = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+PIC_NS = "http://schemas.openxmlformats.org/drawingml/2006/picture"
+
+#: 1 mm = 36000 EMU
+_EMU_PER_MM = 36000
+
 
 class StyleResolver:
     """按「层叠 + 优先级 + 行内 style」解析元素上的最终声明。
@@ -708,6 +716,121 @@ def _break_run(props: dict[str, object] | None = None) -> etree._Element:
             run.append(rpr)
     etree.SubElement(run, q("br"))
     return run
+
+
+def _image_paragraph(
+    src: str | None,
+    decls: dict[str, str],
+    images: list[tuple[str, str, bytes]],
+) -> etree._Element | None:
+    """``<img src="data:image/...;base64,...">`` → 居中图片段落。
+
+    ``images`` 收集 ``(relationshipId, 扩展名, 图片字节)``，由 ``_package`` 落成
+    media part + relationship。尺寸读 CSS ``width``/``height``（mm）——导出用的
+    整页示意图由调用方显式写死尺寸；缺失时用 Pillow 读像素按 96dpi 估算。
+    返回 ``None`` 表示无法识别的 src（非 data URI），由调用方决定丢弃或兜底。
+    """
+    if not src or not src.startswith("data:image/"):
+        return None
+    try:
+        header, payload = src.split(",", 1)
+    except ValueError:
+        return None
+    import base64
+
+    try:
+        data = base64.b64decode(payload)
+    except Exception:
+        return None
+    ext = "png" if "png" in header else ("jpeg" if "jpeg" in header or "jpg" in header else "png")
+
+    width_mm = to_mm(decls.get("width"))
+    height_mm = to_mm(decls.get("height"))
+    if width_mm is None or height_mm is None:
+        try:
+            from PIL import Image as PILImage
+
+            with PILImage.open(io.BytesIO(data)) as img:
+                pixel_w, pixel_h = img.size
+            if width_mm is None and height_mm is None:
+                width_mm, height_mm = pixel_w / 96.0 * 25.4, pixel_h / 96.0 * 25.4
+            elif width_mm is None:
+                width_mm = height_mm * pixel_w / pixel_h
+            elif height_mm is None:
+                height_mm = width_mm * pixel_h / pixel_w
+        except Exception:
+            width_mm = width_mm or 150.0
+            height_mm = height_mm or 100.0
+
+    rid = f"rIdImg{len(images) + 1}"
+    images.append((rid, ext, data))
+
+    cx = int(width_mm * _EMU_PER_MM)
+    cy = int(height_mm * _EMU_PER_MM)
+    drawing = etree.Element(q("drawing"))
+    inline = etree.SubElement(drawing, f"{{{WP_NS}}}inline")
+    for name in ("distT", "distB", "distL", "distR"):
+        inline.set(name, "0")
+    extent = etree.SubElement(inline, f"{{{WP_NS}}}extent")
+    extent.set("cx", str(cx))
+    extent.set("cy", str(cy))
+    doc_pr = etree.SubElement(inline, f"{{{WP_NS}}}docPr")
+    doc_pr.set("id", str(len(images)))
+    doc_pr.set("name", f"Picture {len(images)}")
+    # ⚠️ 这里是 a:graphic（DrawingML 命名空间），不是 wp:graphic —— 写错
+    # 命名空间 Word 会整份文档拒绝打开（2026-11-09 示意图导出踩过）。
+    graphic = etree.SubElement(inline, f"{{{A_NS}}}graphic")
+    graphic_data = etree.SubElement(graphic, f"{{{A_NS}}}graphicData")
+    graphic_data.set("uri", PIC_NS)
+    pic = etree.SubElement(graphic_data, f"{{{PIC_NS}}}pic")
+    nv_pic_pr = etree.SubElement(pic, f"{{{PIC_NS}}}nvPicPr")
+    cnv_pr = etree.SubElement(nv_pic_pr, f"{{{PIC_NS}}}cNvPr")
+    cnv_pr.set("id", str(len(images)))
+    cnv_pr.set("name", f"image{len(images)}.{ext}")
+    etree.SubElement(nv_pic_pr, f"{{{PIC_NS}}}cNvPicPr")
+    blip_fill = etree.SubElement(pic, f"{{{PIC_NS}}}blipFill")
+    blip = etree.SubElement(blip_fill, f"{{{A_NS}}}blip")
+    # r:embed —— 关系引用必须用 Office 关系命名空间（r:），不是 w:
+    blip.set(f"{{{R_NS}}}embed", rid)
+    stretch = etree.SubElement(blip_fill, f"{{{A_NS}}}stretch")
+    etree.SubElement(stretch, f"{{{A_NS}}}fillRect")
+    sp_pr = etree.SubElement(pic, f"{{{PIC_NS}}}spPr")
+    xfrm = etree.SubElement(sp_pr, f"{{{A_NS}}}xfrm")
+    off = etree.SubElement(xfrm, f"{{{A_NS}}}off")
+    off.set("x", "0")
+    off.set("y", "0")
+    ext_node = etree.SubElement(xfrm, f"{{{A_NS}}}ext")
+    ext_node.set("cx", str(cx))
+    ext_node.set("cy", str(cy))
+    prst = etree.SubElement(sp_pr, f"{{{A_NS}}}prstGeom")
+    prst.set("prst", "rect")
+    etree.SubElement(prst, f"{{{A_NS}}}avLst")
+
+    run = etree.Element(q("r"))
+    run.append(drawing)
+    return _image_paragraph_element(run)
+
+
+def _image_paragraph_element(run: etree._Element) -> etree._Element:
+    """整页图片的段落：行距自动 + 1pt 字号。
+
+    Word 把行内图片摆在**基线**上：若行距 exact = 图片高，基线在行框内偏上，
+    图片会顶出页外（实测顶出约 41mm）。行距改自动后行框恰好被图片撑满，
+    剩下的基线下伸部由 1pt 字号压到亚毫米级，整页图刚好占满一页。
+    """
+    para = etree.Element(q("p"))
+    ppr = etree.SubElement(para, q("pPr"))
+    spacing = etree.SubElement(ppr, q("spacing"))
+    spacing.set(q("before"), "0")
+    spacing.set(q("after"), "0")
+    jc = etree.SubElement(ppr, q("jc"))
+    jc.set(q("val"), "center")
+    rpr = etree.SubElement(run, q("rPr"))
+    for name in ("sz", "szCs"):
+        node = etree.SubElement(rpr, q(name))
+        node.set(q("val"), "2")
+    para.append(run)
+    return para
 
 
 # ── 表格 ──────────────────────────────────────────────────────────────────
@@ -1219,12 +1342,19 @@ _BLOCK_TAGS = frozenset(
 )
 
 
-def _emit_flow(elements, styles: StyleResolver, out: list, *, content_width: int | None) -> None:
+def _emit_flow(
+    elements, styles: StyleResolver, out: list, *,
+    content_width: int | None, images: list[tuple[str, str, bytes]],
+) -> None:
     """把一个页面下的块级内容按文档顺序转写进 ``out``。
 
     打印模板里除了 ``h1`` 和 ``table``，还可能有 ``<p>`` 之类的说明段落
     （例如"该承包方名下暂无承包地块"的占位提示）—— 早先只认 h1/table，
     这类内容会被**静静地丢掉**，Word 件与打印件就对不上了。
+
+    ``images`` 是调用方（``build``）持有的收集器；⚠️ 不要写 ``images or []``
+    —— 空列表会取到右边的**新临时列表**，图片字节 append 进去直接丢弃
+    （2026-11-09 示意图导出踩过：drawing 有了、media 却是空的）。
     """
     for element in elements:
         if not isinstance(element.tag, str):
@@ -1232,7 +1362,13 @@ def _emit_flow(elements, styles: StyleResolver, out: list, *, content_width: int
         if SKIP_CLASSES & set(_classes_of(element)):
             continue
         tag = _tag_of(element)
-        if tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
+        if tag == "img":
+            para = _image_paragraph(
+                element.get("src"), styles.resolve(element), images
+            )
+            if para is not None:
+                out.append(para)
+        elif tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
             # h1（表单大标题）默认居中；h2 及以下（正文条款标题，如合同
             # "一、承包土地情况"）打印件里是左对齐，默认值跟着改左。
             align = "center" if tag == "h1" else None
@@ -1250,7 +1386,7 @@ def _emit_flow(elements, styles: StyleResolver, out: list, *, content_width: int
                 child for child in element if isinstance(child.tag, str) and _tag_of(child) in _BLOCK_TAGS
             ]
             if nested:
-                _emit_flow(element, styles, out, content_width=content_width)
+                _emit_flow(element, styles, out, content_width=content_width, images=images)
             else:
                 out.append(_block_paragraph(element, styles, default_pt=10.5))
         elif tag != "br":
@@ -1266,6 +1402,7 @@ class HtmlDocxBuilder:
         body = etree.Element(q("body"))
         pages = [el for el in document.iter() if isinstance(el.tag, str) and "page" in _classes_of(el)]
         sections: list[tuple[list[etree._Element], etree._Element]] = []
+        images: list[tuple[str, str, bytes]] = []
 
         for page in pages:
             page_decls = styles.resolve(page)
@@ -1286,14 +1423,14 @@ class HtmlDocxBuilder:
                     pad_bottom_mm=to_mm(page_decls.get("padding-bottom")) or 0.0,
                 )
             else:
-                _emit_flow(page, styles, items, content_width=content_width)
+                _emit_flow(page, styles, items, content_width=content_width, images=images)
 
             sections.append((items, sect_pr))
 
         if not sections:
             body.append(_paragraph())
             body.append(self._default_section())
-            return self._package(body)
+            return self._package(body, images)
 
         # 分节属性必须**夹在该节内容末尾**（`pPr/sectPr` 表示"这一节到此为止"）。
         # 全部堆到最后会让所有内容落进第一节，多出来的节各自占一张空白页。
@@ -1306,7 +1443,7 @@ class HtmlDocxBuilder:
         if last_items and last_items[-1].tag == q("tbl"):
             body.append(_zero_height_paragraph())
         body.append(last_sect_pr)
-        return self._package(body)
+        return self._package(body, images)
 
     # ── 内部 ──────────────────────────────────────────────────────────────
 
@@ -1333,13 +1470,27 @@ class HtmlDocxBuilder:
         return sect
 
     @staticmethod
-    def _package(body: etree._Element) -> bytes:
-        document = etree.Element(q("document"), nsmap={"w": W_NS, "r": R_NS})
+    def _package(
+        body: etree._Element, images: list[tuple[str, str, bytes]] | None = None
+    ) -> bytes:
+        images = images or []
+        document = etree.Element(
+            q("document"),
+            nsmap={"w": W_NS, "r": R_NS, "wp": WP_NS, "a": A_NS, "pic": PIC_NS},
+        )
         document.append(body)
         document_xml = etree.tostring(
             document, xml_declaration=True, encoding="UTF-8", standalone=True
         )
 
+        # 图片扩展名 → [Content_Types] 的 Default 声明（png / jpeg 各一条）
+        image_exts = sorted({ext for _, ext, _ in images})
+        image_content_types = "".join(
+            f'<Default Extension="{ext}" ContentType="image/png"/>'
+            if ext == "png"
+            else f'<Default Extension="{ext}" ContentType="image/jpeg"/>'
+            for ext in image_exts
+        )
         content_types = (
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
@@ -1347,6 +1498,7 @@ class HtmlDocxBuilder:
             '<Default Extension="xml" ContentType="application/xml"/>'
             '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
             '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+            f"{image_content_types}"
             "</Types>"
         )
         rels = (
@@ -1355,10 +1507,15 @@ class HtmlDocxBuilder:
             '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
             "</Relationships>"
         )
+        image_rels = "".join(
+            f'<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image_{index + 1}.{ext}"/>'
+            for index, (rid, ext, _) in enumerate(images)
+        )
         document_rels = (
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
             '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+            f"{image_rels}"
             "</Relationships>"
         )
         styles_xml = (
@@ -1380,6 +1537,8 @@ class HtmlDocxBuilder:
             archive.writestr("word/document.xml", document_xml)
             archive.writestr("word/_rels/document.xml.rels", document_rels)
             archive.writestr("word/styles.xml", styles_xml)
+            for index, (rid, ext, data) in enumerate(images):
+                archive.writestr(f"word/media/image_{index + 1}.{ext}", data)
         return buffer.getvalue()
 
 
