@@ -58,8 +58,23 @@
           @click="openGenerateDialog"
         >
           <el-icon><DocumentAdd /></el-icon>
-          合同生成
+          {{ hasGeneratedContract ? "重新生成" : "合同生成" }}
         </el-button>
+        <el-tooltip
+          :content="hasGeneratedContract ? '导出现行延包合同 Word' : '尚未生成延包合同'"
+          placement="top"
+        >
+          <el-button
+            type="primary"
+            plain
+            :disabled="!hasGeneratedContract"
+            :loading="exportingContract"
+            @click="handleExportContract"
+          >
+            <el-icon><Download /></el-icon>
+            导出合同
+          </el-button>
+        </el-tooltip>
         <el-upload
           ref="uploadRef"
           v-if="canManage"
@@ -124,9 +139,10 @@
 <script setup>
 import { computed, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { DocumentAdd, Printer, Upload } from "@element-plus/icons-vue";
+import { DocumentAdd, Download, Printer, Upload } from "@element-plus/icons-vue";
 import SurveyContractGenerateDialog from "./SurveyContractGenerateDialog.vue";
 import {
+  exportSurveyContractDocx,
   fetchSurveyContractDetail,
   fetchSurveyContracts,
   fetchSurveyPhase2,
@@ -170,6 +186,9 @@ const cbfsLabel = computed(() => CBFS_OPTIONS[activeContract.value?.cbfs] || act
 const generatedAtText = computed(() => (activeContract.value?.generatedAt || "").slice(0, 19).replace("T", " ") || "-");
 // 批次已结束不能生成；调查结果确认后仍允许生成（延包合同是调查完成后的下一环节）
 const canGenerate = computed(() => props.canManage && props.batchStatus !== "finished");
+// 是否已生成延包合同（catalog.currentCode = 现行延包合同编码；导入的二轮现行合同不算）
+const hasGeneratedContract = computed(() => Boolean(catalog.value.currentCode));
+const exportingContract = ref(false);
 const generateHint = computed(() => {
   if (!props.canManage) return "";
   if (props.batchStatus === "finished") return "（批次已结束，不能生成合同）";
@@ -255,6 +274,42 @@ async function loadAttachments() {
     attachments.value = [];
   } finally {
     attLoading.value = false;
+  }
+}
+
+// blob 形式的错误响应里抠出 detail（axios 对 blob 响应的报错不会自动解析 JSON）
+async function extractExportError(error) {
+  const body = error?.response?.data;
+  if (body instanceof Blob) {
+    try {
+      const parsed = JSON.parse(await body.text());
+      return parsed?.detail || "导出合同失败";
+    } catch { /* 非 JSON 错误体 */ }
+  }
+  return error?.response?.data?.detail || "导出合同失败";
+}
+
+// 导出现行延包合同 Word（后端只认本平台生成的延包合同，未生成返回 404）
+async function handleExportContract() {
+  if (!catalog.value.currentCode) {
+    ElMessage.warning("该承包户尚未生成延包合同");
+    return;
+  }
+  exportingContract.value = true;
+  try {
+    const { data } = await exportSurveyContractDocx(props.batchId, props.contractorUid, {
+      timeout: 120000,
+    });
+    const url = URL.createObjectURL(data);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "农村土地（耕地）承包合同.docx";
+    link.click();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    ElMessage.error(await extractExportError(error));
+  } finally {
+    exportingContract.value = false;
   }
 }
 

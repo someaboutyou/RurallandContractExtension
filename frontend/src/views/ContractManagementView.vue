@@ -101,12 +101,19 @@
                   :disabled="!row.canSign"
                   @click="signSingle(row)"
                 >{{ row.signed ? "重新签订" : "签订合同" }}</el-button>
-                <el-button
+                <el-dropdown
                   v-if="row.signed"
-                  link
-                  type="primary"
-                  @click="viewContract(row)"
-                >查看合同</el-button>
+                  trigger="click"
+                  @command="(cmd) => handleContractAction(row, cmd)"
+                >
+                  <el-button link type="primary" :loading="singleExportingUid === row.contractorUid">合同<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="view">查看合同</el-dropdown-item>
+                      <el-dropdown-item command="export">导出合同</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
                 <el-dropdown trigger="click" @command="(cmd) => handleHouseholdApplication(row, cmd)">
                   <el-button link type="primary">单户申请书<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
                   <template #dropdown>
@@ -180,6 +187,7 @@ import ContractInfoPanel from "../components/survey/ContractInfoPanel.vue";
 import {
   exportCollectiveApplicationDocx,
   exportHouseholdApplicationDocx,
+  exportSurveyContractDocx,
   fetchBatchContractOverview,
   fetchCollectiveApplication,
   fetchCurrentSurveyBatch,
@@ -203,6 +211,8 @@ const rowTableRef = ref(null);
 const generateDialog = ref(null);
 const applicationBatchDialog = ref(null);
 const contractExportDialog = ref(null);
+// 列表「合同 → 导出合同」单户导出中（按 contractorUid 记录，驱动按钮 loading）
+const singleExportingUid = ref(null);
 // 查看合同对话框（复用 ContractInfoPanel）
 const contractInfoVisible = ref(false);
 const contractInfoTarget = ref(null);
@@ -277,6 +287,44 @@ function viewContract(row) {
   if (!row?.contractorUid) return;
   contractInfoTarget.value = row;
   contractInfoVisible.value = true;
+}
+
+// 操作列「合同」下拉：查看 / 导出（单户，直接下载 docx）
+function handleContractAction(row, command) {
+  if (command === "view") {
+    viewContract(row);
+  } else if (command === "export") {
+    exportSingleContract(row);
+  }
+}
+
+// 单户导出现行延包合同 Word（与工具栏批量导出同一接口，此处直接下载单个文件）
+async function exportSingleContract(row) {
+  if (!activeBatch.value || !row?.contractorUid) return;
+  singleExportingUid.value = row.contractorUid;
+  try {
+    const { data } = await exportSurveyContractDocx(activeBatch.value.id, row.contractorUid, {
+      timeout: 120000,
+    });
+    const name = row.cbfmc || row.cbfbm || "承包户";
+    downloadBlob(data, `${name}农村土地（耕地）承包合同.docx`);
+  } catch (error) {
+    ElMessage.error(await extractContractExportError(error));
+  } finally {
+    singleExportingUid.value = null;
+  }
+}
+
+// blob 形式的错误响应里抠出 detail（axios 对 blob 响应的报错不会自动解析 JSON）
+async function extractContractExportError(error) {
+  const body = error?.response?.data;
+  if (body instanceof Blob) {
+    try {
+      const parsed = JSON.parse(await body.text());
+      return parsed?.detail || "导出合同失败";
+    } catch { /* 非 JSON 错误体 */ }
+  }
+  return error?.response?.data?.detail || "导出合同失败";
 }
 
 // 在查看弹窗里可能重新生成了合同；关闭时刷新列表，保证「现行合同」列不失真
