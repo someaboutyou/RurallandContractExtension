@@ -379,6 +379,7 @@ class ContractTemplateAdminService:
             "area_mu": "2.83",
             "contract_term_start": "2025年1月1日",
             "contract_term_end": "2054年12月31日",
+            "applicant_date": "2026年11月9日",
             # ── 两张摸底表的预览样例（字段与 survey/sheet.py 的上下文同键） ──
             **_sample_sheet_context(),
             # ── 村组公示签字表预览样例（值一律脱敏，禁止真实个人信息） ──

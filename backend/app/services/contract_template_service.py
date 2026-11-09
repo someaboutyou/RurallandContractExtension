@@ -6,7 +6,7 @@ supporting both screen preview and print-ready output.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
@@ -676,9 +676,10 @@ class ContractTemplateService:
 
         版式复刻自 CS 版 ``Template/农村土地承包经营权单户登记申请书.dot``。
         发包方取该户地块关联 / 合同指向的发包方；申请人取承包方（户主）；
-        期限取现行延包合同（未签订则回退上次承包合同），到期日取上次承包
-        合同的期限止 —— 与 CS 样张「2024年12月31日到期…自2025年1月1日起
-        至2054年12月31日止」的口径一致。
+        期限取现行延包合同；未生成合同的户默认自申请之日（渲染当日）起
+        30 年（止 = 起 + 30 年 − 1 天），不再沿用上次承包合同的旧期限，
+        前端在打印/导出前会向用户提示这一默认口径。到期日（"于…到期"）
+        仍取上次承包合同的期限止 —— 与 CS 样张「2024年12月31日到期…」一致。
         """
         from app.models.survey import SurveyBatch, SurveyCbfBase, SurveyCbdkxxBase
         from app.models.cbht import (
@@ -740,8 +741,29 @@ class ContractTemplateService:
         original_row = db.get(Cbht, original_code) if original_code else None
 
         contract_code = (current_contract.cbhtbm if current_contract else None) or original_code or ""
-        term_source = current_contract or original_row
         old_term_end = _fmt_date_cn(original_row.cbqxz) if original_row and original_row.cbqxz else ""
+
+        # 申请日期 = 渲染当日（与 CS 版导出行为一致：样张「2026年11月8日」），中文不补零
+        now = datetime.now()
+        applicant_date = f"{now.year}年{now.month}月{now.day}日"
+
+        # 期限口径：已签订 → 现行延包合同；未签订 → 默认自申请之日起 30 年
+        #（止 = 起 + 30 年 − 1 天），不沿用上次承包合同的旧期限（前端会提示）。
+        if current_contract is not None:
+            contract_years = self._term_years(current_contract)
+            contract_term_start = _fmt_date_cn(current_contract.cbqxq) if current_contract.cbqxq else ""
+            contract_term_end = _fmt_date_cn(current_contract.cbqxz) if current_contract.cbqxz else ""
+            no_contract = False
+        else:
+            try:
+                end_dt = now.replace(year=now.year + 30)
+            except ValueError:  # 2月29日申请、30 年后非闰年
+                end_dt = now.replace(year=now.year + 30, day=28)
+            term_end = end_dt - timedelta(days=1)
+            contract_years = "30"
+            contract_term_start = applicant_date
+            contract_term_end = f"{term_end.year}年{term_end.month}月{term_end.day}日"
+            no_contract = True
 
         # 发包方：合同 → 地块关联 → 发包方成果表
         issuer_fbfbm = (
@@ -769,9 +791,11 @@ class ContractTemplateService:
             "family_count": str(contractor.cbfcysl or 0),
             "parcel_count": str(parcel_count) if parcel_count else "",
             "area_mu": area_mu,
-            "contract_years": self._term_years(term_source),
-            "contract_term_start": _fmt_date_cn(term_source.cbqxq) if term_source and term_source.cbqxq else "",
-            "contract_term_end": _fmt_date_cn(term_source.cbqxz) if term_source and term_source.cbqxz else "",
+            "contract_years": contract_years,
+            "contract_term_start": contract_term_start,
+            "contract_term_end": contract_term_end,
+            "no_contract": no_contract,
+            "applicant_date": applicant_date,
         }
         template = self._env.get_template("household_registration_application.html")
         return template.render(**ctx)
@@ -839,14 +863,20 @@ class ContractTemplateService:
 
     @staticmethod
     def _term_years(contract) -> str:
-        """承包年限 = 止 - 起 + 1（本系统口径：止期 = 起期 + N 年 − 1 天）。
+        """承包年限 = (止 − 起 + 1 天) 按 365.25 折算取整。
 
+        兼容两种起止口径——「止 = 起 + N 年 − 1 天」（如 2026-09-30 ~ 2056-09-29
+        → 30）与「整日历年」（如 2025-01-01 ~ 2054-12-31 → 30）：
+        直接用 年份差+1 会把前者多算一年（31）。
         算不出（缺起止或倒挂）回退 30（二轮延包默认 30 年）。
         """
         if contract is None or not contract.cbqxq or not contract.cbqxz:
             return "30"
-        years = contract.cbqxz.year - contract.cbqxq.year + 1
-        return str(years) if years > 0 else "30"
+        start, end = contract.cbqxq, contract.cbqxz
+        if end < start:
+            return "30"
+        total_days = (end - start).days + 1
+        return str(max(1, round(total_days / 365.25)))
 
     # ── 地籍调查表（cadastral-survey） ────────────────────────────
 

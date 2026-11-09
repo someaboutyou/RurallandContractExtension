@@ -5,9 +5,13 @@
 <title>第二轮土地承包到期后再延长三十年登记申请表（单户）</title>
 <style>
   /* 《第二轮土地承包到期后再延长三十年登记申请表》（单户登记申请书）母版 ——
-     版式复刻自 CS 版 Template/农村土地承包经营权单户登记申请书.dot：
-     标题 + 15 行申请表（发包方 / 申请人 / 合同编号 / 申请内容 /
-     村民小组 / 村民委员会 / 乡（镇）人民政府 / 县农业农村局四级意见）。
+     版式逐格复刻自 CS 版 Template/农村土地承包经营权单户登记申请书.dot
+     （Word COM 解出的网格：4 列 70/153/90/197pt，label 列窄、文字自动换行）：
+     - 申请内容行与申请人行之间无横线；申请人行无 label 列，
+       「申请人：」居左（格宽约 48%），申请日期居右（约 38%），中间无竖线；
+     - 申请内容的填充值带下划线（.fill → w:u）；
+     - 四级意见块：label 独立格，意见格右上「（公章）」、与公章格之间无竖线，
+       意见格与负责人行之间无横线，负责人行「负责人：」居左、「年 月 日」居右、中间无竖线。
      A4 纵向一页，正文宋体 12pt（小四），申请内容仿宋 14pt（四号）。 */
   @page { size: A4 portrait; margin: 0; }
 
@@ -26,7 +30,7 @@
     width: 210mm;
     height: 297mm;
     margin: 0 auto;
-    padding: 20mm 18mm;
+    padding: 14mm 16mm; /* 一页铁律：20mm 上下边距会把最后一级意见挤出第二页 */
     background: #fff;
     page-break-after: always;
     break-after: page;
@@ -35,11 +39,11 @@
   .page:last-child { page-break-after: auto; break-after: auto; }
 
   .doc-title {
-    margin: 0 0 6mm;
+    margin: 0 0 4mm;
     text-align: center;
     font-family: "方正小标宋简体", "SimHei", "黑体", serif;
     font-size: 18pt;
-    line-height: 30pt;
+    line-height: 26pt;
   }
 
   table.apply-form {
@@ -48,10 +52,13 @@
     table-layout: fixed;
   }
 
-  table.apply-form th,
-  table.apply-form td {
+  /* 注意选择器优先级：基础规则用 .apply-form td（0,1,1），与下方 td.xxx 类覆盖
+     同级、靠源码顺序取胜——若写成 table.apply-form td（0,1,2），类覆盖里的
+     border-*:none 全部失效，浏览器预览会多出横竖线（docx 转换器不受影响）。 */
+  .apply-form th,
+  .apply-form td {
     border: 1px solid #000;
-    padding: 2.2mm 2mm;
+    padding: 1.6mm 2mm;
     vertical-align: middle;
     font-size: 12pt;
     line-height: 20pt;
@@ -65,42 +72,59 @@
     text-align: left;
     font-family: "仿宋", "FangSong", "仿宋_GB2312", "SimSun", serif;
     font-size: 14pt;
-    line-height: 26pt;
+    line-height: 24pt;
+    vertical-align: middle;
+    border-bottom: none; /* 与申请人行之间无横线（.dot R6C2 bot=0） */
   }
 
-  td.opinion-cell {
-    text-align: left;
-    vertical-align: top;
-  }
-
-  td.opinion-cell .seal-line {
-    display: block;
-    text-align: right;
-    padding-right: 4mm;
-  }
-
-  td.sign-cell {
-    text-align: right;
+  /* ── 申请人行（申请内容正下方，两行之间无横线） ──────────────────
+     「申请内容」label rowspan=2 纵向合并到本行（消掉 label 底部短横线）；
+     「申请人：」格与日期格之间无竖线。 */
+  td.applicant-cell {
+    border-top: none;
+    border-right: none;
+    text-align: center;
     font-family: "仿宋", "FangSong", "仿宋_GB2312", "SimSun", serif;
-    vertical-align: bottom;
   }
 
-  td.sign-cell .sig-line,
-  td.opinion-cell .sig-line {
-    display: block;
-    text-align: left;
-    text-indent: 2em;
+  td.applicant-date-cell {
+    border-top: none;
+    border-left: none;
+    text-align: center;
+    font-family: "仿宋", "FangSong", "仿宋_GB2312", "SimSun", serif;
   }
 
-  td.sign-cell .date-line,
-  td.opinion-cell .date-line {
-    display: block;
-    text-align: left;
-    margin-top: 4mm;
-    padding-left: 8mm;
+  /* ── 四级意见块（两行：公章区 + 负责人行，中间无横线） ───────────
+     label rowspan=2 纵向合并到负责人行（消掉 label 底部短横线）；
+     意见格与公章格之间无竖线；负责人格与日期格之间无竖线。 */
+  td.opinion-blank {
+    border-bottom: none;
+    border-right: none;
   }
 
-  /* 横线填值：全角空格 + 下划线（html_docx → w:u），打印后手工填写 */
+  td.seal-cell {
+    border-bottom: none;
+    border-left: none;
+    vertical-align: top;
+    text-align: right;
+    padding: 1.5mm 6mm;
+  }
+
+  td.leader-cell {
+    border-top: none;
+    border-right: none;
+    text-align: center;
+    font-family: "仿宋", "FangSong", "仿宋_GB2312", "SimSun", serif;
+  }
+
+  td.leader-date-cell {
+    border-top: none;
+    border-left: none;
+    text-align: center;
+    font-family: "仿宋", "FangSong", "仿宋_GB2312", "SimSun", serif;
+  }
+
+  /* 横线填值 / 样张口径：填充值带下划线（html_docx → w:u），打印后可手工核对 */
   .fill {
     text-decoration: underline;
   }
@@ -111,10 +135,12 @@
   <p class="doc-title">第二轮土地承包到期后再延长三十年登记申请表</p>
   <table class="apply-form">
     <colgroup>
-      <col style="width: 26%">
-      <col style="width: 32%">
-      <col style="width: 18%">
-      <col style="width: 24%">
+      <!-- 列宽用绝对 mm（内容宽 174mm，按 CS .dot 70/153/90/197pt 比例折算）；
+           百分比会被 html_docx 的 to_mm 判 None，docx 里整表退化为等宽列 -->
+      <col style="width: 23.9mm">
+      <col style="width: 52.2mm">
+      <col style="width: 30.7mm">
+      <col style="width: 67.2mm">
     </colgroup>
     <tr>
       <td class="label" rowspan="2">发包方负责人姓名</td>
@@ -141,47 +167,48 @@
       <td colspan="3">{% if contract_code %}{{ contract_code }}{% else %}<span class="fill">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>{% endif %}</td>
     </tr>
     <tr>
-      <td class="label">申请内容</td>
-      <td class="content-cell" colspan="3">本人{{ cbfmc }}，第二轮农村土地承包经营权于{{ old_term_end }}到期，按照本村民小组延包方案相关内容，符合延包的条件，特申请第二轮土地承包到期后延长三十年登记。现有家庭人口{{ family_count }}人，承包{{ fbfmc }}集体土地{{ parcel_count }}块共计{{ area_mu }}亩，已签订《农村土地承包合同》，承包方式为家庭承包，承包期{{ contract_years }}年，自{{ contract_term_start }}起至{{ contract_term_end }}止。</td>
+      <td class="label" rowspan="2">申请内容</td>
+      <td class="content-cell" colspan="3">本人<span class="fill">{{ cbfmc }}</span>，第二轮农村土地承包经营权于<span class="fill">{{ old_term_end }}</span>到期，按照本村民小组延包方案相关内容，符合延包的条件，特申请第二轮土地承包到期后延长三十年登记。现有家庭人口<span class="fill">{{ family_count }}</span>人，承包<span class="fill">{{ fbfmc }}</span>集体土地<span class="fill">{{ parcel_count }}</span>块共计<span class="fill">{{ area_mu }}</span>亩，已签订《农村土地承包合同》，承包方式为家庭承包，承包期<span class="fill">{{ contract_years }}</span>年，自<span class="fill">{{ contract_term_start }}</span>起至<span class="fill">{{ contract_term_end }}</span>止。</td>
     </tr>
-    <tr>
-      <td class="label" style="height: 20mm;">&nbsp;</td>
-      <td class="sign-cell" colspan="3">
-        <span class="sig-line">申请人：</span>
-        <span class="date-line">&nbsp;&nbsp;&nbsp;&nbsp;年&nbsp;&nbsp;&nbsp;月&nbsp;&nbsp;&nbsp;日</span>
-      </td>
+    <tr style="height: 8mm;">
+      <td class="applicant-cell" colspan="2">申请人：</td>
+      <td class="applicant-date-cell">{% if applicant_date %}{{ applicant_date }}{% else %}年&nbsp;&nbsp;月&nbsp;&nbsp;日{% endif %}</td>
     </tr>
-    <tr>
-      <td class="label" style="height: 22mm;">村民小组意见</td>
-      <td class="opinion-cell" colspan="3">
-        <span class="seal-line">（公章）</span>
-        <span class="sig-line">负责人：</span>
-        <span class="date-line">&nbsp;&nbsp;&nbsp;&nbsp;年&nbsp;&nbsp;&nbsp;月&nbsp;&nbsp;&nbsp;日</span>
-      </td>
+    <tr style="height: 14mm;">
+      <td class="label" rowspan="2">村民小组意见</td>
+      <td class="opinion-blank" colspan="2">&nbsp;</td>
+      <td class="seal-cell">（公章）</td>
     </tr>
-    <tr>
-      <td class="label" style="height: 22mm;">村民委员会意见</td>
-      <td class="opinion-cell" colspan="3">
-        <span class="seal-line">（公章）</span>
-        <span class="sig-line">负责人：</span>
-        <span class="date-line">&nbsp;&nbsp;&nbsp;&nbsp;年&nbsp;&nbsp;&nbsp;月&nbsp;&nbsp;&nbsp;日</span>
-      </td>
+    <tr style="height: 9mm;">
+      <td class="leader-cell" colspan="2">负责人：</td>
+      <td class="leader-date-cell">年&nbsp;&nbsp;月&nbsp;&nbsp;日</td>
     </tr>
-    <tr>
-      <td class="label" style="height: 22mm;">乡（镇）人民政府意见</td>
-      <td class="opinion-cell" colspan="3">
-        <span class="seal-line">（公章）</span>
-        <span class="sig-line">负责人：</span>
-        <span class="date-line">&nbsp;&nbsp;&nbsp;&nbsp;年&nbsp;&nbsp;&nbsp;月&nbsp;&nbsp;&nbsp;日</span>
-      </td>
+    <tr style="height: 14mm;">
+      <td class="label" rowspan="2">村民委员会意见</td>
+      <td class="opinion-blank" colspan="2">&nbsp;</td>
+      <td class="seal-cell">（公章）</td>
     </tr>
-    <tr>
-      <td class="label" style="height: 22mm;">县农业农村局意见</td>
-      <td class="opinion-cell" colspan="3">
-        <span class="seal-line">（公章）</span>
-        <span class="sig-line">负责人：</span>
-        <span class="date-line">&nbsp;&nbsp;&nbsp;&nbsp;年&nbsp;&nbsp;&nbsp;月&nbsp;&nbsp;&nbsp;日</span>
-      </td>
+    <tr style="height: 9mm;">
+      <td class="leader-cell" colspan="2">负责人：</td>
+      <td class="leader-date-cell">年&nbsp;&nbsp;月&nbsp;&nbsp;日</td>
+    </tr>
+    <tr style="height: 14mm;">
+      <td class="label" rowspan="2">乡（镇）人民政府意见</td>
+      <td class="opinion-blank" colspan="2">&nbsp;</td>
+      <td class="seal-cell">（公章）</td>
+    </tr>
+    <tr style="height: 9mm;">
+      <td class="leader-cell" colspan="2">负责人：</td>
+      <td class="leader-date-cell">年&nbsp;&nbsp;月&nbsp;&nbsp;日</td>
+    </tr>
+    <tr style="height: 14mm;">
+      <td class="label" rowspan="2">县农业农村局意见</td>
+      <td class="opinion-blank" colspan="2">&nbsp;</td>
+      <td class="seal-cell">（公章）</td>
+    </tr>
+    <tr style="height: 9mm;">
+      <td class="leader-cell" colspan="2">负责人：</td>
+      <td class="leader-date-cell">年&nbsp;&nbsp;月&nbsp;&nbsp;日</td>
     </tr>
   </table>
 </section>
