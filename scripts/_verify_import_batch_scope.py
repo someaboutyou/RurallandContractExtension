@@ -84,6 +84,48 @@ expect_403("旧校验·授权镇·批次县321324（保持403）", old_check, us
 multi = make_user(region_codes=("321324201", "321324202"))
 expect_ok("新校验·双镇授权·批次县321324", new_check, multi, "321324")
 
+# ===== 落库写闸（db/session.py::before_flush / _validate_scope）=====
+# 背景：昨天的修复只放宽了 create_batch 接口层校验，批次记录本身落库时
+# before_flush 的系统授权检查仍是严格 startswith，授权到镇建县级批次照样
+# 403「系统授权范围为 321324100，无法操作区域 321324 的数据」。
+# 修复后写闸放宽为父子关系即放行（仅容器记录受益；业务码反推的数据行
+# 粒度恒细于授权，仍走单向命中，越权数据由导入行级校验拦截）。
+from app.db import session as db_session_module  # noqa: E402
+
+das_module.license_validator.get_authorized_region_code = lambda: "321324100"
+
+_in_scope = db_session_module._region_in_write_scope
+
+
+def make_item(region_code, tenant_code="321324"):
+    return SimpleNamespace(region_code=region_code, tenant_code=tenant_code)
+
+
+def expect_block(name, fn, *args):
+    try:
+        fn(*args)
+        results.append((name, False, "未拦截（应 403）"))
+    except HTTPException as exc:
+        results.append((name, exc.status_code == 403, f"HTTP {exc.status_code}: {exc.detail}"))
+
+
+# 系统授权写闸：授权到镇 321324100（直接断言 _region_in_write_scope 布尔口径）
+assert _in_scope("321324", "321324100") is True
+results.append(("写闸·批次县321324（授权祖先）放行", True, "放行"))
+assert _in_scope("32132410000101", "321324100") is True
+results.append(("写闸·数据行镇内村组32132410000101", True, "放行"))
+assert _in_scope("32132420000101", "321324100") is False
+results.append(("写闸·邻镇32132420000101 拦截", True, "拦截"))
+assert _in_scope("321325", "321324100") is False
+results.append(("写闸·不相干县321325 拦截", True, "拦截"))
+
+# 用户数据权限写闸（_validate_scope）：授权到镇，容器行县码放行
+user_perms = (("321324", "321324100", "town"),)
+expect_ok("用户闸·批次县321324 放行", db_session_module._validate_scope, "custom", "321324", user_perms, make_item("321324"))
+expect_ok("用户闸·镇内行321324100001 放行", db_session_module._validate_scope, "custom", "321324", user_perms, make_item("321324100001"))
+expect_block("用户闸·邻镇行321324200001 拦截", db_session_module._validate_scope, "custom", "321324", user_perms, make_item("321324200001"))
+expect_block("用户闸·跨租户行 拦截", db_session_module._validate_scope, "custom", "321324", user_perms, make_item("321324100001", tenant_code="320000"))
+
 failed = [row for row in results if not row[1]]
 for name, ok, note in results:
     print(f"{'PASS' if ok else 'FAIL'}  {name}  ->  {note}")

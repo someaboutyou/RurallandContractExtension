@@ -108,7 +108,18 @@ def _fill_tenant_scope(session, _flush_context, _instances):
             item.tenant_code = tenant_code
         
         # 写入同时受系统授权和用户数据权限限制。
-        if authorized_region and region_code and not str(region_code).startswith(authorized_region):
+        # 系统授权放宽一档：写入区域是授权范围的**祖先**（如授权到镇 321324100、
+        # 批次选县 321324）视为「容器」记录放行——数据行的区域码由业务编码
+        # （dkbm/fbfbm/cbfbm…，粒度到村组）反推，粒度恒细于授权码，走不到这个
+        # 分支；能以粗于授权的区域码落库的只有导入批次/调查批次这类用户手选
+        # 区域的容器表。越权数据仍由导入行级校验（resolve_effective_import_region
+        # → ensure_region_in_scope，严格 startswith）逐行拦截，此处放宽不构成
+        # 数据写入的越权通道。
+        if (
+            authorized_region
+            and region_code
+            and not _region_in_write_scope(region_code, authorized_region)
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="系统授权范围为 {}，无法操作区域 {} 的数据".format(authorized_region, region_code)
@@ -143,6 +154,19 @@ def _derive_region_code(item) -> str | None:
     return None
 
 
+def _region_in_write_scope(region_code: str, authorized_region: str) -> bool:
+    """写入区域与授权范围存在父子关系即在系统授权的写范围内。
+
+    - 常规路径：写入区域在授权范围内（``startswith(authorized)``）；
+    - 容器路径：写入区域是授权范围的祖先（授权到镇、批次/容器记录建到县）。
+      数据行（业务编码反推区域，粒度到村组）永远走常规路径；只有用户手选
+      区域的容器表（导入批次、调查批次等）会落到祖先分支。
+    """
+    code = str(region_code)
+    authorized = str(authorized_region)
+    return code.startswith(authorized) or authorized.startswith(code)
+
+
 def _validate_scope(data_scope: str, tenant_scope: str | None, permissions: tuple, item) -> None:
     if data_scope == "all":
         return
@@ -151,7 +175,10 @@ def _validate_scope(data_scope: str, tenant_scope: str | None, permissions: tupl
             status_code=status.HTTP_403_FORBIDDEN,
             detail="当前数据不属于当前租户",
         )
-    if not any(str(item.region_code).startswith(permission[1]) for permission in permissions):
+    # 与系统授权同口径放宽：授权到镇/村的用户建县级批次时，批次行的区域码
+    # （县）粗于授权码（镇），单向 startswith 会把容器记录也拦掉；放宽为
+    # 父子关系即放行。数据行不受影响（业务码粒度恒细于授权，仍走单向命中）。
+    if not any(_region_in_write_scope(item.region_code, permission[1]) for permission in permissions):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="当前区域不在可操作范围内",
