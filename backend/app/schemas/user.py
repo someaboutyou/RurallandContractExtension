@@ -12,8 +12,8 @@ class UserRead(BaseModel):
     role: str
     roleCode: str
     dataScope: str
-    regionId: int
-    region: str
+    regionId: int | None
+    region: str | None
     regionPermissions: list[dict] = Field(default_factory=list)
     status: str
 

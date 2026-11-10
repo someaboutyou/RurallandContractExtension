@@ -1232,10 +1232,16 @@ def _upgrade_users(engine: Engine) -> None:
         statements.append("ALTER TABLE users ADD COLUMN tenant_code VARCHAR(12)")
     if "current_survey_batch_id" not in columns:
         statements.append("ALTER TABLE users ADD COLUMN current_survey_batch_id INTEGER")
+    # 全新库允许先只建 admin、暂不初始化区域（region_id 为空），
+    # 老库这里幂等地去掉 NOT NULL 约束。
+    region_column = next((c for c in inspector.get_columns("users") if c["name"] == "region_id"), None)
+    drop_region_not_null = bool(region_column) and not region_column.get("nullable", True)
 
     with engine.begin() as connection:
         for statement in statements:
             connection.exec_driver_sql(statement)
+        if drop_region_not_null:
+            connection.exec_driver_sql("ALTER TABLE users ALTER COLUMN region_id DROP NOT NULL")
         connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_users_tenant_code ON users(tenant_code)")
         connection.exec_driver_sql(
             """

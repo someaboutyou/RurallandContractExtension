@@ -70,8 +70,8 @@ class AuthService:
             "role": user.role.name,
             "roleCode": user.role.code,
             "dataScope": user.role.data_scope,
-            "regionCode": user.region.code,
-            "region": user.region.full_name,
+            "regionCode": user.region.code if user.region else None,
+            "region": user.region.full_name if user.region else None,
             "regionPermissions": [
                 {
                     "tenantCode": item.tenant_code,

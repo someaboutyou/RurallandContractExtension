@@ -21,8 +21,8 @@ class CurrentUser(BaseModel):
     role: str
     roleCode: str
     dataScope: str
-    regionCode: str
-    region: str
+    regionCode: str | None
+    region: str | None
     status: str
     permissions: list[str]
     # 授权区域清单。前端「调查批次」用它判断是否该用「所属区域」当默认筛选：

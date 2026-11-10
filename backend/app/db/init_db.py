@@ -39,11 +39,6 @@ DEFAULT_ROLES = [
     {"name": "业务员", "code": "operator", "data_scope": "town", "description": "负责申请受理、补录和流转。"},
 ]
 
-DEFAULT_REGIONS = [
-    {"name": "江苏省", "code": "320000", "level": "province", "full_name": "江苏省", "parent_code": None},
-    {"name": "泗洪县", "code": "321324", "level": "county", "full_name": "江苏省 / 宿迁市 / 泗洪县", "parent_code": "320000"},
-]
-
 DEFAULT_USERS = [
     {"username": "admin", "real_name": "超级管理员", "mobile": "13900000001", "role_code": "platform_admin", "region_code": "321324", "permission_codes": ["321324"]},
     {"username": "county_auditor", "real_name": "县级审核员", "mobile": "13900000002", "role_code": "county_auditor", "region_code": "321324", "permission_codes": ["321324"]},
@@ -829,51 +824,37 @@ def ensure_default_regions(db: Session) -> None:
     部署范围由 .env 的 REGION_SEED_COUNTIES（6 位码，县/市/省均可）决定：
     只把配置码所在的省(/市/县)链路「缺则补」进 regions 表，不整库灌入全国区县。
 
+    ⛔ 不再内置硬编码兜底（旧实现会在未配置时种出「江苏省 / 泗洪县」演示数据）：
+    未配置 REGION_SEED_COUNTIES 时 regions 表保持原样，全新库就是空区域；
+    由部署人补配 .env 后重启，或在「区域管理」页手工建。生产库不能凭空出现演示区域。
+
     ⚠️ 镇/村/组三级不在种子里 —— 由业务数据导入完成后
     sync_regions_from_business_codes 从发包方编码反推补齐（缺则补，幂等）。
     """
     county_codes = parse_county_codes(settings.region_seed_counties)
-    items = _load_national_seed_items()
-    if county_codes:
-        if not items:
-            print(
-                "[seed] 警告：REGION_SEED_COUNTIES 已配置但 region_seed.json 缺失/无效，"
-                "跳过该初始化路径（构建机需运行 scripts/fetch_region_seed.py 生成并随包分发）"
-            )
-        else:
-            selected = _select_seed_subtree(items, county_codes)
-            if selected:
-                _insert_region_items(db, selected)
-                return
-            print(
-                f"[seed] 警告：配置码 {county_codes} 在全国种子里未找到对应链路，"
-                "跳过该初始化路径"
-            )
+    if not county_codes:
+        print(
+            "[seed] 提示：未配置 REGION_SEED_COUNTIES，跳过区域初始化"
+            "（regions 表保持原样；补配 .env 后重启即可自动补齐）"
+        )
+        return
 
-    # 部署码未配置（dev / 演示库）：走内置 DEFAULT_REGIONS 兜底（泗洪演示数据）
-    existing_codes = set(db.scalars(select(Region.code)).all())
-    if not all(item["code"] in existing_codes for item in DEFAULT_REGIONS):
-        created_by_code: dict[str, Region] = {}
-        for item in DEFAULT_REGIONS:
-            region = db.scalar(select(Region).where(Region.code == item["code"]))
-            if region is None:
-                parent_id = None
-                if item["parent_code"]:
-                    parent = created_by_code.get(item["parent_code"]) or db.scalar(
-                        select(Region).where(Region.code == item["parent_code"])
-                    )
-                    parent_id = parent.id if parent else None
-                region = Region(
-                    name=item["name"],
-                    code=item["code"],
-                    level=item["level"],
-                    full_name=item["full_name"],
-                    parent_id=parent_id,
-                )
-                db.add(region)
-                db.flush()
-            created_by_code[item["code"]] = region
-        db.commit()
+    items = _load_national_seed_items()
+    if not items:
+        print(
+            "[seed] 警告：REGION_SEED_COUNTIES 已配置但 region_seed.json 缺失/无效，"
+            "跳过该初始化路径（构建机需运行 scripts/fetch_region_seed.py 生成并随包分发）"
+        )
+        return
+
+    selected = _select_seed_subtree(items, county_codes)
+    if selected:
+        _insert_region_items(db, selected)
+        return
+    print(
+        f"[seed] 警告：配置码 {county_codes} 在全国种子里未找到对应链路，"
+        "跳过该初始化路径"
+    )
 
 
 def _load_national_seed_items() -> list[dict]:
@@ -924,7 +905,7 @@ def _select_seed_subtree(items: list[dict], codes: list[str]) -> list[dict]:
 
 
 def _insert_region_items(db: Session, items: list[dict]) -> bool:
-    """「缺则补」插入区域条目（全国种子抽链路 / DEFAULT_REGIONS 兜底共用）。
+    """「缺则补」插入区域条目（全国种子抽取链路专用）。
 
     已存在的 code 一律不动；返回 True 表示本次调用实际为部署提供了有效数据源。
     """
@@ -1334,6 +1315,27 @@ def ensure_default_users(db: Session) -> None:
                 if region is not None:
                     break
         if region is None:
+            # 全新库尚未导入区域数据（未配置 REGION_SEED_COUNTIES / 还没导入业务数据）时，
+            # 平台管理员仍然要能创建并登录管理后台；region_id 允许为空，
+            # 数据权限由角色 data_scope=all 兜底，区域可在「区域管理」补录后再配。
+            if item["role_code"] == "platform_admin":
+                user = User(
+                    username=item["username"],
+                    real_name=item["real_name"],
+                    password_hash=password_hash,
+                    mobile=item["mobile"],
+                    status="active",
+                    tenant_code=None,
+                    role_id=role.id,
+                    region_id=None,
+                )
+                db.add(user)
+                db.flush()
+                changed = True
+                print(
+                    "[seed] 提示：当前没有区域数据，已创建平台管理员账号 "
+                    f"{item['username']}（未绑定区域，可用 Admin123456 登录后台补录）。"
+                )
             continue
         permission_codes = _demo_permission_codes(db, item["username"], region.code, preferred_regions)
         if not permission_codes:

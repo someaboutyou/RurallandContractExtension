@@ -154,8 +154,8 @@ class UserService:
             "role": item.role.name,
             "roleCode": item.role.code,
             "dataScope": item.role.data_scope,
-            "regionId": item.region.id,
-            "region": item.region.full_name,
+            "regionId": item.region.id if item.region else None,
+            "region": item.region.full_name if item.region else None,
             "regionPermissions": [
                 {
                     "tenantCode": permission.tenant_code,
