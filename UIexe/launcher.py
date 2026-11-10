@@ -1,5 +1,6 @@
 import os
 import queue
+import re
 import shutil
 import socket
 import stat
@@ -271,8 +272,126 @@ class App:
             self.events.put(('modules', count))
         threading.Thread(target=worker, daemon=True).start()
 
+    # ── 首次安装配置：控制中心是非交互宿主，install.ps1 的 Read-Host 拿不到输入
+    # （2026-11-10 实踩：目标机直接点「启动系统」报"目标坐标系尚未配置"）。
+    # 预检到未安装且未配置 TARGET_SRID 时，先弹窗收集配置写入 backend\.env，
+    # 再走正常启动，install.ps1 读到配置即全程零输入。
+
+    @staticmethod
+    def parse_srid(text):
+        """带号 25-45 → EPSG 4488+带号；或直接接受 EPSG 4513-4533。"""
+        if not text or not text.isdigit():
+            raise ValueError('带号必须是数字：25-45 的带号，或 EPSG 代码 4513-4533。')
+        value = int(text)
+        if 25 <= value <= 45:
+            return 4488 + value
+        if 4513 <= value <= 4533:
+            return value
+        raise ValueError('带号超出范围：请输入 25-45 的带号，或 EPSG 代码 4513-4533。')
+
+    @staticmethod
+    def parse_counties(text):
+        """区县码：6 位数字，多个用逗号分隔；空 = 跳过区域自动建树。"""
+        if not text:
+            return None
+        parts = [p.strip() for p in re.split(r'[，,;；、]', text) if p.strip()]
+        bad = [p for p in parts if not re.match(r'^\d{6}$', p)]
+        if bad:
+            raise ValueError('行政区划码必须是 6 位数字，收到：' + '、'.join(bad))
+        return ','.join(parts) if parts else None
+
+    def read_env_text(self):
+        path = self.home / 'backend' / '.env'
+        if path.is_file():
+            return path.read_text(encoding='utf-8-sig')
+        return ''
+
+    @staticmethod
+    def env_value(text, key):
+        match = re.search(rf'^\s*{key}\s*=\s*(.*)$', text, re.MULTILINE)
+        return match.group(1).strip() if match else None
+
+    def write_env_value(self, key, value):
+        """覆盖写单个键，保留 .env 其余行；UTF-8 无 BOM（pydantic-settings 不认 BOM）。"""
+        path = self.home / 'backend' / '.env'
+        lines = [l for l in self.read_env_text().splitlines() if not re.match(rf'^\s*{key}\s*=', l)]
+        lines.append(f'{key}={value}')
+        path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+    def needs_setup(self):
+        """已安装（有 installed.json 标记）或已配置 TARGET_SRID 都视为不用弹窗。"""
+        if (self.home / 'runtime' / '.state' / 'installed.json').is_file():
+            return False
+        return not self.env_value(self.read_env_text(), 'TARGET_SRID')
+
+    def setup_dialog(self):
+        """模态对话框收集首次安装配置，返回 (srid, counties) 或取消时 None。"""
+        dialog = tk.Toplevel(self.r)
+        dialog.title('首次安装配置')
+        dialog.geometry('620x540')
+        dialog.minsize(620, 540)
+        dialog.configure(bg=BG)
+        dialog.transient(self.r)
+        dialog.grab_set()
+
+        header = tk.Frame(dialog, bg=BG)
+        header.pack(fill='x', padx=24, pady=(20, 4))
+        self.label(header, '首次安装需要两项配置（将写入 backend\\.env）', 13, True, bg=BG).pack(anchor='w')
+        tk.Label(header, text='目标坐标系用于地图投影，初始化后不可更改，请按项目所在县经度选择。',
+                 bg=BG, fg=MUTED, font=('Microsoft YaHei UI', 10)).pack(anchor='w', pady=(4, 0))
+
+        body = tk.Frame(dialog, bg=PANEL)
+        body.pack(fill='both', expand=True, padx=24, pady=(12, 0))
+
+        self.label(body, '① 目标坐标系带号（必填）', 11, True).pack(anchor='w', padx=16, pady=(14, 4))
+        srid_entry = tk.Entry(body, font=('Microsoft YaHei UI', 11), relief='flat', bd=0, highlightthickness=1, highlightbackground=BORDER)
+        srid_entry.pack(fill='x', padx=16, ipady=6)
+        tk.Label(body, text='3 度带：填 25-45 的带号（中央子午线 = 带号×3°），或直接填 EPSG 代码 4513-4533。\nEPSG = 4488 + 带号。例：39 带（117°E）= 4527，40 带（120°E）= 4528。',
+                 bg=PANEL, fg=MUTED, font=('Microsoft YaHei UI', 9), wraplength=540, justify='left').pack(anchor='w', padx=16, pady=(4, 10))
+
+        self.label(body, '② 区县行政区划代码（可选，6 位数字）', 11, True).pack(anchor='w', padx=16, pady=(0, 4))
+        county_entry = tk.Entry(body, font=('Microsoft YaHei UI', 11), relief='flat', bd=0, highlightthickness=1, highlightbackground=BORDER)
+        county_entry.pack(fill='x', padx=16, ipady=6)
+        tk.Label(body, text='国家统计局县级码（如 150523）或市级码（末两位 00，初始化全市旗县），多个用逗号分隔。\n留空则跳过区域自动建树，之后可在系统「区域管理」里手工维护。',
+                 bg=PANEL, fg=MUTED, font=('Microsoft YaHei UI', 9), wraplength=540, justify='left').pack(anchor='w', padx=16, pady=(4, 10))
+
+        result = {'srid': None, 'counties': None}
+
+        def confirm(_event=None):
+            try:
+                srid = self.parse_srid(srid_entry.get().strip())
+                counties = self.parse_counties(county_entry.get().strip())
+            except ValueError as exc:
+                messagebox.showwarning('首次安装配置', str(exc), parent=dialog)
+                return
+            result['srid'], result['counties'] = srid, counties
+            dialog.destroy()
+
+        buttons = tk.Frame(dialog, bg=BG)
+        buttons.pack(fill='x', padx=24, pady=16)
+        ok_btn = self.button(buttons, '✔  保存并启动', confirm, bg=BLUE)
+        self.button(buttons, '取消', dialog.destroy)
+        dialog.bind('<Return>', confirm)
+        dialog.bind('<Escape>', lambda _: dialog.destroy())
+        srid_entry.focus_set()
+        self.r.wait_window(dialog)
+        return (result['srid'], result['counties']) if result['srid'] else None
+
     def start(self):
         if not self.busy and self.state != '运行中':
+            if self.needs_setup():
+                result = self.setup_dialog()
+                if result is None:
+                    self.out('已取消首次安装配置，系统未启动。也可在命令行运行 scripts\\install.ps1 完成安装。')
+                    return
+                srid, counties = result
+                self.write_env_value('TARGET_SRID', str(srid))
+                if counties:
+                    self.write_env_value('REGION_SEED_COUNTIES', counties)
+                message = '首次安装配置已写入 backend\\.env：TARGET_SRID=' + str(srid)
+                if counties:
+                    message += '，REGION_SEED_COUNTIES=' + counties
+                self.out(message)
             self.run('start-all.ps1')
 
     def stop(self, restart=False):
