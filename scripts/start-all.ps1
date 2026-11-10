@@ -1,3 +1,7 @@
+param(
+    [switch]$NonInteractive
+)
+
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -13,6 +17,25 @@ $dbPort = "15432"
 $dbName = "erlunyanbao"
 $dbUser = "RurallandContractExtension"
 $dbPassword = "RurallandContractExtension"
+
+function Test-SpatialSchemaReady {
+    # 「清空数据」会重建 pgdata，空间表要等后端 bootstrap 才建出来。GeoServer 若在
+    # 空库上启动会跳过全部图层发布（地图空白），所以启动后要再补一次发布。
+    $psqlExe = Join-Path $runtimeRoot "windows\postgresql\bin\psql.exe"
+    if (-not (Test-Path $psqlExe)) {
+        return $true
+    }
+    $previousPassword = $env:PGPASSWORD
+    $env:PGPASSWORD = $dbPassword
+    try {
+        $result = & $psqlExe "-h" $dbHost "-p" "$dbPort" "-U" $dbUser "-d" $dbName "-tAc" "SELECT to_regclass('public.survey_dk_result') IS NOT NULL" 2>$null
+        return (($result | Out-String).Trim()) -eq "t"
+    } catch {
+        return $false
+    } finally {
+        $env:PGPASSWORD = $previousPassword
+    }
+}
 
 function Import-RuntimeEnv([string]$Path) {
     if (-not (Test-Path $Path)) {
@@ -89,7 +112,7 @@ if ($dbPassword -eq "RurallandContractExtension" -and (Test-Path (Join-Path $pgD
     $dbPassword = if ($env:DATABASE_PASSWORD) { $env:DATABASE_PASSWORD } else { $dbPassword }
 }
 
-& (Join-Path $PSScriptRoot "start-postgres.ps1") -Port ([int]$dbPort) -DbName $dbName -DbUser $dbUser -DbPassword $dbPassword
+& (Join-Path $PSScriptRoot "start-postgres.ps1") -Port ([int]$dbPort) -DbName $dbName -DbUser $dbUser -DbPassword $dbPassword -NonInteractive:$NonInteractive
 $redisPort = if ($env:REDIS_PORT) { [int]$env:REDIS_PORT } else { 16379 }
 & (Join-Path $PSScriptRoot "start-redis.ps1") -Port $redisPort
 
@@ -99,12 +122,15 @@ $dbName = if ($env:DATABASE_NAME) { $env:DATABASE_NAME } else { $dbName }
 $dbUser = if ($env:DATABASE_USER) { $env:DATABASE_USER } else { $dbUser }
 $dbPassword = if ($env:DATABASE_PASSWORD) { $env:DATABASE_PASSWORD } else { $dbPassword }
 
+$spatialSchemaReady = Test-SpatialSchemaReady
+
 & (Join-Path $PSScriptRoot "start-geoserver.ps1") `
     -DbHost $dbHost `
     -DbPort ([int]$dbPort) `
     -DbName $dbName `
     -DbUser $dbUser `
-    -DbPassword $dbPassword
+    -DbPassword $dbPassword `
+    -NonInteractive:$NonInteractive
 
 $frontendDist = Join-Path $projectRoot "frontend\dist\index.html"
 if (-not (Test-Path $frontendDist)) {
@@ -118,6 +144,26 @@ if (-not (Test-Path $frontendDist)) {
 $backendArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$backendScript`"")
 $backendProcess = Start-Process powershell -ArgumentList $backendArgs -WorkingDirectory $projectRoot -PassThru -WindowStyle Hidden
 Set-Content -Path (Join-Path $stateDir "backend.pid") -Value $backendProcess.Id -Encoding ASCII
+
+if (-not $spatialSchemaReady) {
+    Write-Host "Spatial tables were missing when GeoServer started. Waiting for backend bootstrap..."
+    for ($i = 0; $i -lt 60; $i++) {
+        if (Test-SpatialSchemaReady) { break }
+        Start-Sleep -Seconds 2
+    }
+    if (Test-SpatialSchemaReady) {
+        Write-Host "Spatial schema is ready. Publishing GeoServer layers..."
+        & (Join-Path $PSScriptRoot "start-geoserver.ps1") `
+            -DbHost $dbHost `
+            -DbPort ([int]$dbPort) `
+            -DbName $dbName `
+            -DbUser $dbUser `
+            -DbPassword $dbPassword `
+            -NonInteractive:$NonInteractive
+    } else {
+        Write-Host "WARNING: spatial tables are still missing; GeoServer layers were not published."
+    }
+}
 
 Write-Host ""
 Write-Host "PostGIS:   127.0.0.1:$dbPort/$dbName"

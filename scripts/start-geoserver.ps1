@@ -80,10 +80,15 @@ if ($runtimeEnv.ContainsKey("GEOSERVER_PORT") -and $Port -eq 8080) { $Port = [in
 # stbhhx（EPSG:4490 经纬度）等非占位值的图层保持自身定义不动。
 function Get-SystemConfigTargetSrid([string]$HostName, [int]$Port, [string]$Database, [string]$User, [string]$Password) {
     if (-not (Test-Path $psql)) { return $null }
+    # 清空数据后的首次启动，后端 bootstrap 还没建 system_config；先判存在再查，
+    # 否则 psql 会往启动日志里打 "relation system_config does not exist"。
+    $tableCheck = "SELECT to_regclass('public.system_config') IS NOT NULL"
     $sql = "SELECT value FROM system_config WHERE key = 'target_srid'"
     $previousPassword = $env:PGPASSWORD
     $env:PGPASSWORD = $Password
     try {
+        $exists = & $psql "-h" $HostName "-p" "$Port" "-U" $User "-d" $Database "-tAc" $tableCheck 2>$null
+        if ($LASTEXITCODE -ne 0 -or (($exists | Out-String).Trim()) -ne "t") { return $null }
         $result = & $psql "-h" $HostName "-p" "$Port" "-U" $User "-d" $Database "-tAc" $sql
         if ($LASTEXITCODE -ne 0) { return $null }
         return (($result | Out-String).Trim())
@@ -107,13 +112,33 @@ if ($targetSrs -ne "EPSG:4527") {
     Write-Host "Target projected SRS: $targetSrs"
 }
 
-function Read-Choice([string]$Prompt, [string[]]$Allowed, [string]$Default) {
+function Test-InteractiveHost {
     if ($NonInteractive) {
+        return $false
+    }
+    try {
+        if ([Console]::IsInputRedirected) {
+            return $false
+        }
+    } catch {
+        return $false
+    }
+    return $true
+}
+
+function Read-Choice([string]$Prompt, [string[]]$Allowed, [string]$Default) {
+    if (-not (Test-InteractiveHost)) {
+        Write-Host "$Prompt -> $Default (non-interactive)"
         return $Default
     }
 
     while ($true) {
-        $answer = Read-Host $Prompt
+        try {
+            $answer = Read-Host $Prompt
+        } catch {
+            Write-Host "$Prompt -> $Default (non-interactive host)"
+            return $Default
+        }
         if ([string]::IsNullOrWhiteSpace($answer)) {
             $answer = $Default
         }
@@ -489,7 +514,7 @@ if (-not (Test-GeoServerEndpoint $workspaceUrl $headers)) {
         Write-Host "GeoServer workspace created: $Workspace"
     } catch {
         Write-Host "Failed to create GeoServer workspace automatically: $($_.Exception.Message)"
-        if (-not $NonInteractive) {
+        if (Test-InteractiveHost) {
             $choice = Read-Choice "Open GeoServer admin page so you can create the workspace manually? [Y/n]" @("Y", "y", "N", "n") "Y"
             if ($choice -in @("Y", "y")) {
                 Start-Process $webUrl

@@ -78,6 +78,11 @@ backend/build.prev-*/
 # 本地临时日志
 .vite-dev.log
 
+# 控制中心启动器（UIexe）：只入库源码与图标，构建产物不入库
+UIexe/build/
+UIexe/dist/
+UIexe/__pycache__/
+
 # 仓库根的调试截图 / playwright 会话与凭据（不入库）
 /*.png
 /login*.yaml

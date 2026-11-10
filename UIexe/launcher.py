@@ -1,0 +1,369 @@
+import os
+import queue
+import shutil
+import socket
+import stat
+import subprocess
+import sys
+import threading
+import time
+import tkinter as tk
+import webbrowser
+from pathlib import Path
+from tkinter import messagebox
+from urllib.error import HTTPError, URLError
+from urllib.request import urlopen
+
+BG, PANEL, BORDER = '#0c1015', '#171c24', '#29313e'
+TEXT, MUTED, BLUE = '#eef2f8', '#929dad', '#3478f6'
+
+
+def project_root():
+    base = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent
+    for candidate in (base, *base.parents):
+        if (candidate / 'scripts/start-all.ps1').is_file():
+            return candidate
+    raise FileNotFoundError('找不到项目 scripts/start-all.ps1')
+
+
+class App:
+    def __init__(self, root):
+        self.r, self.home = root, project_root()
+        self.events, self.entries = queue.Queue(), []
+        self.state, self.since, self.filter = '未启动', None, '全部'
+        self.busy = False
+        self.url = 'http://127.0.0.1:8000/login'
+        root.title('系统控制中心 | Ruralland Contract Extension')
+        root.geometry('1180x760')
+        root.minsize(960, 640)
+        root.configure(bg=BG)
+        root.protocol('WM_DELETE_WINDOW', self.close)
+        assets = Path(getattr(sys, '_MEIPASS', Path(__file__).parent)) / 'UI'
+        if (assets / 'startup.ico').exists():
+            root.iconbitmap(str(assets / 'startup.ico'))
+        header = self.frame(root, BG)
+        header.pack(fill='x', padx=26, pady=24)
+        if (assets / 'startup.png').exists():
+            self.logo = tk.PhotoImage(file=str(assets / 'startup.png'))
+            tk.Label(header, image=self.logo, bg=BG).pack(side='left', padx=(0, 16))
+        title = self.frame(header, BG)
+        title.pack(side='left')
+        self.label(title, '系统控制中心', 24, True, BG).pack(anchor='w')
+        self.label(title, 'Ruralland Contract Extension', 11, bg=BG, fg=MUTED).pack(anchor='w', pady=(5, 0))
+        self.badge = self.label(header, '● 未启动', 12, bg=PANEL)
+        self.badge.pack(side='right', ipadx=16, ipady=9)
+        controls = self.frame(root)
+        controls.pack(fill='x', padx=26)
+        self.label(controls, '控制面板', 14, True).pack(anchor='w', padx=20, pady=16)
+        self.line(controls)
+        actions = self.frame(controls)
+        actions.pack(fill='x', padx=20, pady=20)
+        self.start_btn = self.button(actions, '▶  启动系统', self.start, BLUE)
+        self.open_btn = self.button(actions, '打开系统', self.open_system)
+        self.stop_btn = self.button(actions, '■  停止系统', self.stop)
+        self.restart_btn = self.button(actions, '↻  重启', lambda: self.stop(True))
+        self.button(actions, '打开日志目录', self.open_logs)
+        self.button(actions, '清空数据', self.clear_data)
+        self.button(actions, '自检', self.check, side='right')
+        self.address = self.label(controls, '● 未启动', 11, fg=MUTED)
+        self.address.pack(anchor='w', padx=20, pady=(0, 20))
+        stats = self.frame(root, BG)
+        stats.pack(fill='x', padx=26, pady=18)
+        self.values = []
+        for i, (name, value) in enumerate([('运行状态', '未启动'), ('已运行时长', '--:--:--'), ('服务模块', '-- / 4'), ('日志条目', '0')]):
+            stats.columnconfigure(i, weight=1, uniform='stats')
+            tile = self.frame(stats)
+            tile.grid(row=0, column=i, sticky='nsew', padx=(0 if i == 0 else 8, 0))
+            self.label(tile, name, 11, fg=MUTED).pack(anchor='w', padx=16, pady=(14, 6))
+            value_label = self.label(tile, value, 20, True)
+            value_label.pack(anchor='w', padx=16, pady=(0, 14))
+            self.values.append(value_label)
+        logs = self.frame(root)
+        logs.pack(fill='both', expand=True, padx=26, pady=(0, 24))
+        toolbar = self.frame(logs)
+        toolbar.pack(fill='x', padx=16, pady=14)
+        self.label(toolbar, '运行日志', 14, True).pack(side='left', padx=(0, 12))
+        self.tabs = {}
+        for level in ['全部', '信息', '警告', '错误']:
+            self.tabs[level] = self.button(toolbar, level, lambda v=level: self.select(v))
+        self.button(toolbar, '清空', self.clear, side='right')
+        self.button(toolbar, '复制', self.copy, side='right')
+        self.auto = tk.BooleanVar(value=True)
+        tk.Checkbutton(toolbar, text='自动滚动', variable=self.auto, bg=PANEL, fg=MUTED, selectcolor=BG, activebackground=PANEL).pack(side='right')
+        self.line(logs)
+        body = self.frame(logs, BG)
+        body.pack(fill='both', expand=True)
+        scroll = tk.Scrollbar(body)
+        scroll.pack(side='right', fill='y')
+        self.log = tk.Text(body, bg=BG, fg=MUTED, relief='flat', state='disabled', font=('Microsoft YaHei UI', 10), padx=18, pady=16, wrap='word', yscrollcommand=scroll.set)
+        self.log.pack(fill='both', expand=True)
+        scroll.config(command=self.log.yview)
+        for level, color in [('信息', MUTED), ('警告', '#e9bc6c'), ('错误', '#ff777d')]:
+            self.log.tag_configure(level, foreground=color)
+        root.bind('<Control-Return>', lambda _: self.start())
+        root.bind('<Escape>', lambda _: self.stop())
+        self.out('控制台已就绪')
+        self.set_state('未启动')
+        root.after(150, self.poll)
+
+    def frame(self, parent, bg=PANEL):
+        return tk.Frame(parent, bg=bg)
+
+    def label(self, parent, text, size=11, bold=False, bg=PANEL, fg=TEXT):
+        return tk.Label(parent, text=text, bg=bg, fg=fg, font=('Microsoft YaHei UI', size, 'bold' if bold else 'normal'))
+
+    def line(self, parent):
+        tk.Frame(parent, height=1, bg=BORDER).pack(fill='x')
+
+    def button(self, parent, text, command, bg=PANEL, side='left'):
+        button = tk.Button(parent, text=text, command=command, bg=bg, fg=TEXT, activebackground=BLUE, activeforeground='white', disabledforeground='#525c69', relief='flat', bd=0, padx=12, pady=9, cursor='hand2', font=('Microsoft YaHei UI', 10))
+        button.pack(side=side, padx=3)
+        return button
+
+    def set_state(self, state):
+        self.state = state
+        self.badge.config(text='● ' + state, fg='#6ad4ad' if state == '运行中' else MUTED)
+        self.values[0].config(text=state)
+        self.start_btn.config(state='normal' if not self.busy and state != '运行中' else 'disabled')
+        # 停止/重启不依赖界面状态：服务可能是启动器之外拉起的（或启动器重开后状态回到未启动），
+        # 只要当前没有操作在执行，就允许停止，避免有残留进程却点不动按钮。
+        for button in (self.stop_btn, self.restart_btn):
+            button.config(state='normal' if not self.busy else 'disabled')
+
+    def out(self, text):
+        for line in text.splitlines():
+            level = '错误' if any(x in line.lower() for x in ['error', 'exception', '失败', '错误']) else '警告' if any(x in line.lower() for x in ['warn', '警告']) else '信息'
+            self.entries.append((level, time.strftime('%H:%M:%S') + '  ' + line))
+        self.entries = self.entries[-5000:]
+        self.render()
+
+    def render(self):
+        self.log.config(state='normal')
+        self.log.delete('1.0', 'end')
+        for level, line in self.entries:
+            if self.filter in ('全部', level):
+                self.log.insert('end', line + '\n', level)
+        self.log.config(state='disabled')
+        if self.auto.get():
+            self.log.see('end')
+        self.values[3].config(text=str(len(self.entries)))
+        for level, button in self.tabs.items():
+            count = sum(1 for item in self.entries if level == '全部' or item[0] == level)
+            button.config(text=f'{level} {count}', bg=BORDER if level == self.filter else PANEL)
+
+    def select(self, level):
+        self.filter = level
+        self.render()
+
+    def clear(self):
+        self.entries.clear()
+        self.render()
+
+    def copy(self):
+        self.r.clipboard_clear()
+        self.r.clipboard_append(self.log.get('1.0', 'end-1c'))
+
+    def open_logs(self):
+        path = self.home / 'runtime/logs'
+        path.mkdir(parents=True, exist_ok=True)
+        os.startfile(path)
+
+    def system_url(self):
+        """系统访问地址：优先用当前机器 IP，取不到时退回本机回环地址。"""
+        try:
+            ip = socket.gethostbyname(socket.gethostname())
+        except OSError:
+            ip = '127.0.0.1'
+        return f'http://{ip}:8000/login'
+
+    def active_services(self):
+        """返回仍在监听的服务名，用于阻止「未启动」状态误删正在使用的数据。"""
+        active = []
+        for name, port in [('PostgreSQL', 15432), ('Redis', 16379), ('GeoServer', 8080), ('后端', 8000)]:
+            try:
+                with socket.create_connection(('127.0.0.1', port), timeout=0.5):
+                    active.append(f'{name}({port})')
+            except OSError:
+                continue
+        return active
+
+    @staticmethod
+    def _force_remove(func, path, _exc_info):
+        """删除只读文件时先去掉只读属性再重试。"""
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        except OSError:
+            raise
+
+    def clear_data(self):
+        """清空 runtime/data 下的全部文件和文件夹（仅系统未启动时可用）。"""
+        if self.busy or self.state in ('启动中', '停止中'):
+            messagebox.showinfo('清空数据', '系统正在启动或停止，请稍后再试。')
+            return
+        if self.state == '运行中':
+            messagebox.showinfo('清空数据', '请先点击「停止系统」，停止后再清空数据。')
+            return
+        # 状态可能是启动器启动前就已存在的外部服务，再按端口兜底确认一次。
+        active = self.active_services()
+        if active:
+            messagebox.showinfo('清空数据', '以下服务仍在运行：' + '、'.join(active) + '\n请先停止系统后再清空数据。')
+            return
+        data_dir = self.home / 'runtime' / 'data'
+        if not data_dir.is_dir():
+            messagebox.showinfo('清空数据', f'数据目录不存在：\n{data_dir}')
+            return
+        if not messagebox.askyesno('清空数据', '本操作将删除当前系统下的所有数据，请慎重检查后操作！！！'):
+            return
+        self.busy = True
+        self.address.config(text='正在清空数据...')
+        self.out('开始清空数据目录：' + str(data_dir))
+
+        def worker():
+            removed, errors = 0, []
+            for item in list(data_dir.iterdir()):
+                try:
+                    if item.is_dir() and not item.is_symlink():
+                        shutil.rmtree(item, onerror=self._force_remove)
+                    else:
+                        item.unlink()
+                    removed += 1
+                except OSError as exc:
+                    errors.append(f'{item.name}: {exc}')
+            self.events.put(('cleared', (removed, errors)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def open_system(self):
+        """在默认浏览器中打开系统界面。"""
+        url = self.url or self.system_url()
+        try:
+            with urlopen(url, timeout=2):
+                pass
+        except HTTPError:
+            # 服务有响应（如 401/403）说明已启动，照常打开浏览器。
+            pass
+        except (URLError, OSError):
+            messagebox.showinfo('打开系统', '系统尚未启动，请先点击「启动系统」。')
+            return
+        webbrowser.open(url)
+        self.out('已在浏览器打开：' + url)
+
+    def check(self):
+        def worker():
+            count = 0
+            for name, port in [('PostgreSQL', 15432), ('Redis', 16379), ('GeoServer', 8080), ('后端', 8000)]:
+                try:
+                    with socket.create_connection(('127.0.0.1', port), timeout=1):
+                        count += 1
+                    self.events.put(('log', f'{name}: 端口 {port} 可连接'))
+                except OSError:
+                    self.events.put(('log', f'警告：{name} 端口 {port} 无响应'))
+            self.events.put(('modules', count))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def start(self):
+        if not self.busy and self.state != '运行中':
+            self.run('start-all.ps1')
+
+    def stop(self, restart=False):
+        # 未启动状态下也允许停止：用于清理启动器之外遗留的进程。
+        if not self.busy:
+            self.run('stop-all.ps1', restart)
+
+    def run(self, script, restart=False):
+        self.busy = True
+        starting = script.startswith('start')
+        self.set_state('启动中' if starting else '停止中')
+        self.address.config(text=self.state + '...')
+        self.out(self.state + '...')
+        def worker():
+            try:
+                path = self.home / 'scripts' / script
+                command = "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); & '" + str(path).replace("'", "''") + "'" + (" -NonInteractive" if starting else "")
+                process = subprocess.Popen(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command], cwd=self.home, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
+                for line in process.stdout:
+                    self.events.put(('log', line))
+                if process.wait() != 0:
+                    raise RuntimeError('脚本执行失败，请查看日志')
+                if starting:
+                    for _ in range(90):
+                        try:
+                            with urlopen('http://127.0.0.1:8000/login', timeout=2) as response:
+                                if response.status == 200:
+                                    break
+                        except OSError:
+                            pass
+                        time.sleep(1)
+                    else:
+                        raise RuntimeError('登录页面等待超时')
+                self.events.put(('started' if starting else 'stopped', restart))
+            except Exception as exc:
+                self.events.put(('failed', str(exc)))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def poll(self):
+        for _ in range(200):
+            try:
+                event, value = self.events.get_nowait()
+            except queue.Empty:
+                break
+            if event == 'log':
+                self.out(value)
+            elif event == 'modules':
+                self.values[2].config(text=f'{value} / 4')
+            elif event == 'cleared':
+                removed, errors = value
+                self.busy = False
+                if self.state == '未启动':
+                    self.address.config(text='● 已停止')
+                if errors:
+                    self.out(f'清空数据完成：已删除 {removed} 项，{len(errors)} 项未能删除')
+                    for line in errors:
+                        self.out('  清理失败：' + line)
+                    messagebox.showwarning('清空数据', f'已删除 {removed} 项，{len(errors)} 项未能删除（可能被占用），详情见运行日志。')
+                else:
+                    self.out(f'数据目录已清空（{removed} 项）')
+                    messagebox.showinfo('清空数据', f'已清空数据目录（{removed} 项）。')
+            else:
+                self.busy = False
+                if event == 'started':
+                    self.since = time.monotonic()
+                    self.set_state('运行中')
+                    try:
+                        ip = socket.gethostbyname(socket.gethostname())
+                        self.url = url = f'http://{ip}:8000/login'
+                        self.address.config(text='系统访问地址：' + url)
+                        webbrowser.open(url)
+                    except OSError as exc:
+                        self.out('警告：' + str(exc))
+                    self.check()
+                elif event == 'stopped':
+                    self.since = None
+                    self.set_state('未启动')
+                    self.address.config(text='● 已停止')
+                    self.values[2].config(text='0 / 4')
+                    if value:
+                        self.start()
+                elif event == 'failed':
+                    self.set_state('异常')
+                    self.address.config(text='执行失败，请查看运行日志')
+                    self.out('错误：' + value)
+        elapsed = int(time.monotonic() - self.since) if self.since else None
+        self.values[1].config(text=f'{elapsed // 3600:02}:{elapsed // 60 % 60:02}:{elapsed % 60:02}' if elapsed is not None else '--:--:--')
+        self.r.after(150, self.poll)
+
+    def close(self):
+        if self.busy:
+            messagebox.showinfo('系统控制中心', '服务操作正在执行，请等待完成。')
+        elif self.state == '运行中':
+            if messagebox.askyesno('关闭控制中心', '关闭窗口后服务仍会继续运行，确认关闭？'):
+                self.r.destroy()
+        else:
+            self.r.destroy()
+
+
+if __name__ == '__main__':
+    window = tk.Tk()
+    App(window)
+    window.mainloop()

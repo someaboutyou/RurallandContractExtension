@@ -29,6 +29,20 @@ function Require-AnyFile([string[]]$Paths, [string]$Message) {
     throw $Message
 }
 
+# 控制中心（UIexe/launcher）以 CREATE_NO_WINDOW 启动且不接 stdin，Read-Host 会
+# 直接抛 "Windows PowerShell 处于非交互模式"。需要人工决策时给出可执行提示，
+# 避免用户只看到 PowerShell 内部异常。
+function Test-InteractiveHost {
+    try {
+        if ([Console]::IsInputRedirected) {
+            return $false
+        }
+    } catch {
+        return $false
+    }
+    return $true
+}
+
 if ((Test-Path $installMarker) -and (-not $Force)) {
     Write-Host "Install marker already exists: $installMarker"
     Write-Host "Use -Force to re-check runtime dependencies and refresh the marker."
@@ -102,6 +116,9 @@ if ($TargetSrid -eq 0) {
         $TargetSrid = $existingSrid
         Write-Host "Target SRID already configured: $TargetSrid (zone $(Get-SridZone $TargetSrid)) - $backendEnv"
     } else {
+        if (-not (Test-InteractiveHost)) {
+            throw "目标坐标系尚未配置，且当前是非交互宿主（控制中心启动无法输入）。请先在命令行运行安装脚本指定带号：powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -TargetSrid 4527，或预先在 backend\.env 写入 TARGET_SRID。"
+        }
         Write-Host ""
         Write-Host "=== 选择项目目标坐标系（CGCS2000 / 3 度高斯-克吕格投影）==="
         Write-Host "  本项目数据的投影带由部署地经度决定，初始化后不可更改。"
@@ -147,22 +164,26 @@ if ($null -ne $existingCounties) {
         Write-Host "Region seed counties already configured: $existingCounties - $backendEnv"
     }
 } else {
-    Write-Host ""
-    Write-Host "=== 区域初始化（可选）==="
-    Write-Host "  输入项目所在地的 6 位国家统计局行政区划代码，首次启动自动建好 省/市/县/镇/村 区域树。"
-    Write-Host "  支持县级码（如 150523），也支持市级码（末两位 00，如 150500 = 初始化全市下所有旗县）。"
-    Write-Host "  多个码用英文逗号分隔。直接回车 = 跳过（之后仍可在 /regions 手工建）。"
-    $countyAnswer = (Read-Host "请输入 6 位县级行政区划代码" ).Trim()
-    if ($countyAnswer) {
-        $countyAnswer = ($countyAnswer -replace '[，、;；]', ',')
-        $countyParts = @($countyAnswer.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-        $badCodes = @($countyParts | Where-Object { $_ -notmatch '^\d{6}$' })
-        if ($badCodes.Count -gt 0) {
-            throw "行政区划码必须是 6 位数字，收到：$($badCodes -join ', ')"
+    if (-not (Test-InteractiveHost)) {
+        Write-Host "WARNING: 非交互宿主无法输入区域初始化代码，已跳过区域自动建树（可在 /regions 手工建，或先在 backend\.env 配置 REGION_SEED_COUNTIES）。"
+    } else {
+        Write-Host ""
+        Write-Host "=== 区域初始化（可选）==="
+        Write-Host "  输入项目所在地的 6 位国家统计局行政区划代码，首次启动自动建好 省/市/县/镇/村 区域树。"
+        Write-Host "  支持县级码（如 150523），也支持市级码（末两位 00，如 150500 = 初始化全市下所有旗县）。"
+        Write-Host "  多个码用英文逗号分隔。直接回车 = 跳过（之后仍可在 /regions 手工建）。"
+        $countyAnswer = (Read-Host "请输入 6 位县级行政区划代码" ).Trim()
+        if ($countyAnswer) {
+            $countyAnswer = ($countyAnswer -replace '[，、;；]', ',')
+            $countyParts = @($countyAnswer.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            $badCodes = @($countyParts | Where-Object { $_ -notmatch '^\d{6}$' })
+            if ($badCodes.Count -gt 0) {
+                throw "行政区划码必须是 6 位数字，收到：$($badCodes -join ', ')"
+            }
+            $envLines = [System.Collections.Generic.List[string]]($envLines | Where-Object { $_ -notmatch '^\s*REGION_SEED_COUNTIES\s*=' })
+            $envLines.Add("REGION_SEED_COUNTIES=$($countyParts -join ',')") | Out-Null
+            Write-Host "Region seed counties: $($countyParts -join ',') -> $backendEnv"
         }
-        $envLines = [System.Collections.Generic.List[string]]($envLines | Where-Object { $_ -notmatch '^\s*REGION_SEED_COUNTIES\s*=' })
-        $envLines.Add("REGION_SEED_COUNTIES=$($countyParts -join ',')") | Out-Null
-        Write-Host "Region seed counties: $($countyParts -join ',') -> $backendEnv"
     }
 }
 # ⛔ 不能用 Set-Content -Encoding UTF8：PS 5.1 会写 BOM，pydantic-settings 按

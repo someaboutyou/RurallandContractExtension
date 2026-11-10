@@ -39,13 +39,37 @@ function Require-File([string]$Path, [string]$Message) {
     }
 }
 
-function Read-Choice([string]$Prompt, [string[]]$Allowed, [string]$Default) {
+# 控制中心（UIexe/launcher）用 CREATE_NO_WINDOW 启动本脚本且不接 stdin，
+# 此时 Read-Host 会抛 "Windows PowerShell 处于非交互模式" 直接中断启动
+# （2026-11-09 控制台点击「启动系统」踩过）。除显式 -NonInteractive 外，
+# 再按 stdin 是否可用判定一次，凡不能交互就一律采用默认选项。
+function Test-InteractiveHost {
     if ($NonInteractive) {
+        return $false
+    }
+    try {
+        if ([Console]::IsInputRedirected) {
+            return $false
+        }
+    } catch {
+        return $false
+    }
+    return $true
+}
+
+function Read-Choice([string]$Prompt, [string[]]$Allowed, [string]$Default) {
+    if (-not (Test-InteractiveHost)) {
+        Write-Host "$Prompt -> $Default (non-interactive)"
         return $Default
     }
 
     while ($true) {
-        $answer = Read-Host $Prompt
+        try {
+            $answer = Read-Host $Prompt
+        } catch {
+            Write-Host "$Prompt -> $Default (non-interactive host)"
+            return $Default
+        }
         if ([string]::IsNullOrWhiteSpace($answer)) {
             $answer = $Default
         }
@@ -163,7 +187,7 @@ if ($pgStatus -eq 0) {
                         throw "Failed to create database on existing PostgreSQL: $DbName"
                     }
                 } elseif ($dbChoice -eq "2") {
-                    if ($NonInteractive) {
+                    if (-not (Test-InteractiveHost)) {
                         throw "Cannot input a database name in NonInteractive mode. Use -DbName."
                     }
                     $existingDb = Read-Host "Enter existing database name"
@@ -183,7 +207,7 @@ if ($pgStatus -eq 0) {
             Write-Host "Using existing PostgreSQL: ${pgHost}:$Port/$DbName"
             return
         } elseif ($choice -eq "2") {
-            if ($NonInteractive) {
+            if (-not (Test-InteractiveHost)) {
                 $Port = 15432
             } else {
                 $newPort = Read-Host "Enter PostgreSQL port for portable runtime [15432]"
@@ -254,7 +278,7 @@ if ($pgStatus -eq 0) {
             Write-Host "Using existing PostgreSQL: ${pgHost}:$Port/$DbName"
             return
         } elseif ($choice -eq "2") {
-            if ($NonInteractive) {
+            if (-not (Test-InteractiveHost)) {
                 $Port = 15432
             } else {
                 $newPort = Read-Host "Enter PostgreSQL port for portable runtime [15432]"
@@ -309,7 +333,7 @@ if (-not (Test-DatabaseExists $DbName)) {
             throw "Failed to create database: $DbName"
         }
     } elseif ($choice -eq "2") {
-        if ($NonInteractive) {
+        if (-not (Test-InteractiveHost)) {
             throw "Cannot input an existing database name in NonInteractive mode. Use -DbName to specify an existing database."
         }
         $existingDb = Read-Host "Enter existing database name"
