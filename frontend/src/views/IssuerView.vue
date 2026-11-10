@@ -144,7 +144,7 @@
         <el-form ref="formRef" :model="form" :rules="rules" class="compact-form issuer-form" label-position="top" status-icon>
           <div class="issuer-form-grid">
             <el-form-item label="发包方代码" prop="code">
-              <el-input v-model="form.code" placeholder="请输入发包方代码" />
+              <el-input v-model="form.code" placeholder="请输入发包方代码" :disabled="!!editingCode" />
             </el-form-item>
             <el-form-item label="发包方名称" prop="name">
               <el-input v-model="form.name" placeholder="请输入发包方名称" />
