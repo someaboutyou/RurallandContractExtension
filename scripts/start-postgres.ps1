@@ -160,8 +160,22 @@ if ($pgStatus -eq 0) {
     $runningPort = Get-RunningPgPort
     if ($runningPort -and $runningPort -ne $Port) {
         Write-Host "PostgreSQL portable runtime is running on port $runningPort. Restarting on requested port $Port..."
-        & $pgCtl "restart" "-D" $pgData "-l" $pgLog "-o" "-p $Port -h $pgHost"
-        if ($LASTEXITCODE -ne 0) {
+        # ⛔ pg_ctl 在 Windows 上经 cmd /c 拉起 postmaster，不带任何控制台分离标志
+        # （PG15 源码只有 CREATE_SUSPENDED）：postmaster 继承调用方控制台，关闭启动
+        # 窗口（CTRL_CLOSE/Ctrl+C）会把 postgres 一起杀掉（0xC000013A，2026-11-10
+        # 部署机实踩：关窗后库死、后端活着）。必须在独立隐藏控制台里跑 pg_ctl。
+        # ⛔ PS 5.1 的 Start-Process -Wait 会等整个进程树：pg_ctl 起完 postmaster 后
+        # 自身退出，但 cmd→postmaster 长驻 → -Wait 永不返回（2026-11-10 实锤：部署机
+        # 空挂、沙箱 marker 实验卡满 120s；WaitForExit(带超时) 只等 pg_ctl 本体，
+        # 实测 0.95s 返回且退出码正确）。restart=停+起，放宽到 60s。
+        $restartArgs = "restart -D `"$pgData`" -l `"$pgLog`" -o `"-p $Port -h $pgHost`""
+        $restartProc = Start-Process -FilePath $pgCtl -ArgumentList $restartArgs -WindowStyle Hidden -PassThru
+        $pgCtlExited = $restartProc.WaitForExit(60000)
+        if (-not $pgCtlExited) {
+            Stop-Process -Id $restartProc.Id -Force -ErrorAction SilentlyContinue
+            throw "pg_ctl restart timed out after 60s. Check $pgLog"
+        }
+        if ($restartProc.ExitCode -ne 0) {
             throw "Failed to restart PostgreSQL on port $Port. Check $pgLog"
         }
     } elseif ($runningPort) {
@@ -295,12 +309,27 @@ if ($pgStatus -eq 0) {
         }
     }
 
-    & $pgCtl "start" "-D" $pgData "-l" $pgLog "-o" "-p $Port -h $pgHost"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "pg_ctl start failed. Trying direct postgres.exe startup..."
+    # ⛔ 同上：pg_ctl 起的 postmaster 会挂在当前可见控制台上，窗口一关就被杀。
+    # 用独立隐藏控制台启动，postmaster 挂在该隐藏控制台上，与启动窗口解耦。
+    # ⛔ 禁用 -Wait（等进程树，postmaster 长驻 → 永卡，详见 restart 处注释）。
+    # WaitForExit(30s) 只等 pg_ctl 本体（其内部默认 -w 等就绪后才退）；
+    # 超时或退出码非 0 → 走直连兜底。
+    $startArgs = "start -D `"$pgData`" -l `"$pgLog`" -o `"-p $Port -h $pgHost`""
+    $startProc = Start-Process -FilePath $pgCtl -ArgumentList $startArgs -WindowStyle Hidden -PassThru
+    $pgCtlExited = $startProc.WaitForExit(30000)
+    $startOk = $pgCtlExited -and ($startProc.ExitCode -eq 0)
+    if (-not $startOk) {
+        if (-not $pgCtlExited) {
+            Stop-Process -Id $startProc.Id -Force -ErrorAction SilentlyContinue
+            Write-Host "pg_ctl start timed out after 30s. Trying direct postgres.exe startup..."
+        } else {
+            Write-Host "pg_ctl start failed. Trying direct postgres.exe startup..."
+        }
         $pgOutLog = Join-Path $logDir "postgres-direct.out.log"
         $pgErrLog = Join-Path $logDir "postgres-direct.err.log"
-        $pgProc = Start-Process -FilePath $postgresExe -ArgumentList "-D", $pgData, "-p", $Port, "-h", $pgHost -WorkingDirectory $pgHome -NoNewWindow -PassThru
+        # 兜底直启同样不能挂到当前控制台（-NoNewWindow 会随窗口关闭被杀），
+        # 改为独立隐藏控制台，并补上 -l 日志（pgDirectLog 之前定义了但没用上）。
+        $pgProc = Start-Process -FilePath $postgresExe -ArgumentList "-D", "`"$pgData`"", "-p", "$Port", "-h", $pgHost, "-l", "`"$pgDirectLog`"" -WorkingDirectory $pgHome -WindowStyle Hidden -PassThru
         Start-Sleep -Seconds 2
         if ($pgProc.HasExited -and $pgProc.ExitCode -ne 0) {
             Write-Host "postgres.exe exited with code $($pgProc.ExitCode)"
