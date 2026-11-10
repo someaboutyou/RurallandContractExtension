@@ -27,6 +27,25 @@ if (-not $SkipBuild) {
         throw "Build failed."
     }
     Write-Host ""
+
+    # ── 重打 UI 启动器 exe，保证包里的 RurallandLauncher.exe 与 launcher.py 同步 ──
+    $launcherPy = Join-Path $projectRoot "UIexe\launcher.py"
+    $launcherExe = Join-Path $projectRoot "UIexe\dist\RurallandLauncher.exe"
+    if (Test-Path $launcherPy) {
+        # ⛔ exe 被运行中的启动器进程占用时 PyInstaller 覆盖会报 WinError 5
+        # （2026-11-10 实踩）。启动器只是控制壳，结束它不影响已启动的服务。
+        Get-Process -Name "RurallandLauncher" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 500
+        Write-Host "=== Building UI launcher (RurallandLauncher.exe) ==="
+        & (Join-Path $projectRoot "UIexe\build.ps1")
+        if ($LASTEXITCODE -ne 0) {
+            throw "UI launcher build failed."
+        }
+        if (-not (Test-Path $launcherExe)) {
+            throw "RurallandLauncher.exe not found after build."
+        }
+        Write-Host ""
+    }
 } else {
     Write-Host "Skipping build (-SkipBuild). Using existing build artifacts."
     $frontendDist = Join-Path $projectRoot "frontend\dist\index.html"
@@ -65,10 +84,31 @@ $excludedDirs = @(
     # ⛔ robocopy /XD 不接受通配路径，dist.prev-* 等模式放安全网清理（见下）
     # 安卓工程与 APK 构建产物：部署机不需要（APK 走 app-updates 通道分发）
     "android",
+    # UIexe 打包目录：dist\RurallandLauncher.exe 是部署件要随包走；
+    # build\ 是 PyInstaller 中间产物（~24MB），不需要
+    "UIexe\build",
+    # Python 运行时的编译期/包管理器元数据：运行时不需要（zoneinfo 在 share\ 里，⛔ 不能排）
+    "runtime\windows\python\include",
+    "runtime\windows\python\Tools",
+    "runtime\windows\python\conda-meta",
+    # conda Library 的编译期产物（头文件/.lib 链接库）；⛔ Library\bin 是运行时 DLL 不能排
+    "runtime\windows\python\Library\include",
+    "runtime\windows\python\Library\lib",
+    # PostgreSQL 编译期/文档/安装器：运行时不需要
+    # ⛔ postgresql\share 必须保留：extension\*.sql 全新安装 CREATE EXTENSION 要用，timezone 是时区库
+    "runtime\windows\postgresql\include",
+    "runtime\windows\postgresql\doc",
+    "runtime\windows\postgresql\StackBuilder",
+    # JDK 头文件与许可文本：运行时不需要
+    "runtime\windows\jdk\include",
+    "runtime\windows\jdk\legal",
     # 工具/会话目录
     ".claude",
     ".workbuddy",
+    ".playwright-cli",
     ".tmp-visual",
+    # 后端本地运行临时目录（根 runtime\temp 已排除，backend\runtime 是另一处）
+    "backend\runtime",
     ".git",
     ".pytest_cache",
     ".mypy_cache",
@@ -91,6 +131,14 @@ $excludedFiles = @(
     "*.md",
     "*.docx",
     "*.pdf",
+    # 开发期散落在根目录的截图/日志/测试配置，部署包不需要
+    "*.png",
+    "*.log",
+    "login.yaml",
+    "login2.yaml",
+    ".gitattributes",
+    ".gitignore",
+    "_check_import_rows.py",
     ".DS_Store",
     "Thumbs.db"
 )
@@ -153,6 +201,15 @@ foreach ($relativePath in ($excludedDirs + $excludedDirPatterns)) {
 # Remove __pycache__ dirs from temp.
 Get-ChildItem -Path $tempDir -Directory -Recurse -Filter "__pycache__" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
+# ── UI 启动器 exe 提到包根目录：用户解压后直接双击 ──
+$launcherExeSource = Join-Path $projectRoot "UIexe\dist\RurallandLauncher.exe"
+if (Test-Path $launcherExeSource) {
+    Copy-Item -LiteralPath $launcherExeSource -Destination (Join-Path $tempDir "RurallandLauncher.exe") -Force
+    Write-Host "Launcher copied to package root: RurallandLauncher.exe"
+} else {
+    Write-Host "WARNING: UIexe\dist\RurallandLauncher.exe not found. Package will not include the launcher UI."
+}
+
 # ── GeoServer 样式：datas 整体不随包走，但 geoserver-styles 是部署必需件 ──
 # ⛔ 必须放在上面的安全网删除之后：安全网会把 temp\datas 整目录删掉
 #（历史同款 bug：backend/dist 曾被拷入 temp 又被安全网删除，部署件缺编译后端）。
@@ -171,6 +228,23 @@ if (Test-Path (Join-Path $stylesSource "survey_dk_result.sld")) {
     throw "datas/geoserver-styles/survey_dk_result.sld not found. Packaging would ship GeoServer layers without styles (StyleNotDefined at request time). Restore the styles directory before packaging."
 }
 
+# ── Python 运行时去源码：.py → .pyc（sourceless），只对 temp 副本执行 ──
+# ⛔ 绝不指向开发机的 runtime\windows\python（开发期需要源码）。
+# 副本里 compileall + 把 __pycache__/*.pyc 移回原 .py 位置后删除 .py；
+# CPython 官方 embeddable 发行版即此机制（python311.zip 内全是 .pyc）。
+# 效果（2026-11-09 实测）：653M → 566M，减少约 87MB / 4600+ 个源码文件，
+# 依赖导入 / 编译后端 app.main / 业务验收脚本三层冒烟全过。
+$stripScript = Join-Path $PSScriptRoot "strip_python_sources.py"
+$devPython = Join-Path $projectRoot "runtime\windows\python\python.exe"
+if (-not (Test-Path $devPython)) {
+    throw "runtime\windows\python\python.exe not found. Cannot run strip_python_sources."
+}
+& $devPython $stripScript (Join-Path $tempDir "runtime\windows\python")
+if ($LASTEXITCODE -ne 0) {
+    throw "strip_python_sources.py failed with exit code $LASTEXITCODE"
+}
+Write-Host "Python runtime stripped: .py sources converted to .pyc (sourceless)."
+
 # ── Package ─────────────────────────────────────────────────────────
 $zipPath = Join-Path $OutputDir "${outputName}.zip"
 Write-Host "Creating archive: $zipPath"
@@ -186,8 +260,8 @@ Write-Host "Deployment steps on target machine:"
 Write-Host "  1. Extract ${outputName}.zip"
 Write-Host "  2. Run: powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1"
 Write-Host "  3. Run: powershell -ExecutionPolicy Bypass -File .\scripts\init.ps1"
-Write-Host "  4. Run: .\scripts\start-all.cmd"
-Write-Host "  Silent background start (no console windows): double-click .\scripts\start-production-silent.pyw"
+Write-Host "  4. Run: powershell -ExecutionPolicy Bypass -File .\scripts\start-all.ps1"
+Write-Host "  Graphical start/stop: double-click .\RurallandLauncher.exe (system control center)"
 Write-Host "Runtime data note: Redis persistence is stored under runtime\data\redis and is excluded from packages."
 
 if (-not $SkipBuild) {

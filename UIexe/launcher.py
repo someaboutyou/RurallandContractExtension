@@ -104,6 +104,15 @@ class App:
         root.bind('<Escape>', lambda _: self.stop())
         self.out('控制台已就绪')
         self.set_state('未启动')
+        # 重开启动器时探测既有服务：后端已在监听则恢复「运行中」状态，
+        # 避免服务实际在跑、界面却显示「未启动」的误导（停止/自检本就不依赖界面状态）。
+        def detect_existing():
+            try:
+                with socket.create_connection(('127.0.0.1', 8000), timeout=1):
+                    self.events.put(('resumed', None))
+            except OSError:
+                pass
+        threading.Thread(target=detect_existing, daemon=True).start()
         root.after(150, self.poll)
 
     def frame(self, parent, bg=PANEL):
@@ -337,6 +346,14 @@ class App:
                         webbrowser.open(url)
                     except OSError as exc:
                         self.out('警告：' + str(exc))
+                    self.check()
+                elif event == 'resumed':
+                    # 重开启动器时服务已在跑：恢复状态，但不自动弹浏览器、
+                    # 不重置计时（已运行时长未知，保持 --:--:--）。
+                    self.set_state('运行中')
+                    self.url = self.system_url()
+                    self.address.config(text='系统已在运行（启动器重开），访问地址：' + self.url)
+                    self.out('检测到后端已在运行，状态已恢复为「运行中」')
                     self.check()
                 elif event == 'stopped':
                     self.since = None
