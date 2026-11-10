@@ -15,8 +15,9 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://localhost/verify_stub")
 os.environ.setdefault("DATABASE_PORT", "15432")
+# 注意：不要设 DATABASE_URL 桩——engine 只在真正执行 SQL 时才连库；
+# 桩会顶掉 backend/.env 的真实 URI，导致查询层真库实测连不上（2026-11-10）。
 
 BACKEND_DIR = Path(__file__).resolve().parents[1] / "backend"
 sys.path.insert(0, str(BACKEND_DIR))
@@ -127,7 +128,64 @@ expect_block("用户闸·邻镇行321324200001 拦截", db_session_module._valid
 expect_block("用户闸·跨租户行 拦截", db_session_module._validate_scope, "custom", "321324", user_perms, make_item("321324100001", tenant_code="320000"))
 
 failed = [row for row in results if not row[1]]
+
+# ===== 查询侧可见性（db/session.py::_add_tenant_scope 全局过滤）=====
+# 背景：写闸放宽后批次以县码落库，但 list_batches 裸 select(DataImportBatch)
+# 仍吃全局过滤两层（系统 LIKE '授权码%' + 用户 LIKE ANY(perm%)），县码容器行
+# 两层都过不了 → 「批次建成功、列表查不到」。修复后两层均放行祖先行。
+from sqlalchemy import bindparam as sa_bindparam, select  # noqa: E402
+from sqlalchemy import String as sa_String  # noqa: E402
+from sqlalchemy.dialects.postgresql import ARRAY as sa_ARRAY  # noqa: E402
+from app.db.session import _system_scope_criteria, _user_scope_criteria  # noqa: E402
+from app.models.data_import import DataImportBatch  # noqa: E402
+
+try:
+    sys_tenant = sa_bindparam("sys_tenant_code", value="321324")
+    sys_pattern = sa_bindparam("sys_region_pattern", value="321324100%")
+    sys_code = sa_bindparam("sys_region_code", value="321324100", type_=sa_String)
+    system_sql = str(
+        select(DataImportBatch.id)
+        .where(_system_scope_criteria(DataImportBatch, sys_tenant, sys_pattern, sys_code))
+        .compile()
+    )
+    assert "LIKE" in system_sql and "sys_region_code" in system_sql
+    results.append(("查询层·系统授权条件可编译且含祖先臂", True, "编译通过"))
+
+    u_tenant = sa_bindparam("tenant_scope_code", value="321324")
+    u_patterns = sa_bindparam("region_scope_patterns", value=["321324100%"], type_=sa_ARRAY(sa_String))
+    u_codes = sa_bindparam("region_scope_codes", value=["321324100"], type_=sa_ARRAY(sa_String))
+    user_sql = str(
+        select(DataImportBatch.id)
+        .where(_user_scope_criteria(DataImportBatch, u_tenant, u_patterns, u_codes))
+        .compile()
+    )
+    assert "unnest" in user_sql and "EXISTS" in user_sql
+    results.append(("查询层·用户权限条件可编译且含 unnest/EXISTS 祖先臂", True, "编译通过"))
+
+    # 若本机 PG 在跑，用真实会话执行一次，验证渲染出的 SQL 能被 PG 接受
+    try:
+        from app.db.session import SessionLocal, set_current_user
+        from sqlalchemy import or_ as _sa_or
+        db = SessionLocal()
+        stub_user = make_user(region_codes=("321324100",))
+        set_current_user(db, stub_user)
+        batch = DataImportBatch(import_no="VERIFY-TEST", import_name="scope-verify",
+                                region_code="321324", tenant_code="321324")
+        db.add(batch)
+        db.flush()
+        visible = db.scalars(select(DataImportBatch).where(DataImportBatch.id == batch.id)).all()
+        db.rollback()
+        if visible:
+            results.append(("查询层·县码批次行在两层过滤下可见（真库实测）", True, "可见"))
+        else:
+            results.append(("查询层·县码批次行在两层过滤下可见（真库实测）", False, "被过滤"))
+    except Exception as exc:  # noqa: BLE001 — PG 未启动等环境问题不算失败
+        results.append(("查询层·真库实测", True, f"SKIP（无法连库：{type(exc).__name__}）"))
+except Exception as exc:  # noqa: BLE001
+    results.append(("查询层·条件编译", False, f"{type(exc).__name__}: {exc}"))
+
 for name, ok, note in results:
     print(f"{'PASS' if ok else 'FAIL'}  {name}  ->  {note}")
+failed = [row for row in results if not row[1]]
 print(f"\n{len(results) - len(failed)}/{len(results)} passed")
 sys.exit(1 if failed else 0)

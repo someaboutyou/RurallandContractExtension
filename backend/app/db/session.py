@@ -1,5 +1,5 @@
 from fastapi import HTTPException, status
-from sqlalchemy import and_, any_, bindparam, create_engine, event, false
+from sqlalchemy import and_, any_, bindparam, create_engine, event, exists, false, func, or_, select
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy import String
 from sqlalchemy.orm import Session, sessionmaker, with_loader_criteria
@@ -27,6 +27,45 @@ def set_current_user(session: Session, user) -> None:
     session.info["current_user_region_permissions"] = region_permissions
 
 
+def _system_scope_criteria(cls, tenant_param, region_pattern_param, region_code_param):
+    """系统授权（license）的可见范围：后代行 + 祖先行。
+
+    - 后代（``region_code LIKE '<授权码>%'``）：常规路径，授权范围内的数据行；
+    - 祖先（``'<授权码>' LIKE region_code || '%'``）：容器行——导入批次/调查
+      批次等用户手选区域的记录，授权到镇（321324100）时批次建到县（321324）。
+      与写闸 _region_in_write_scope 同口径。邻镇等无前缀关系的行依旧不可见。
+    """
+    return and_(
+        cls.tenant_code == tenant_param,
+        or_(
+            cls.region_code.like(region_pattern_param),
+            region_code_param.like(cls.region_code + "%"),
+        ),
+    )
+
+
+def _user_scope_criteria(cls, tenant_param, region_patterns_param, region_codes_param):
+    """用户数据权限的可见范围：与系统授权同口径放宽祖先行。
+
+    祖先判定 = 存在某条授权码以行区域码开头（行是某条授权的祖先）。
+    用 unnest(授权码数组) + EXISTS 表达，避免按授权条数展开 OR（塌缩后通常
+    只有几条，但历史上存在上千组码的账号，展开会把每条 SELECT 撑爆）。
+    """
+    ancestor_source = func.unnest(region_codes_param).alias()
+    ancestor_code = ancestor_source.c[0]
+    return and_(
+        cls.tenant_code == tenant_param,
+        or_(
+            cls.region_code.like(any_(region_patterns_param)),
+            exists(
+                select(1).select_from(ancestor_source).where(
+                    ancestor_code.like(cls.region_code + "%")
+                )
+            ),
+        ),
+    )
+
+
 @event.listens_for(Session, "do_orm_execute")
 def _add_tenant_scope(execute_state):
     if not execute_state.is_select or execute_state.execution_options.get("skip_tenant_scope"):
@@ -36,14 +75,11 @@ def _add_tenant_scope(execute_state):
     if authorized_region:
         system_tenant_param = bindparam("sys_tenant_code", value=authorized_region[:6])
         system_region_param = bindparam("sys_region_pattern", value=authorized_region + "%")
-        system_criteria = lambda cls: and_(
-            cls.tenant_code == system_tenant_param,
-            cls.region_code.like(system_region_param),
-        )
+        system_code_param = bindparam("sys_region_code", value=authorized_region, type_=String)
         execute_state.statement = execute_state.statement.options(
             with_loader_criteria(
                 TenantScopedMixin,
-                system_criteria,
+                lambda cls: _system_scope_criteria(cls, system_tenant_param, system_region_param, system_code_param),
                 include_aliases=True,
             )
         )
@@ -63,7 +99,14 @@ def _add_tenant_scope(execute_state):
             value=[permission[1] + "%" for permission in permissions],
             type_=ARRAY(String),
         )
-        user_criteria = lambda cls: and_(cls.tenant_code == tenant_param, cls.region_code.like(any_(region_patterns_param)))
+        region_codes_param = bindparam(
+            "region_scope_codes",
+            value=[permission[1] for permission in permissions],
+            type_=ARRAY(String),
+        )
+        user_criteria = lambda cls: _user_scope_criteria(
+            cls, tenant_param, region_patterns_param, region_codes_param
+        )
     execute_state.statement = execute_state.statement.options(
         with_loader_criteria(
             TenantScopedMixin,
