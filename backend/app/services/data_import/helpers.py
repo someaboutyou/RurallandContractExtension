@@ -355,19 +355,6 @@ def resolve_group_region(db: Session, data: dict, current_user) -> tuple[str | N
     return code, name.strip() or None
 
 
-def resolve_import_region(db: Session, data: dict, current_user) -> tuple[str, str | None]:
-    code = (data.get("region_code") or "").strip()
-    if not code:
-        raise ValueError("\u7f16\u6536\u7684\u8be5\u7248\u7389 region_code")
-    normalized = data_access_service.normalize_region_code(code)
-    if not normalized or len(normalized) < 6:
-        raise ValueError("invalid region code")
-    data_access_service.ensure_region_in_scope(current_user, normalized, detail="region out of scope")
-    region = db.scalar(select(Region).where(Region.code == normalized).execution_options(skip_tenant_scope=True))
-    name = region.full_name if region else (data.get("region_name") or "")
-    return normalized, name.strip() or None
-
-
 def resolve_code_region(value: str | None, current_user) -> str:
     region_code = data_access_service.normalize_region_code(value)
     data_access_service.ensure_region_in_scope(current_user, region_code, detail="import row out of authorized scope")

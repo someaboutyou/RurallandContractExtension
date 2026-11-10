@@ -68,3 +68,7 @@ export function downloadFailedImportRows(batchId) {
 export function reimportImportRow(batchId, rowId, data) {
   return http.post(`/data-imports/${batchId}/rows/${rowId}/reimport`, { data });
 }
+
+export function reimportRowsBatch(batchId, rowIds) {
+  return http.post(`/data-imports/${batchId}/rows/reimport-batch`, { data: { rowIds } });
+}

@@ -65,6 +65,10 @@ from app.models.survey import (
     SurveyJzxResult,
 )
 from app.services.data_access_service import data_access_service
+from app.services.data_import.qs_code_table import (
+    build_qs_rows_from_regions,
+    write_qs_code_table,
+)
 from app.services.survey.base import SurveyServiceBase
 from app.core.crs import get_target_srid, srid_display_name
 
@@ -864,7 +868,14 @@ def _write_mdb_shp(scope: _Scope, out_dir: Path, reporter=None) -> dict[str, int
     return counts
 
 
-def _write_readme(path: Path, export, region_code: str, counts: dict[str, int], fmt_label: str) -> None:
+def _write_readme(
+    path: Path,
+    export,
+    region_code: str,
+    counts: dict[str, int],
+    fmt_label: str,
+    qs_count: int = 0,
+) -> None:
     lines = [
         "NY/T 2539-2016 农村土地承包经营权确权登记数据库规范 — 标准格式数据导出",
         "=" * 68,
@@ -888,6 +899,8 @@ def _write_readme(path: Path, export, region_code: str, counts: dict[str, int], 
         fields_desc = "、".join(f[0] for f in fields)
         lines.append(f"- {name}（{kind_desc}，{len(fields)} 字段）：{counts.get(name, 0)} 行")
         lines.append(f"    字段：{fields_desc}")
+    if qs_count:
+        lines.append(f"- 权属单位代码表.xls：{qs_count} 行（所选区域县/镇/村/组权属单位代码与名称，取自区域管理）")
     if fmt_label == EXPORT_TYPE_LABELS["nyt2539_db"]:
         lines.append("")
         lines.append(f"说明：SQLite 库中空间层（DK/JZD/JZX）的 GEOM 列为 WKT 文本，坐标系 {srid_display_name(_EPSG)}。")
@@ -950,7 +963,18 @@ def build_standard_export(
 
     if reporter:
         reporter.report(92, "打包压缩产物…", force=True)
-    _write_readme(product_dir / "导出说明.txt", export, region_code, counts, EXPORT_TYPE_LABELS[export_type])
+
+    # 权属单位代码表：从区域管理表按所选区域生成（多次部分导入的区域数据
+    # 在区域表里累积，导出时合并为所选区域的完整代码表），三种格式都附带
+    qs_rows = build_qs_rows_from_regions(db, region_code)
+    qs_count = 0
+    if qs_rows:
+        qs_count = write_qs_code_table(product_dir / "权属单位代码表.xls", qs_rows)
+
+    _write_readme(
+        product_dir / "导出说明.txt", export, region_code, counts,
+        EXPORT_TYPE_LABELS[export_type], qs_count=qs_count,
+    )
 
     file_name = f"{base_name}.zip"
     zip_path = work_dir.parent / file_name

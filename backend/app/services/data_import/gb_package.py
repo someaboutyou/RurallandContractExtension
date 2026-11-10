@@ -67,6 +67,11 @@ from .constants import (
 )
 from .core_helpers import ensure_import_survey_batch, finish_batch_import
 from .errors import ImportCanceled
+from .qs_code_table import (
+    find_qs_code_table,
+    read_qs_code_table,
+    sync_regions_from_qs_table,
+)
 from .helpers import (
     apply_gdb_region_defaults,
     entity_key,
@@ -161,7 +166,11 @@ def run_gb_import_job(
             data_import_progress.update(batch_id, status="failed", message="import context not found")
             return
         set_current_user(db, current_user)
-        data_access_service.ensure_region_in_scope(
+        # ⛔ 批次级校验必须与建批次同口径（ensure_import_batch_region_in_scope，
+        # 允许批次区域是授权/license 的祖先）。这里曾用严格 ensure_region_in_scope：
+        # license/用户授权在镇级、批次建在县级时，建批次放行、后台任务却 403，
+        # 逐行 resolve_effective_import_region 的严格兜底根本没机会执行。
+        data_access_service.ensure_import_batch_region_in_scope(
             current_user,
             batch.region_code,
             detail="import batch is outside the current authorized scope",
@@ -235,9 +244,11 @@ def process_gb_package_archive_content(
         extract_zip_safely(archive, temp_dir)
         mdb_path = find_mdb_path(temp_dir)
         shp_map = discover_shp_layers(temp_dir)
+        # 权属单位代码表（xls）：此前被静默忽略；它是镇/村/组名称的权威源
+        qs_rows = _collect_qs_code_table(db, batch, temp_dir, current_user, now)
         logger.info(
-            "GB package discovered: batch_id=%s mdb=%s shp=%s",
-            batch.id, mdb_path, sorted(shp_map),
+            "GB package discovered: batch_id=%s mdb=%s shp=%s qs_code_table_rows=%s",
+            batch.id, mdb_path, sorted(shp_map), len(qs_rows),
         )
         if "dk" not in shp_map:
             raise HTTPException(
@@ -257,13 +268,71 @@ def process_gb_package_archive_content(
         current_user=current_user,
         now=now,
     )
+
+    # 权属单位代码表灌区域表：放在 sync_regions_from_business_codes 之后跑，
+    # fbfmc 反推先兜底，代码表再以权威名称覆盖
+    qs_message = ""
+    if qs_rows:
+        try:
+            qs_stats = sync_regions_from_qs_table(db, qs_rows, batch.region_code)
+            db.commit()
+            qs_message = (
+                f"，权属单位代码表同步区域：新建 {qs_stats['created']}、"
+                f"更名 {qs_stats['renamed']}、跳过 {qs_stats['skipped']}"
+            )
+            logger.info(
+                "GB package qs code table synced: batch_id=%s total=%s applied=%s created=%s renamed=%s skipped=%s details=%s",
+                batch.id, qs_stats["total"], qs_stats["applied"], qs_stats["created"],
+                qs_stats["renamed"], qs_stats["skipped"], qs_stats["details"],
+            )
+        except Exception:  # noqa: BLE001 — 代码表同步失败不阻断导入结果
+            db.rollback()
+            logger.exception("GB package qs code table sync failed: batch_id=%s", batch.id)
+            qs_message = "，权属单位代码表同步区域失败（详见后端日志）"
+
     geoserver_service.recalculate_default_bounds()
     logger.info(
         "GB package import finished: batch_id=%s total=%s success=%s failed=%s",
         batch.id, batch.total_count, batch.success_count, batch.failed_count,
     )
-    data_import_progress.update(batch.id, status=batch.status, message="国标包导入完成")
+    data_import_progress.update(batch.id, status=batch.status, message=f"国标包导入完成{qs_message}")
     return serialize_batch(batch)
+
+
+def _collect_qs_code_table(
+    db: Session,
+    batch: DataImportBatch,
+    temp_dir: str,
+    current_user: User,
+    now: datetime,
+) -> list[dict]:
+    """解压目录里找权属单位代码表并登记 DataImportFile；没有则返回空（兼容旧包）。"""
+    qs_path = find_qs_code_table(temp_dir)
+    if qs_path is None:
+        return []
+    qs_rows = read_qs_code_table(qs_path)
+    if not qs_rows:
+        return []
+    content = qs_path.read_bytes()
+    db.add(
+        DataImportFile(
+            tenant_code=batch.tenant_code,
+            region_code=batch.region_code,
+            import_batch_id=batch.id,
+            file_type="gb_qs_code_table",
+            original_name=qs_path.name,
+            content_type=None,
+            file_size=len(content),
+            file_hash=hashlib.sha256(content).hexdigest(),
+            parse_status="success",
+            row_count=len(qs_rows),
+            uploaded_by=current_user.id,
+            uploaded_at=now,
+            remark="权属单位代码表（区域名称权威源）",
+        )
+    )
+    db.flush()
+    return qs_rows
 
 
 # ===========================================================================

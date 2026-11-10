@@ -178,7 +178,9 @@ def run_gdb_import_job(
             data_import_progress.update(batch_id, status="failed", message="import context not found")
             return
         set_current_user(db, current_user)
-        data_access_service.ensure_region_in_scope(
+        # ⛔ 与 run_gb_import_job 同口径：批次级校验用 ensure_import_batch_region_in_scope
+        # （允许批次区域是授权/license 的祖先），逐行由 resolve_effective_import_region 严格兜底。
+        data_access_service.ensure_import_batch_region_in_scope(
             current_user,
             batch.region_code,
             detail="import batch is outside the current authorized scope",

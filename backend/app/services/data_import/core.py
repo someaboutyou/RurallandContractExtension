@@ -266,6 +266,11 @@ class DataImportService:
 
         return reimport_failed_row(db, batch_id, row_id, data_patch, current_user)
 
+    def reimport_failed_rows_batch(self, db, batch_id, row_ids, current_user):
+        from .row_reimport import reimport_failed_rows_batch
+
+        return reimport_failed_rows_batch(db, batch_id, row_ids, current_user)
+
     def rollback_batch(self, db, batch_id, current_user):
         batch = db.get(DataImportBatch, batch_id)
         if batch is None:

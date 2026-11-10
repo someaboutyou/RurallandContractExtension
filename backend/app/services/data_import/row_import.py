@@ -34,7 +34,6 @@ from .helpers import (
     record_operation,
     resolve_group_region,
     resolve_effective_import_region,
-    resolve_import_region,
     snapshot_model,
 )
 
@@ -65,9 +64,11 @@ def _import_cbf_row(db, batch, survey_batch, row_record, data, current_user, now
     required = ["cbfbm", "region_code", "cbflx", "cbfmc", "cbfzjlx", "cbfzjhm", "cbfdz", "yzbm", "cbfdcy"]
     ensure_required(data, required)
     data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="out of scope")
-    declared_region_code, _region_name = resolve_import_region(db, data, current_user)
+    # ⛔ 不过声明区域闸（原 resolve_import_region）：CBF 表无 REGION_CODE 列时
+    # apply_gdb_region_defaults 会回填批次县级码，license 授权到镇级时必 403。
+    # 行区域直接由 cbfbm 严格判定（resolve_effective_import_region）。
     group_region_code, group_region_name = resolve_group_region(db, data, current_user)
-    region_code = resolve_effective_import_region(batch, current_user, group_region_code, data["cbfbm"], declared_region_code)
+    region_code = resolve_effective_import_region(batch, current_user, group_region_code, data["cbfbm"])
     tenant_code = data_access_service.derive_tenant_code(region_code)
     contractor_uid = str(uuid5(NAMESPACE_URL, f"survey:cbf:{data['cbfbm']}"))
     if context and "cbf_result_by_cbfbm" in context:
@@ -122,6 +123,11 @@ def _import_member_row(db, batch, survey_batch, row_record, data, current_user, 
             contractor_result = db.scalar(select(SurveyCbfResult).where(SurveyCbfResult.cbfbm == cbfbm).order_by(SurveyCbfResult.id.desc()))
     else:
         contractor_result = None
+    # ⛔ 承包方尚未入库（如 cbf 行 403 失败）时，uid 不能落空串：
+    # 承包方 contractor_uid = uuid5("survey:cbf:{cbfbm}")（确定性），成员提前用同一
+    # 算法推导，承包方后续导入/重导成功后自动挂上链；否则成员永远成孤儿行
+    # （2026-11-10 现场：1812 条成员 contractor_uid='' 全孤儿）。
+    fallback_contractor_uid = str(uuid5(NAMESPACE_URL, f"survey:cbf:{cbfbm}")) if cbfbm else ""
     tenant_code = contractor_result.tenant_code if contractor_result else (data_access_service.get_tenant_code(current_user) or data_access_service.derive_tenant_code(batch.region_code))
     region_code = contractor_result.region_code if contractor_result else batch.region_code
     member_uid = str(uuid5(NAMESPACE_URL, f"survey:member:{cbfbm}:{cyzjhm}"))
@@ -136,11 +142,11 @@ def _import_member_row(db, batch, survey_batch, row_record, data, current_user, 
     operation = "update" if result else "insert"
     result_before = snapshot_model(result) if result else None
     if result is None:
-        result = SurveyCbfJtcyResult(tenant_code=tenant_code, region_code=region_code, contractor_uid=contractor_result.contractor_uid if contractor_result else "", member_uid=member_uid, initialized_at=now)
+        result = SurveyCbfJtcyResult(tenant_code=tenant_code, region_code=region_code, contractor_uid=contractor_result.contractor_uid if contractor_result else fallback_contractor_uid, member_uid=member_uid, initialized_at=now)
         db.add(result)
     result.tenant_code = tenant_code
     result.region_code = region_code
-    result.contractor_uid = contractor_result.contractor_uid if contractor_result else (result.contractor_uid or "")
+    result.contractor_uid = contractor_result.contractor_uid if contractor_result else (fallback_contractor_uid or result.contractor_uid or "")
     result.member_uid = member_uid
     result.cbfbm = cbfbm or (result.cbfbm or "")
     result.cyxm = data.get("cyxm") or (result.cyxm or "")
@@ -364,9 +370,11 @@ def _gdb_cbf(db, batch, row_record, data, current_user, now, chunk_no):
     required = ["cbfbm", "region_code", "cbflx", "cbfmc", "cbfzjlx", "cbfzjhm", "cbfdz", "yzbm", "cbfdcy"]
     ensure_required(data, required)
     data_access_service.ensure_code_in_scope(current_user, data["cbfbm"], detail="out of scope")
-    declared_region_code, _region_name = resolve_import_region(db, data, current_user)
+    # ⛔ 不过声明区域闸（原 resolve_import_region）：CBF 表无 REGION_CODE 列时
+    # apply_gdb_region_defaults 会回填批次县级码，license 授权到镇级时必 403。
+    # 行区域直接由 cbfbm 严格判定（resolve_effective_import_region）。
     group_region_code, group_region_name = resolve_group_region(db, data, current_user)
-    region_code = resolve_effective_import_region(batch, current_user, group_region_code, data["cbfbm"], declared_region_code)
+    region_code = resolve_effective_import_region(batch, current_user, group_region_code, data["cbfbm"])
     tenant_code = data_access_service.get_tenant_code(current_user) or data_access_service.derive_tenant_code(region_code)
     contractor_uid = str(uuid5(NAMESPACE_URL, f"survey:cbf:{data['cbfbm']}"))
     result = db.scalar(select(SurveyCbfResult).where(SurveyCbfResult.tenant_code == tenant_code, SurveyCbfResult.cbfbm == data["cbfbm"]).order_by(SurveyCbfResult.id.desc()))
@@ -419,6 +427,8 @@ def _gdb_member(db, batch, row_record, data, current_user, now, chunk_no):
         contractor = db.scalar(select(SurveyCbfResult).where(SurveyCbfResult.cbfbm == cbfbm).order_by(SurveyCbfResult.id.desc()))
     else:
         contractor = None
+    # ⛔ 同 _import_member_row：承包方未入库时推导确定性 uid，避免成员成孤儿行。
+    fallback_contractor_uid = str(uuid5(NAMESPACE_URL, f"survey:cbf:{cbfbm}")) if cbfbm else ""
     tenant_code = contractor.tenant_code if contractor else (data_access_service.get_tenant_code(current_user) or data_access_service.derive_tenant_code(batch.region_code))
     region_code = contractor.region_code if contractor else batch.region_code
     member_uid = str(uuid5(NAMESPACE_URL, f"survey:member:{cbfbm}:{cyzjhm}"))
@@ -429,11 +439,11 @@ def _gdb_member(db, batch, row_record, data, current_user, now, chunk_no):
     operation = "update" if result else "insert"
     before = snapshot_model(result) if result else None
     if result is None:
-        result = SurveyCbfJtcyResult(tenant_code=tenant_code, region_code=region_code, contractor_uid=contractor.contractor_uid if contractor else "", member_uid=member_uid, initialized_at=now)
+        result = SurveyCbfJtcyResult(tenant_code=tenant_code, region_code=region_code, contractor_uid=contractor.contractor_uid if contractor else fallback_contractor_uid, member_uid=member_uid, initialized_at=now)
         db.add(result)
     result.tenant_code = tenant_code
     result.region_code = region_code
-    result.contractor_uid = contractor.contractor_uid if contractor else (result.contractor_uid or "")
+    result.contractor_uid = contractor.contractor_uid if contractor else (fallback_contractor_uid or result.contractor_uid or "")
     result.member_uid = member_uid
     result.cbfbm = cbfbm or (result.cbfbm or "")
     result.cyxm = data.get("cyxm") or (result.cyxm or "")

@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import datetime
 
 from pydantic import BaseModel, Field
 
@@ -66,6 +66,12 @@ class DataImportRowReimport(BaseModel):
     """失败行人工修正后重新导入：data 为修正后的字段值（覆盖原 normalized_data）。"""
 
     data: dict
+
+
+class DataImportRowsBatchReimport(BaseModel):
+    """批量重试导入失败行：rowIds 为空 = 重试批次内全部失败行。"""
+
+    rowIds: list[int] | None = None
 
 
 class DataImportJobRead(BaseModel):

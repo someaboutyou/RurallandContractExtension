@@ -162,9 +162,18 @@
           <el-option label="失败" value="failed" />
         </el-select>
         <el-button plain @click="reloadRows">刷新</el-button>
+        <el-button
+          v-if="canManage"
+          plain
+          type="primary"
+          :disabled="!selectedFailedRows.length"
+          :loading="batchFixing"
+          @click="handleBatchFixImport"
+        >批量修正导入{{ selectedFailedRows.length ? `（${selectedFailedRows.length}）` : "" }}</el-button>
       </div>
     </div>
-    <el-table v-loading="rowLoading" :data="detailRows" border>
+    <el-table v-loading="rowLoading" :data="detailRows" border @selection-change="onRowSelectionChange">
+      <el-table-column v-if="canManage" type="selection" width="45" :selectable="(row) => row.status === 'failed'" />
       <el-table-column prop="rowNo" label="行号" width="80" />
       <el-table-column prop="entityType" label="类型" width="110" />
       <el-table-column prop="entityKey" label="业务键" min-width="180" />
@@ -225,6 +234,7 @@ import {
   fetchImportProgress,
   fetchImportRows,
   reimportImportRow,
+  reimportRowsBatch,
   rollbackImport,
   uploadImportGbPackage,
   uploadImportGdb,
@@ -650,6 +660,50 @@ async function handleFixImport() {
 function handlePageChange(value) {
   page.value = value;
   loadBatches();
+}
+
+const selectedFailedRows = ref([]);
+const batchFixing = ref(false);
+
+function onRowSelectionChange(rows) {
+  selectedFailedRows.value = rows.filter((r) => r.status === "failed");
+}
+
+async function handleBatchFixImport() {
+  if (!activeBatch.value || !selectedFailedRows.value.length) return;
+  const ids = selectedFailedRows.value.map((r) => r.id);
+  try {
+    await ElMessageBox.confirm(
+      `确认按原数据重新导入选中的 ${ids.length} 行失败数据吗？成功后这些行将标记为「修正导入」。`,
+      "批量修正导入",
+      { type: "warning", confirmButtonText: "批量重试导入", cancelButtonText: "取消" },
+    );
+  } catch {
+    return;
+  }
+  batchFixing.value = true;
+  try {
+    const { data } = await reimportRowsBatch(activeBatch.value.id, ids);
+    const result = data.data || {};
+    if (!result.failed) {
+      ElMessage.success(`批量修正导入完成：成功 ${result.success ?? 0} 行`);
+    } else {
+      const detail = (result.errors || [])
+        .map((e) => `行${e.rowNo}：${e.error}`)
+        .join("；");
+      ElMessage({
+        type: "warning",
+        duration: 8000,
+        message: `批量修正导入完成：成功 ${result.success} 行，失败 ${result.failed} 行${detail ? `。${detail}` : ""}`,
+      });
+    }
+    await reloadRows();
+    await loadBatches();
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || "批量修正导入失败");
+  } finally {
+    batchFixing.value = false;
+  }
 }
 
 async function loadRegionTree() {

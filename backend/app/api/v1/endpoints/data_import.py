@@ -15,6 +15,7 @@ from app.schemas.data_import import (
     DataImportProgressRead,
     DataImportRowRead,
     DataImportRowReimport,
+    DataImportRowsBatchReimport,
 )
 from app.schemas.pagination import PageResponse
 from app.schemas.response import ApiResponse
@@ -262,6 +263,17 @@ def reimport_import_row(
 ):
     """失败行人工修正后重新导入：以原行 normalized_data 为基底，payload.data 覆盖修正字段。"""
     return {"data": data_import_service.reimport_failed_row(db, batch_id, row_id, payload.data, current_user)}
+
+
+@router.post("/{batch_id}/rows/reimport-batch", response_model=ApiResponse[dict])
+def reimport_failed_rows_batch(
+    batch_id: int,
+    payload: DataImportRowsBatchReimport,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """批量按原数据重试导入失败行（rowIds 为空 = 全部失败行），逐行独立事务。"""
+    return {"data": data_import_service.reimport_failed_rows_batch(db, batch_id, payload.rowIds, current_user)}
 
 
 @router.get("/{batch_id}/failed-rows.csv")

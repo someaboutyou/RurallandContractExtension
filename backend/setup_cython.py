@@ -38,8 +38,10 @@ KEEP_AS_PY = {
 }
 
 # Directories whose .py files must all remain uncompiled
-KEEP_AS_PY_DIRS = [
-    "app/services/data_import/",
+# （2026-11-10 起为空：data_import 曾整目录保留 .py，是拆包时继承
+#   data_import_service.py「kept editable」的惯性，无技术必要——试编译
+#   12/12 通过、无动态加载引用、性能无差。热修需求由整包/增量更新覆盖。）
+KEEP_AS_PY_DIRS: list[str] = [
 ]
 
 # Directories containing non-Python runtime files that must be copied to dist/

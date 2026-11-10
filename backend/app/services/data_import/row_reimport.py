@@ -16,6 +16,7 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.data_import import DataImportBatch, DataImportRow
@@ -32,7 +33,7 @@ def reimport_failed_row(
     db: Session,
     batch_id: int,
     row_id: int,
-    data_patch: dict,
+    data_patch: dict | None,
     current_user: User,
 ) -> dict:
     batch = db.get(DataImportBatch, batch_id)
@@ -43,11 +44,10 @@ def reimport_failed_row(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="import row not found")
     if row.status != "failed":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="仅失败行可修正导入")
-    if not data_patch:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请提供修正后的数据")
 
     base = dict(row.normalized_data or row.raw_data or {})
-    merged = {**base, **data_patch}
+    # data_patch 为空 = 按原数据重试导入（后端缺陷修复后批量重放的典型场景）
+    merged = {**base, **(data_patch or {})}
     original_error = row.error_message
     now = datetime.now(timezone.utc)
 
@@ -72,10 +72,12 @@ def reimport_failed_row(
     row.operation_type = operation
     row.target_id = str(target_id) if target_id is not None else None
     row.normalized_data = merged
-    row.warning_message = (
-        f"人工修正后导入（{current_user.real_name or current_user.username}，"
-        f"{now.astimezone().strftime('%Y-%m-%d %H:%M')}）；原错误：{original_error or '未知'}"
-    )
+    operator = current_user.real_name or current_user.username
+    origin = f"原错误：{original_error or '未知'}"
+    if data_patch:
+        row.warning_message = f"人工修正后导入（{operator}，{now.astimezone().strftime('%Y-%m-%d %H:%M')}）；{origin}"
+    else:
+        row.warning_message = f"按原数据重试导入（{operator}，{now.astimezone().strftime('%Y-%m-%d %H:%M')}）；{origin}"
     row.error_message = None
     batch.failed_count = max(0, (batch.failed_count or 0) - 1)
     batch.success_count = (batch.success_count or 0) + 1
@@ -87,3 +89,46 @@ def reimport_failed_row(
         batch_id, row_id, row.entity_type, row.entity_key, operation, row.target_id,
     )
     return serialize_row(row)
+
+
+ERROR_DETAILS_LIMIT = 50
+
+
+def reimport_failed_rows_batch(
+    db: Session,
+    batch_id: int,
+    row_ids: list[int] | None,
+    current_user: User,
+) -> dict:
+    """批量按原数据重试导入失败行。
+
+    ``row_ids`` 为空 = 重试批次内全部失败行；逐行独立事务，单行失败不影响其他行。
+    返回 {total, success, failed, errors}，errors 最多保留 ``ERROR_DETAILS_LIMIT`` 条。
+    """
+    batch = db.get(DataImportBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="import batch not found")
+
+    stmt = select(DataImportRow).where(DataImportRow.import_batch_id == batch_id, DataImportRow.status == "failed")
+    if row_ids:
+        stmt = stmt.where(DataImportRow.id.in_(row_ids))
+    rows = db.scalars(stmt.order_by(DataImportRow.row_no)).all()
+
+    success = 0
+    errors: list[dict] = []
+    failed_total = 0
+    for row in rows:
+        try:
+            reimport_failed_row(db, batch_id, row.id, None, current_user)
+            success += 1
+        except Exception as exc:
+            failed_total += 1
+            detail = getattr(exc, "detail", None) or str(exc)
+            if len(errors) < ERROR_DETAILS_LIMIT:
+                errors.append({"rowNo": row.row_no, "entityKey": row.entity_key, "error": str(detail)})
+            logger.warning(
+                "Batch reimport row failed: batch_id=%s row_id=%s entity_key=%s error=%s",
+                batch_id, row.id, row.entity_key, detail,
+            )
+    db.rollback()  # 释放失败行残留的会话状态
+    return {"total": len(rows), "success": success, "failed": failed_total, "errors": errors}
