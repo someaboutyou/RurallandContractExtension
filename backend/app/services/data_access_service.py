@@ -167,6 +167,43 @@ class DataAccessService:
     def ensure_region_in_scope(self, user: User, region_code: str | None, *, detail: str = "当前区域不在可操作范围内") -> None:
         self.ensure_code_in_scope(user, region_code, detail=detail)
 
+    def ensure_import_batch_region_in_scope(
+        self,
+        user: User,
+        region_code: str | None,
+        *,
+        detail: str = "导入区域不在当前授权范围内",
+    ) -> None:
+        """新建导入批次的区域校验（比写操作的 ensure_region_in_scope 宽一档）。
+
+        授权到镇/村的用户（如实施人员只授权一个镇）新建批次时，区域下拉只有县级
+        可选，批次区域（县）必然比授权（镇）粗；按 startswith 严格校验会直接 403。
+        放宽为「批次区域与授权存在父子关系」即可建批次：
+        - 批次区域在授权内（正常路径，``normalized.startswith(permission)``）；
+        - 批次区域是授权的祖先（``permission.startswith(normalized)``）。
+
+        放宽是安全的：导入行落库时 ``resolve_effective_import_region`` 仍会逐行
+        执行 ``ensure_region_in_scope``，授权范围外的数据行会被拒绝导入，不会
+        因为批次建在上级区域而越权写入。
+        """
+        if not region_code:
+            return
+        normalized = self.normalize_region_code(region_code)
+        system_region_code = self.get_system_region_code()
+        if system_region_code and not (
+            normalized.startswith(system_region_code) or system_region_code.startswith(normalized)
+        ):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+        if user.role.data_scope == "all":
+            return
+        tenant_code = self.derive_tenant_code(normalized)
+        if tenant_code != self.get_tenant_code(user):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+        for permission in self.get_region_permissions(user):
+            if normalized.startswith(permission.region_code) or permission.region_code.startswith(normalized):
+                return
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
     def ensure_region_filter_in_scope(
         self,
         user: User,

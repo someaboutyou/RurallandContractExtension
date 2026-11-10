@@ -77,7 +77,10 @@ class DataImportService:
         region_code = data_access_service.normalize_region_code(payload.get("regionCode"))
         if not region_code:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请选择导入区域")
-        data_access_service.ensure_region_in_scope(current_user, region_code, detail="导入区域不在当前授权范围内")
+        # 放宽为「父子关系即放行」：授权到镇/村的用户建县级批次不再 403；
+        # 范围外数据由 resolve_effective_import_region 逐行拦截（见
+        # ensure_import_batch_region_in_scope 的 docstring）。
+        data_access_service.ensure_import_batch_region_in_scope(current_user, region_code, detail="导入区域不在当前授权范围内")
         now = datetime.now(timezone.utc)
         batch = DataImportBatch(
             import_no=next_no(db, "IMP", DataImportBatch.id),

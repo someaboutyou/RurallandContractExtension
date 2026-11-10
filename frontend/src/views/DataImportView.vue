@@ -322,6 +322,16 @@ function openCreateDialog() {
   createVisible.value = true;
 }
 
+// 判断所选批次区域是否比当前账号的授权范围粗（如授权到镇、批次选到县）。
+// 这种情况下允许建批次，但导入时授权范围外的数据行会被逐行拒绝。
+function regionCoarserThanScope(regionCode) {
+  const user = authStore.user;
+  if (!user || user.dataScope === "all") return false;
+  const codes = (user.regionPermissions || []).map((item) => item.regionCode).filter(Boolean);
+  if (!codes.length || !regionCode) return false;
+  return codes.some((code) => code.startsWith(regionCode) && code !== regionCode);
+}
+
 async function handleCreate() {
   if (!form.importName.trim()) {
     ElMessage.warning("请输入导入名称");
@@ -340,8 +350,17 @@ async function handleCreate() {
       regionId: undefined,
     });
     ElMessage.success("导入批次已创建");
+    if (regionCoarserThanScope(form.regionCode)) {
+      ElMessage({
+        type: "warning",
+        duration: 8000,
+        message: "所选区域大于当前账号的授权范围：批次已允许创建，但导入时只能导入授权范围内的数据，范围外的数据行会导入失败。",
+      });
+    }
     createVisible.value = false;
     await loadBatches();
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || "保存失败，请稍后重试");
   } finally {
     submitting.value = false;
   }
