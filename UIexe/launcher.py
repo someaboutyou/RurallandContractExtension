@@ -225,6 +225,14 @@ class App:
             return
         if not messagebox.askyesno('清空数据', '本操作将删除当前系统下的所有数据，请慎重检查后操作！！！'):
             return
+        # 顺带重跑安装配置：坐标系/行政区码固化在数据库里，清空后正好可以重新选。
+        # 不真的重跑 install.ps1——启动器的 PowerShell 是无窗口非交互宿主，Read-Host 拿不到输入；
+        # install.ps1 的体力活（initdb、建库）由 start-all.ps1 在下次启动时自动补齐。
+        reconfigure = messagebox.askyesno(
+            '清空数据',
+            '清空完成后是否重新进行安装配置（目标坐标系 / 行政区划代码）？\n\n'
+            '选「是」：清空后弹出配置窗口，下次启动按新配置重建空环境。\n'
+            '选「否」：保留现有配置，下次启动按原配置重建。')
         self.busy = True
         self.address.config(text='正在清空数据...')
         self.out('开始清空数据目录：' + str(data_dir))
@@ -240,9 +248,34 @@ class App:
                     removed += 1
                 except OSError as exc:
                     errors.append(f'{item.name}: {exc}')
-            self.events.put(('cleared', (removed, errors)))
+            self.events.put(('cleared', (removed, errors, reconfigure)))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def reconfigure(self):
+        """清空数据后重新收集安装配置（坐标系 / 行政区划码），写入 backend\\.env。
+
+        等价于重跑 install.ps1 的交互部分；initdb、建库等体力活由 start-all.ps1
+        在下次启动时自动补齐（pgdata 已清空会重新 initdb，空间表由后端 bootstrap 重建）。
+        """
+        self.out('开始重新安装配置（目标坐标系 / 行政区划代码）...')
+        result = self.setup_dialog(
+            title='重新安装配置',
+            confirm_text='✔  保存配置',
+            heading='请确认部署地的两项配置（将写入 backend\\.env，坐标系首次启动后固化不可改）')
+        if result is None:
+            self.out('已取消重新配置：backend\\.env 保留原 TARGET_SRID / REGION_SEED_COUNTIES，下次启动仍按原配置初始化。')
+            return
+        srid, counties = result
+        self.write_env_value('TARGET_SRID', str(srid))
+        if counties:
+            self.write_env_value('REGION_SEED_COUNTIES', counties)
+        else:
+            # 这次明确选择不自动建区域树：必须清掉旧码，否则残留配置会把旧区域树灌回"空环境"。
+            self.remove_env_key('REGION_SEED_COUNTIES')
+        self.out('新安装配置已写入 backend\\.env：TARGET_SRID=' + str(srid)
+                 + '，REGION_SEED_COUNTIES=' + (counties if counties else '（未配置，跳过区域自动建树）'))
+        messagebox.showinfo('重新安装配置', '配置已保存。点击「启动系统」即可按新配置重建空环境。')
 
     def open_system(self):
         """在默认浏览器中打开系统界面。"""
@@ -318,16 +351,24 @@ class App:
         lines.append(f'{key}={value}')
         path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
+    def remove_env_key(self, key):
+        """从 .env 删除单个键；键不存在或文件不在时静默返回。"""
+        path = self.home / 'backend' / '.env'
+        if not path.is_file():
+            return
+        lines = [l for l in self.read_env_text().splitlines() if not re.match(rf'^\s*{key}\s*=', l)]
+        path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
     def needs_setup(self):
         """已安装（有 installed.json 标记）或已配置 TARGET_SRID 都视为不用弹窗。"""
         if (self.home / 'runtime' / '.state' / 'installed.json').is_file():
             return False
         return not self.env_value(self.read_env_text(), 'TARGET_SRID')
 
-    def setup_dialog(self):
-        """模态对话框收集首次安装配置，返回 (srid, counties) 或取消时 None。"""
+    def setup_dialog(self, title='首次安装配置', confirm_text='✔  保存并启动', heading='首次安装需要两项配置（将写入 backend\\.env）'):
+        """模态对话框收集安装配置，返回 (srid, counties) 或取消时 None。"""
         dialog = tk.Toplevel(self.r)
-        dialog.title('首次安装配置')
+        dialog.title(title)
         dialog.geometry('620x540')
         dialog.minsize(620, 540)
         dialog.configure(bg=BG)
@@ -336,7 +377,7 @@ class App:
 
         header = tk.Frame(dialog, bg=BG)
         header.pack(fill='x', padx=24, pady=(20, 4))
-        self.label(header, '首次安装需要两项配置（将写入 backend\\.env）', 13, True, bg=BG).pack(anchor='w')
+        self.label(header, heading, 13, True, bg=BG).pack(anchor='w')
         tk.Label(header, text='目标坐标系用于地图投影，初始化后不可更改，请按项目所在县经度选择。',
                  bg=BG, fg=MUTED, font=('Microsoft YaHei UI', 10)).pack(anchor='w', pady=(4, 0))
 
@@ -369,7 +410,7 @@ class App:
 
         buttons = tk.Frame(dialog, bg=BG)
         buttons.pack(fill='x', padx=24, pady=16)
-        ok_btn = self.button(buttons, '✔  保存并启动', confirm, bg=BLUE)
+        ok_btn = self.button(buttons, confirm_text, confirm, bg=BLUE)
         self.button(buttons, '取消', dialog.destroy)
         dialog.bind('<Return>', confirm)
         dialog.bind('<Escape>', lambda _: dialog.destroy())
@@ -441,7 +482,7 @@ class App:
             elif event == 'modules':
                 self.values[2].config(text=f'{value} / 4')
             elif event == 'cleared':
-                removed, errors = value
+                removed, errors, reconfigure = value
                 self.busy = False
                 if self.state == '未启动':
                     self.address.config(text='● 已停止')
@@ -450,9 +491,15 @@ class App:
                     for line in errors:
                         self.out('  清理失败：' + line)
                     messagebox.showwarning('清空数据', f'已删除 {removed} 项，{len(errors)} 项未能删除（可能被占用），详情见运行日志。')
+                    if reconfigure:
+                        # 旧库没删干净时 system_config 里还固化着旧坐标系，此时换 .env
+                        # 会和库内固化值打架（启动校验不一致），宁可跳过让用户先处理。
+                        self.out('警告：数据目录未清空彻底，本次跳过重新配置（新旧配置混用会导致坐标系校验冲突）。')
                 else:
                     self.out(f'数据目录已清空（{removed} 项）')
                     messagebox.showinfo('清空数据', f'已清空数据目录（{removed} 项）。')
+                    if reconfigure:
+                        self.reconfigure()
             else:
                 self.busy = False
                 if event == 'started':
