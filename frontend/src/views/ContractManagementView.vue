@@ -1,13 +1,15 @@
 <template>
   <section class="panel table-page contract-manage-page">
-    <div v-if="!activeBatch" class="contract-manage-empty">
-      <el-empty description="请先在左侧选择一个调查批次" />
-    </div>
-
-    <div v-else class="contract-manage-body" :class="{ 'is-batch-collapsed': batchPanelCollapsed }">
+    <!-- 批次面板必须常驻：activeBatch 为空时它是唯一的批次选择入口，
+         放进 v-else 会导致"取消选中 → 面板被卸载 → 死锁空白页"。 -->
+    <div class="contract-manage-body" :class="{ 'is-batch-collapsed': batchPanelCollapsed }">
       <SurveyBatchPanel v-model="activeBatch" v-model:collapsed="batchPanelCollapsed" />
 
-      <div class="contract-manage-main">
+      <div v-if="!activeBatch" class="contract-manage-empty">
+        <el-empty description="请先在左侧选择一个调查批次" />
+      </div>
+
+      <div v-else class="contract-manage-main">
         <div class="toolbar">
           <div class="panel-title">承包合同管理</div>
           <div class="toolbar-actions">
