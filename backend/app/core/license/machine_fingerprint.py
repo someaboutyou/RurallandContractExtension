@@ -107,22 +107,22 @@ def _run_powershell_cim(wmi_class: str, property_name: str) -> str:
         f"(Get-CimInstance {wmi_class} | "
         f"Select-Object -ExpandProperty {property_name}).Trim()"
     )
+    return _run_powershell(ps_cmd)
+
+
+def _run_powershell(ps_cmd: str) -> str:
+    """执行 PowerShell 命令并返回去掉首尾空白的输出；失败返回空字符串。"""
     try:
         result = subprocess.run(
             ["powershell", "-NoProfile", "-Command", ps_cmd],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=15,
             creationflags=CREATE_NO_WINDOW,
         )
         if result.returncode == 0:
-            value = result.stdout.strip()
-            # 可能有多行，取第一行非空的
-            for line in value.splitlines():
-                line = line.strip()
-                if line:
-                    return line
+            return result.stdout.strip()
         return ""
     except Exception as e:
-        logger.debug("PowerShell CIM %s.%s failed: %s", wmi_class, property_name, e)
+        logger.debug("PowerShell command failed: %s", e)
         return ""
 
 
@@ -158,10 +158,31 @@ def _get_cpu_id() -> str:
 
 
 def _get_disk_serial() -> str:
-    """获取系统盘序列号"""
+    """获取系统盘序列号。
+
+    ⛔ 必须锁定「系统盘」，不能取 Win32_DiskDrive 的第一条序列号：
+    多块硬盘 / 插拔 USB 移动盘时 WMI 枚举顺序会变，机器码随之漂移，
+    表现为授权突然变「机器码不匹配」（2026-11-09 事故：USB 盘排到第一）。
+    - 优先 Get-Disk 的 IsSystem（系统盘，Win8+）
+    - 回退排除 USB 后按 Index 取第一块（至少不受外接盘插拔影响）
+    - 最后才走原 wmic PHYSICALDRIVE0 路径（同时修正 DeviceID 转义）
+    """
     if IS_WINDOWS:
+        system_serial = _run_powershell(
+            "Get-Disk | Where-Object { $_.IsSystem } | "
+            "Select-Object -First 1 -ExpandProperty SerialNumber"
+        )
+        if system_serial:
+            return system_serial.splitlines()[0].strip()
+        fallback_serial = _run_powershell(
+            "Get-CimInstance Win32_DiskDrive | "
+            "Where-Object { $_.InterfaceType -ne 'USB' } | "
+            "Sort-Object Index | Select-Object -First 1 -ExpandProperty SerialNumber"
+        )
+        if fallback_serial:
+            return fallback_serial.splitlines()[0].strip()
         return _get_hw_info(
-            ["diskdrive", "where", "DeviceID='\\\\\\\\\\\\.\\\\PHYSICALDRIVE0'", "get", "SerialNumber"],
+            ["diskdrive", "where", "DeviceID='\\\\.\\PHYSICALDRIVE0'", "get", "SerialNumber"],
             "Win32_DiskDrive",
             "SerialNumber",
         )

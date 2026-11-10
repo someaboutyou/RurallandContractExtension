@@ -57,7 +57,8 @@ class Settings(BaseSettings):
     #: 区域初始化范围：6 位国家统计局县级区划码，逗号分隔（如 150502,150521）。
     #: 安装时由 install.ps1 让部署人填写后写入 .env；后端首次启动 bootstrap 从
     #: 随包分发的 region_full.zip（fetch_region_seed.py --full 生成）抽取
-    #: 省->市->县->镇->村 子树「缺则补」。留空则退回 region_seed.json / 内置兜底。
+    #: 省->市->县->镇->村 子树「缺则补」。留空则**不初始化任何区域**（全新库为空），
+    #: 由部署人补配 .env 后重启，或在「区域管理」页手工建立。
     region_seed_counties: str = ""
     jwt_secret_key: str = _INSECURE_JWT_DEFAULT
     jwt_algorithm: str = "HS256"

@@ -94,6 +94,9 @@ os.environ["DATABASE_PORT"] = str(PORT)
 os.environ["DATABASE_USER"] = DB_USER
 os.environ["DATABASE_PASSWORD"] = DB_PWD
 os.environ["DATABASE_NAME"] = TEST_DB
+# 区域初始化只认 .env 的 REGION_SEED_COUNTIES（空则 regions 保持为空，不再有内置兜底），
+# 这里显式指定一个县级码，让空库 bootstrap 后能拿到真实的省/市/县链路做夹具。
+os.environ.setdefault("REGION_SEED_COUNTIES", "150526")
 
 sys.path.insert(0, str(ROOT / "backend"))
 

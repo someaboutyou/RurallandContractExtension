@@ -19,6 +19,21 @@ from app.services.contractor_service import contractor_service
 from app.services.data_access_service import data_access_service
 
 
+def _format_optional_date(value) -> str | None:
+    """把 date/datetime/已序列化字符串统一成 ISO 字符串。
+
+    ⛔ 地块来源可能是 SurveyDkResult、SurveyDkBase（无调查/审核日期列）或变更快照
+    （日期已经是字符串）。直接 ``.isoformat()`` 会在 base 行上 AttributeError、
+    在快照字符串上再次失败，导致分割后该户地块清单接口 500。
+    """
+    if not value:
+        return None
+    if isinstance(value, str):
+        return value
+    isoformat = getattr(value, "isoformat", None)
+    return isoformat() if callable(isoformat) else None
+
+
 class LandParcelService:
 
     def _build_removed_parcel_change_map(
@@ -256,10 +271,10 @@ class LandParcelService:
                 "dkbzxx": dk_source.dkbzxx if dk_source else None,
                 "zjrxm": dk_source.zjrxm if dk_source else None,
                 "survey_person": getattr(dk_source, "survey_person", None) if dk_source else None,
-                "survey_date": dk_source.survey_date.isoformat() if dk_source and dk_source.survey_date else None,
+                "survey_date": _format_optional_date(getattr(dk_source, "survey_date", None)) if dk_source else None,
                 "survey_note": getattr(dk_source, "survey_note", None) if dk_source else None,
                 "check_person": getattr(dk_source, "check_person", None) if dk_source else None,
-                "check_date": dk_source.check_date.isoformat() if dk_source and dk_source.check_date else None,
+                "check_date": _format_optional_date(getattr(dk_source, "check_date", None)) if dk_source else None,
                 "check_opinion": getattr(dk_source, "check_opinion", None) if dk_source else None,
                 "fbfbm": cbdkxx.fbfbm,
                 "fbfmc": fbf.fbfmc if fbf else None,
@@ -342,10 +357,10 @@ class LandParcelService:
                 "dkbzxx": dk_source.dkbzxx if dk_source else None,
                 "zjrxm": dk_source.zjrxm if dk_source else None,
                 "survey_person": getattr(dk_source, "survey_person", None) if dk_source else None,
-                "survey_date": dk_source.survey_date.isoformat() if dk_source and dk_source.survey_date else None,
+                "survey_date": _format_optional_date(getattr(dk_source, "survey_date", None)) if dk_source else None,
                 "survey_note": getattr(dk_source, "survey_note", None) if dk_source else None,
                 "check_person": getattr(dk_source, "check_person", None) if dk_source else None,
-                "check_date": dk_source.check_date.isoformat() if dk_source and dk_source.check_date else None,
+                "check_date": _format_optional_date(getattr(dk_source, "check_date", None)) if dk_source else None,
                 "check_opinion": getattr(dk_source, "check_opinion", None) if dk_source else None,
                 "fbfbm": relation_source.fbfbm,
                 "fbfmc": fbf.fbfmc if fbf else None,

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.models.issuer import Issuer
 from app.models.fbf import Fbf
 from app.models.region import Region
+from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.user_region_permission import UserRegionPermission
 from app.repositories.region_repository import region_repository
@@ -110,12 +111,17 @@ class RegionService:
     def create_region(self, db: Session, payload: dict) -> dict:
         self._validate_payload(db, payload)
         parent = db.get(Region, payload.get("parentId")) if payload.get("parentId") else None
+        tenant_code = self._derive_tenant_code(payload["code"], payload["level"])
+        # 县级及以下区域的 tenant_code 外键指向 tenants 表。启动时的
+        # ensure_tenants 只覆盖存量区域，运行时新建的县级区域必须先补建租户，
+        # 否则 regions.tenant_code 外键冲突，接口直接 500（表现为「保存失败」）。
+        self._ensure_tenant(db, tenant_code, payload["name"].strip())
         item = Region(
             name=payload["name"].strip(),
             code=payload["code"].strip(),
             level=payload["level"],
             parent_id=parent.id if parent else None,
-            tenant_code=self._derive_tenant_code(payload["code"], payload["level"]),
+            tenant_code=tenant_code,
             full_name=self._build_full_name(parent, payload["name"].strip()),
             status=payload.get("status") or "active",
             sort_order=payload.get("sortOrder") or 0,
@@ -139,6 +145,9 @@ class RegionService:
         item.level = payload["level"]
         item.parent_id = parent.id if parent else None
         item.tenant_code = self._derive_tenant_code(item.code, item.level)
+        tenant = self._ensure_tenant(db, item.tenant_code, item.name)
+        if tenant is not None and tenant.region_code == item.code:
+            tenant.name = item.name
         item.full_name = self._build_full_name(parent, item.name)
         item.status = payload.get("status") or "active"
         item.sort_order = payload.get("sortOrder") or 0
@@ -300,6 +309,36 @@ class RegionService:
     def _derive_tenant_code(self, code: str, level: str) -> str | None:
         return code[:6] if level in {"county", "town", "village", "group"} and len(code) >= 6 else None
 
+    def _ensure_tenant(self, db: Session, tenant_code: str | None, region_name: str) -> Tenant | None:
+        """确保区域对应的租户存在（regions.tenant_code 外键指向 tenants.code）。
+
+        县/镇/村/组的 tenant_code 统一取 6 位县级代码，租户的 region_code 也记
+        县级代码，与 init_db.ensure_tenants 的建租户规则保持一致。租户名称优先
+        取县级区域名称，找不到县级区域时才用传入名称兜底。
+        """
+        if not tenant_code:
+            return None
+        tenant = db.get(Tenant, tenant_code)
+        if tenant is not None:
+            return tenant
+        county = self._find_region_by_code(db, tenant_code)
+        tenant = Tenant(
+            code=tenant_code,
+            name=county.name if county is not None else region_name,
+            region_code=tenant_code,
+            status="active",
+            description=f"按县级行政区 {tenant_code} 建立的租户",
+        )
+        db.add(tenant)
+        db.flush()
+        return tenant
+
+    def _find_region_by_code(self, db: Session, code: str) -> Region | None:
+        for item in db.new:
+            if isinstance(item, Region) and item.code == code:
+                return item
+        return db.scalar(select(Region).where(Region.code == code))
+
     def _build_full_name(self, parent: Region | None, name: str) -> str:
         return f"{parent.full_name} / {name}" if parent else name
 
@@ -424,6 +463,7 @@ class RegionService:
                 status="active",
                 sort_order=0
             )
+            self._ensure_tenant(db, region.tenant_code, name)
             db.add(region)
             existing_codes.add(region_code)
             created_count += 1
@@ -479,6 +519,7 @@ class RegionService:
             sort_order=0
         )
         db.add(region)
+        self._ensure_tenant(db, region.tenant_code, parent_code)
         existing_codes.add(parent_code)
     
     def _build_full_name_from_code(self, db: Session, code: str, name: str) -> str:
@@ -565,6 +606,7 @@ class RegionService:
                 )
                 db.add(county)
                 db.flush()
+                self._ensure_tenant(db, county_code, county_name)
                 created += 1
             elif overwrite:
                 county.name = county_name

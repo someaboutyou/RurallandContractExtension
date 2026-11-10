@@ -44,12 +44,13 @@
         clearable
         placeholder="搜索批次"
         class="batch-search"
+        size="small"
         @keyup.enter="loadBatches"
         @clear="loadBatches"
       />
 
       <div v-loading="loading" class="batch-card-list">
-        <el-empty v-if="!filteredBatches.length && !loading" description="暂无调查批次" :image-size="88" />
+        <el-empty v-if="!filteredBatches.length && !loading" description="暂无调查批次" :image-size="64" />
         <el-tooltip
           v-for="batch in filteredBatches"
           :key="batch.id"
@@ -210,6 +211,13 @@ onMounted(loadBatches);
   gap: 8px;
 }
 
+/* 左栏空间有限：标题比页面级 .panel-title（18px）小一档。 */
+.batch-panel-header .panel-title {
+  font-size: 15px;
+  margin-bottom: 0;
+  white-space: nowrap;
+}
+
 .batch-header-actions {
   align-items: center;
   display: flex;
@@ -254,6 +262,15 @@ onMounted(loadBatches);
 
 .batch-search {
   margin-top: 10px;
+}
+
+/* 左栏信息密度高，空状态图和说明文字比全局默认小一档。 */
+.survey-batch-panel :deep(.el-empty) {
+  padding: 24px 0;
+}
+
+.survey-batch-panel :deep(.el-empty__description p) {
+  font-size: 12px;
 }
 
 .batch-card-list {

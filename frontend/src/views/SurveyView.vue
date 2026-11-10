@@ -4,7 +4,7 @@
       <div class="batch-panel-header">
         <div class="panel-title">调查批次管理</div>
         <div class="batch-panel-actions">
-          <el-select v-model="batchSurveyStatus" clearable placeholder="调查状态" class="batch-header-filter">
+          <el-select v-model="batchSurveyStatus" clearable placeholder="调查状态" class="batch-header-filter" size="small">
             <el-option label="未调查" value="not_started" />
             <el-option label="调查中" value="in_progress" />
             <el-option label="已调查" value="surveyed" />
@@ -12,7 +12,7 @@
             <el-option label="已跳过" value="skipped" />
           </el-select>
           <el-tooltip content="新建调查批次" placement="top">
-            <el-button v-if="canManage" :icon="Plus" circle type="success" @click="openCreateBatch" />
+            <el-button v-if="canManage" :icon="Plus" circle type="success" size="small" @click="openCreateBatch" />
           </el-tooltip>
         </div>
       </div>
@@ -26,12 +26,13 @@
         :loading="assigneeLoading"
         class="batch-assignee-filter"
         placeholder="按调查员筛选批次"
+        size="small"
         @change="loadBatches"
         @clear="loadBatches"
       >
         <el-option v-for="user in assigneeOptions" :key="user.id" :value="user.id" :label="user.realName" />
       </el-select>
-      <el-input v-model="batchKeyword" :prefix-icon="Search" clearable placeholder="搜索批次" class="batch-search" @keyup.enter="loadBatches" @clear="loadBatches" />
+      <el-input v-model="batchKeyword" :prefix-icon="Search" clearable placeholder="搜索批次" class="batch-search" size="small" @keyup.enter="loadBatches" @clear="loadBatches" />
       <!-- 调查员视角：只看与我相关的批次（我创建的 / 有户分给我的）。
            勾上后不再叠加区域筛选——批次可能落在我的授权范围内、却不以我所属区域码开头。 -->
       <el-checkbox
@@ -43,7 +44,7 @@
         只看与我相关的批次
       </el-checkbox>
       <div v-loading="batchLoading" class="batch-card-list">
-        <el-empty v-if="!filteredBatches.length && !batchLoading" description="暂无调查批次" :image-size="88" />
+        <el-empty v-if="!filteredBatches.length && !batchLoading" description="暂无调查批次" :image-size="64" />
         <el-tooltip v-for="batch in filteredBatches" :key="batch.id" placement="right" effect="light" :show-after="250" popper-class="batch-detail-tooltip">
           <template #content>
             <div class="batch-tooltip-content">
@@ -529,6 +530,8 @@ onMounted(async () => {
 
 /* 面板宽度紧张时标题会被压缩成逐字断行（“管/理”），中文标题禁断词保持单行。 */
 .batch-panel-header .panel-title {
+  font-size: 15px;
+  margin-bottom: 0;
   white-space: nowrap;
 }
 
@@ -559,6 +562,16 @@ onMounted(async () => {
 
 .batch-mine-filter {
   margin-top: 10px;
+  font-size: 12px;
+}
+
+/* 左栏信息密度高，空状态图和说明文字比全局默认小一档。 */
+.survey-batch-panel :deep(.el-empty) {
+  padding: 24px 0;
+}
+
+.survey-batch-panel :deep(.el-empty__description p) {
+  font-size: 12px;
 }
 
 .batch-card-meta-row {
@@ -637,7 +650,7 @@ onMounted(async () => {
 
 .batch-card-title {
   color: #0f172a;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   line-height: 1.35;
   overflow-wrap: anywhere;
