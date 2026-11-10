@@ -50,17 +50,19 @@ def _user_scope_criteria(cls, tenant_param, region_patterns_param, region_codes_
     祖先判定 = 存在某条授权码以行区域码开头（行是某条授权的祖先）。
     用 unnest(授权码数组) + EXISTS 表达，避免按授权条数展开 OR（塌缩后通常
     只有几条，但历史上存在上千组码的账号，展开会把每条 SELECT 撑爆）。
+    ⛔ 必须 column_valued()：裸 .alias() 渲染成 ``unnest(?) AS anon_1`` 但引用
+    ``anon_1.unnest_1``，PG 报 UndefinedColumn；.alias().render_derived() 又会把
+    列名渲染成 bindparam repr（2026-11-10 真库实测连续抓到，编译测试查不出）。
+    column_valued() 渲染成 ``unnest(?) AS anon_1`` 且引用裸 ``anon_1``——PG 对
+    单列集合返回函数允许直接以表别名当列名引用，这是验证过可执行的形式。
     """
-    ancestor_source = func.unnest(region_codes_param).alias()
-    ancestor_code = ancestor_source.c[0]
+    ancestor_code = func.unnest(region_codes_param).column_valued()
     return and_(
         cls.tenant_code == tenant_param,
         or_(
             cls.region_code.like(any_(region_patterns_param)),
             exists(
-                select(1).select_from(ancestor_source).where(
-                    ancestor_code.like(cls.region_code + "%")
-                )
+                select(1).where(ancestor_code.like(cls.region_code + "%"))
             ),
         ),
     )
