@@ -53,6 +53,7 @@ from app.schemas.survey import (
     SurveySplitHouseholdRequest,
     SurveyMergeHouseholdRequest,
     SurveyCurrentBatchUpdate,
+    ContractorBatchMaintainRequest,
     ContractorDocumentExportRequest,
     ContractorLockRequest,
     ContractorRelationReplaceRequest,
@@ -1231,6 +1232,27 @@ def export_contractor_documents(
             "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"
         },
     )
+
+
+@router.post("/batches/{batch_id}/contractors-batch-maintain", response_model=ApiResponse[dict])
+def batch_maintain_contractors(
+    batch_id: int,
+    payload: ContractorBatchMaintainRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    """批量维护勾选承包方的基本信息 / 调查信息（只更新提交的字段）。"""
+    dumped = payload.model_dump(exclude_unset=True)
+    return {
+        "data": survey_service.batch_maintain_contractors(
+            db,
+            batch_id,
+            payload.contractorUids,
+            dumped.get("basic"),
+            dumped.get("survey"),
+            current_user,
+        )
+    }
 
 
 @router.post("/batches/{batch_id}/contractors-lock", response_model=ApiResponse[dict])

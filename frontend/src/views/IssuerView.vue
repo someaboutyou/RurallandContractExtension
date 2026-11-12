@@ -4,7 +4,7 @@
       <div>
         <div class="panel-title">发包方管理</div>
       </div>
-      <div class="toolbar-actions toolbar-wrap">
+      <div class="toolbar-actions toolbar-wrap toolbar-uniform">
         <el-input
           v-model="keyword"
           clearable
@@ -25,12 +25,12 @@
         <el-button
           v-if="isDataCenter && canQualityCheck"
           plain
-          type="warning"
+          type="primary"
           @click="dcQualityCheckVisible = true"
         >
           数据质检
         </el-button>
-        <el-button v-if="canManage" type="success" @click="openCreateDialog">新增</el-button>
+        <el-button v-if="canManage" type="primary" @click="openCreateDialog">新增</el-button>
         <el-button
           v-if="canManage"
           plain

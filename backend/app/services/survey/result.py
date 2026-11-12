@@ -412,6 +412,82 @@ class SurveyServiceResultMixin:
             }
         return self.get_result(db, batch_id, contractor_uid, current_user)
 
+    # 批量维护：字段 key 与 update_result payload 完全同名，逐户复用页面保存链路。
+    _BATCH_MAINTAIN_LABELS = {
+        "typeCode": "承包方类型",
+        "idType": "证件类型",
+        "address": "承包方地址",
+        "postcode": "邮政编码",
+        "surveyorName": "承包方调查员",
+        "surveyDate": "承包方调查日期",
+        "surveyNote": "承包方调查记事",
+        "publicNoticeNote": "公示记事",
+        "publicNoticeRecorder": "公示记事人",
+        "publicNoticeReviewDate": "公示审核日期",
+        "publicNoticeReviewer": "公示审核人",
+    }
+
+    def batch_maintain_contractors(
+        self,
+        db: Session,
+        batch_id: int,
+        contractor_uids: list[str],
+        basic_payload: dict | None,
+        survey_payload: dict | None,
+        current_user: User,
+    ) -> dict:
+        """批量维护勾选承包方的基本信息 / 调查信息。
+
+        只更新前端提交的字段（未勾选的字段不会动）；逐户复用 ``update_result``，
+        因此变更记录、任务状态、变化原因与页面单户保存同源。
+        """
+        batch = self._ensure_batch(db, batch_id)
+        self._ensure_batch_editable_status(batch, action="批量维护")
+        changes = {
+            key: value
+            for source in (basic_payload or {}, survey_payload or {})
+            for key, value in source.items()
+            if value is not None
+        }
+        if not changes:
+            raise HTTPException(status_code=400, detail="请至少选择一项要维护的内容")
+        for key, value in changes.items():
+            if key in self._BATCH_MAINTAIN_LABELS and not str(value).strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{self._BATCH_MAINTAIN_LABELS[key]}不能为空",
+                )
+        uids = list(dict.fromkeys(str(uid).strip() for uid in contractor_uids if str(uid or "").strip()))
+        if not uids:
+            raise HTTPException(status_code=400, detail="请先选择承包方")
+
+        updated = 0
+        failed = 0
+        errors: list[str] = []
+        for uid in uids:
+            try:
+                payload = self.get_result(db, batch_id, uid, current_user)
+                payload.update(changes)
+                if not (payload.get("changeReason") or "").strip():
+                    payload["changeReason"] = "批量维护"
+                self.update_result(db, batch_id, uid, payload, current_user)
+                updated += 1
+            except HTTPException as exc:
+                db.rollback()
+                failed += 1
+                code = uid
+                errors.append(f"{code}：{exc.detail}")
+            except Exception as exc:  # noqa: BLE001
+                db.rollback()
+                failed += 1
+                errors.append(f"{uid}：{exc}")
+        return {
+            "total": len(uids),
+            "updated": updated,
+            "failed": failed,
+            "errors": errors[:20],
+        }
+
 
     def delete_result(self, db: Session, batch_id: int, contractor_uid: str, current_user: User) -> None:
         """删除一户调查成果。

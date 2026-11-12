@@ -530,6 +530,15 @@ a {
   align-items: center;
 }
 
+/* 发包方/承包方/地块/承包合同管理：顶部工具栏按钮统一尺寸。 */
+.toolbar-uniform > .el-button,
+.toolbar-uniform > .el-dropdown > .el-button {
+  min-width: 88px;
+  height: 32px;
+  padding: 0 14px;
+  justify-content: center;
+}
+
 .table-filter-bar {
   display: grid;
   grid-template-columns: repeat(5, minmax(150px, 1fr)) auto;

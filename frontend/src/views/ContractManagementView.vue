@@ -12,7 +12,7 @@
       <div v-else class="contract-manage-main">
         <div class="toolbar">
           <div class="panel-title">承包合同管理</div>
-          <div class="toolbar-actions">
+          <div class="toolbar-actions toolbar-uniform">
             <el-input v-model="taskKeyword" :disabled="!activeBatch" clearable placeholder="搜索承包方" style="width: 220px" @keyup.enter="loadRows" />
             <el-button :disabled="!activeBatch" :icon="Search" plain @click="loadRows">查询</el-button>
             <el-button

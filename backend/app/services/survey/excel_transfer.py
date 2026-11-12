@@ -53,7 +53,13 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.survey import SurveyCbfBase, SurveyCbfJtcyResult, SurveyCbfResult
+from app.models.survey import (
+    SurveyCbfBase,
+    SurveyCbfJtcyResult,
+    SurveyCbfResult,
+    SurveyFbfBase,
+    SurveyFbfResult,
+)
 from app.models.user import User
 from app.services.data_access_service import data_access_service
 from app.services.relation_codes import (
@@ -254,7 +260,11 @@ class SurveyServiceExcelTransferMixin:
             )
             report(idx + 1, len(tasks), "组装调查表数据", task.cbfmc or task.cbfbm)
         report(len(tasks), len(tasks), "生成 Excel 文件")
-        wb = self._build_template_workbook(batch.region_name or batch.batch_name or "", households)
+        wb = self._build_template_workbook(
+            batch.region_name or batch.batch_name or "",
+            households,
+            issuer_name=self._single_issuer_name(db, batch, tasks),
+        )
         safe_name = (batch.region_name or batch.batch_no or f"batch_{batch_id}").replace("/", "_").replace("\\", "_")
         filename = f"承包方调查表_{safe_name}.xls"
         buffer = io.BytesIO()
@@ -299,8 +309,46 @@ class SurveyServiceExcelTransferMixin:
             "review_note": (result.gsjs if result else "") or "",
         }
 
+    def _single_issuer_name(self, db: Session, batch, tasks: list[SurveyCbfBase]) -> str | None:
+        """本工作簿仅包含一个发包方时返回其名称，供表头/A2 使用；多发包方返回 None。"""
+        issuer_codes = sorted({
+            str(task.cbfbm)[:14]
+            for task in tasks
+            if task.cbfbm and len(str(task.cbfbm)) >= 14
+        })
+        if len(issuer_codes) != 1:
+            return None
+        code = issuer_codes[0]
+        row = db.scalars(
+            select(SurveyFbfBase)
+            .where(
+                SurveyFbfBase.batch_id == batch.id,
+                SurveyFbfBase.fbfbm == code,
+            )
+            .execution_options(skip_tenant_scope=True)
+        ).first()
+        if row is None:
+            row = db.scalars(
+                select(SurveyFbfResult)
+                .where(
+                    SurveyFbfResult.tenant_code == batch.tenant_code,
+                    SurveyFbfResult.fbfbm == code,
+                )
+                .order_by(SurveyFbfResult.id.desc())
+                .execution_options(skip_tenant_scope=True)
+            ).first()
+        if row is not None and (row.fbfmc or "").strip():
+            return row.fbfmc.strip()
+        for task in tasks:
+            name = (getattr(task, "group_region_name", "") or "").split("/")[-1].strip()
+            if name:
+                return name
+        return None
+
     @staticmethod
-    def _build_template_workbook(region_name: str, households: list[dict]):
+    def _build_template_workbook(
+        region_name: str, households: list[dict], issuer_name: str | None = None
+    ):
         style_cache: dict[tuple, xlwt.XFStyle] = {}
 
         def style(font_height: int = 200, bold: bool = False, wrap: bool = False) -> xlwt.XFStyle:
@@ -333,8 +381,14 @@ class SurveyServiceExcelTransferMixin:
         ws.row(0).height_mismatch = True
         ws.row(0).height = 20 * 28
 
-        ws.write_merge(0, 0, 0, ncols - 1, TITLE_TEXT, style(font_height=16 * 20, bold=True))
-        ws.write_merge(1, 1, 0, 2, f"单位:  {region_name}", style(font_height=200, bold=True))
+        if issuer_name:
+            title_text = f"{issuer_name}-承包方信息表"
+            header_left = f"发包方：{issuer_name}"
+        else:
+            title_text = TITLE_TEXT
+            header_left = f"单位:  {region_name}"
+        ws.write_merge(0, 0, 0, ncols - 1, title_text, style(font_height=16 * 20, bold=True))
+        ws.write_merge(1, 1, 0, 2, header_left, style(font_height=200, bold=True))
         ws.write_merge(1, 1, 3, 6, f"日期: {datetime.now():%Y 年 %m 月 %d}", style(font_height=200, bold=True))
         # 表头两行：0-2 列纵向合并；3-11「家庭成员情况（含户主）」；12-20「承包方调查信息」
         for c, header in enumerate(["承包方编号", "承包方姓名", "承包方类型"]):

@@ -2,7 +2,7 @@
   <section class="panel table-page">
     <div class="toolbar">
       <div class="panel-title">承包地块管理</div>
-      <div class="toolbar-actions">
+      <div class="toolbar-actions toolbar-uniform">
         <el-input
           v-model="keyword"
           clearable
@@ -14,7 +14,7 @@
         <el-button plain @click="handleSearch">查询</el-button>
         <el-button plain @click="load">刷新</el-button>
         <el-button v-if="canManage" plain :disabled="!batchId" @click="importVisible = true">导入</el-button>
-        <el-button v-if="canManage" plain :disabled="!batchId" @click="handleAdd">添加</el-button>
+        <el-button v-if="canManage" type="primary" :disabled="!batchId" @click="handleAdd">添加</el-button>
         <el-button
           v-if="canManage"
           plain
@@ -39,7 +39,7 @@
           @command="handleExportCommand"
         >
           <el-button
-            type="primary"
+            plain
             :disabled="!selectedRows.length || exporting"
             :loading="exporting"
           >

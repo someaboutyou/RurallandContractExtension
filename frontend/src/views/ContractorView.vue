@@ -4,7 +4,7 @@
       <div>
         <div class="panel-title">承包方管理</div>
       </div>
-      <div class="toolbar-actions toolbar-wrap">
+      <div class="toolbar-actions toolbar-wrap toolbar-uniform">
         <el-input
           v-model="filters.name"
           clearable
@@ -46,9 +46,9 @@
             清单导出{{ selectedRows.length ? `(${selectedRows.length}户)` : "" }}
           </el-button>
           <el-button v-if="canManage" plain @click="dcListImportVisible = true">清单导入</el-button>
-          <el-button plain type="warning" @click="dcQualityCheckVisible = true">数据质检</el-button>
+          <el-button plain type="primary" @click="dcQualityCheckVisible = true">数据质检</el-button>
         </template>
-        <el-button v-if="canManage" type="success" @click="openCreateDialog">新增承包方</el-button>
+        <el-button v-if="canManage" type="primary" @click="openCreateDialog">新增承包方</el-button>
       </div>
     </div>
 

@@ -554,6 +554,33 @@ class SurveyMemberDeleteEntry(BaseModel):
     changeReason: str | None = Field(default=None, max_length=500)
 
 
+class ContractorBatchBasicFields(BaseModel):
+    """批量维护：承包方基本信息（仅提交勾选要更新的字段）。"""
+
+    typeCode: str | None = None
+    idType: str | None = None
+    address: str | None = None
+    postcode: str | None = None
+
+
+class ContractorBatchSurveyFields(BaseModel):
+    """批量维护：承包方调查信息（仅提交勾选要更新的字段）。"""
+
+    surveyorName: str | None = None
+    surveyDate: str | None = None
+    surveyNote: str | None = None
+    publicNoticeNote: str | None = None
+    publicNoticeRecorder: str | None = None
+    publicNoticeReviewDate: str | None = None
+    publicNoticeReviewer: str | None = None
+
+
+class ContractorBatchMaintainRequest(BaseModel):
+    contractorUids: list[str] = Field(min_length=1, max_length=500)
+    basic: ContractorBatchBasicFields | None = None
+    survey: ContractorBatchSurveyFields | None = None
+
+
 class SurveyMaintainMembersRequest(BaseModel):
     membersToAdd: list[SurveyMemberEntry] = []
     membersToUpdate: list[SurveyMemberEntry] = []

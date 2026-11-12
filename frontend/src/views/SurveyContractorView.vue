@@ -12,13 +12,13 @@
       <div v-else class="survey-contractor-main">
         <div class="toolbar">
           <div class="panel-title">承包方管理</div>
-          <div class="toolbar-actions">
+          <div class="toolbar-actions toolbar-uniform">
             <el-input v-model="taskKeyword" :disabled="!activeBatch" clearable placeholder="搜索发包方/承包方名称或编码" style="width: 280px" @keyup.enter="handleTaskSearch" />
             <el-button :disabled="!activeBatch" :icon="Search" plain @click="handleTaskSearch">查询</el-button>
-            <el-button v-if="canManage" :disabled="!activeBatch || activeBatch?.status === 'finished'" :icon="Plus" type="primary" @click="openCreateContractor">新增</el-button>
+            <el-button v-if="canManage" :disabled="!activeBatch || activeBatch?.status === 'finished'" type="primary" @click="openCreateContractor">新增</el-button>
+            <el-button v-if="canManage" :disabled="!activeBatch || activeBatch?.status === 'finished' || !selectedTasks.length" plain @click="batchMaintainVisible = true">批量维护</el-button>
             <el-button :disabled="!activeBatch" plain @click="exportDialogVisible = true">导出</el-button>
             <el-button v-if="canManage" :disabled="!activeBatch || !selectedTasks.length" plain @click="lockDialogVisible = true">锁定/解锁</el-button>
-            <el-button :disabled="!activeBatch" plain @click="xlsExportVisible = true">承包户清单导出</el-button>
             <el-button v-if="canManage" :disabled="!activeBatch || activeBatch?.status === 'finished'" plain @click="xlsImportVisible = true">承包户清单导入</el-button>
             <el-button v-if="canManage" :disabled="!activeBatch" plain @click="relationDialogVisible = true">家庭关系处理</el-button>
           </div>
@@ -103,7 +103,12 @@
       @open-contractor="onOpenCreatedContractor"
     />
     <ContractorXlsImportDialog v-model="xlsImportVisible" :batch="activeBatch" @imported="refreshAfterChange" />
-    <ContractorXlsExportDialog v-model="xlsExportVisible" :batch="activeBatch" />
+    <ContractorBatchMaintainDialog
+      v-model="batchMaintainVisible"
+      :batch="activeBatch"
+      :contractors="selectedTasks"
+      @updated="refreshAfterChange"
+    />
     <ContractorExportDialog
       v-model="exportDialogVisible"
       :batch="activeBatch"
@@ -128,11 +133,11 @@
 <script setup>
 import { computed, onMounted, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Plus, Search } from "@element-plus/icons-vue";
+import { Search } from "@element-plus/icons-vue";
 
 import ContractorResultDialog from "../components/survey/view/ContractorResultDialog.vue";
+import ContractorBatchMaintainDialog from "../components/survey/ContractorBatchMaintainDialog.vue";
 import ContractorXlsImportDialog from "../components/survey/ContractorXlsImportDialog.vue";
-import ContractorXlsExportDialog from "../components/survey/ContractorXlsExportDialog.vue";
 import ContractorExportDialog from "../components/survey/ContractorExportDialog.vue";
 import ContractorLockDialog from "../components/survey/ContractorLockDialog.vue";
 import ContractorRelationDialog from "../components/survey/ContractorRelationDialog.vue";
@@ -165,7 +170,7 @@ const resultVisible = ref(false);
 const activeTaskCanWrite = ref(true);
 const contractorResultDialog = ref(null);
 const xlsImportVisible = ref(false);
-const xlsExportVisible = ref(false);
+const batchMaintainVisible = ref(false);
 const exportDialogVisible = ref(false);
 const lockDialogVisible = ref(false);
 const relationDialogVisible = ref(false);
