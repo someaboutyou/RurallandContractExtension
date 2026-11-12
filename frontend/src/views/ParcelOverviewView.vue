@@ -171,6 +171,7 @@ import {
   exportParcelSurveyDocx,
   fetchCurrentSurveyBatch,
   fetchParcelsOverview,
+  fetchSurveyBatches,
   persistSurveyPendingOperation,
   removeSurveyParcel,
 } from "../api/survey";
@@ -261,6 +262,8 @@ function toParcelRow(parcel, group) {
     cbfbm: parcel.cbfbm,
     cbfmc: group?.cbfmc || parcel.cbfmc || "",
     contractorUid: group?.contractorUid || "",
+    taskStatus: group?.taskStatus,
+    investigatedAt: group?.investigatedAt,
     dkmc: parcel.dkmc,
     dkbm: parcel.dkbm,
     imageNumber: parcel.image_number || "",
@@ -285,6 +288,9 @@ function buildGroup(group) {
     cbfbm: group.cbfbm,
     cbfmc: group.cbfmc,
     contractorUid: group.contractorUid,
+    taskStatus: group.taskStatus,
+    investigatedAt: group.investigatedAt,
+    assignedToName: group.assignedToName,
     dkmc: `${name}(地块数:${group.parcelCount ?? parcels.length})(户号:${group.householdNo})`,
     dkbm: "",
     twoRoundArea: sumBy(parcels, "twoRoundArea"),
@@ -434,6 +440,8 @@ function handleRowDblClick(row) {
       contractorUid: row.contractorUid,
       cbfbm: row.cbfbm,
       cbfmc: row.cbfmc,
+      taskStatus: row.taskStatus,
+      investigatedAt: row.investigatedAt,
     },
     { panel: "parcels", dkbm: row.dkbm || "" }
   );
@@ -530,16 +538,39 @@ watch(activeBatch, () => {
   load();
 });
 
-// 用户在 /surveys「进入任务」记住的批次作为默认选中（读不写，不改其记忆）。
+// 进入页面默认带出一个批次（与承包方管理同口径）：优先「进入任务」记住的
+// 进行中批次，其次最新进行中批次，再次最新批次。否则列表是整库数据、左侧
+// 没有选中批次，双击地块会提示“请先选择调查批次”。
 onMounted(async () => {
   try {
     const { data } = await fetchCurrentSurveyBatch();
-    if (data.data?.id) {
-      activeBatch.value = data.data;
+    const remembered = data.data;
+    if (remembered?.id && remembered.status === "active") {
+      activeBatch.value = remembered;
       return; // watch(activeBatch) 会带着 batchId 触发首次加载
     }
   } catch {
-    // 拿不到当前批次就按全量加载
+    // 没有记忆批次就走下面的兜底
+  }
+  try {
+    const { data } = await fetchSurveyBatches({ page: 1, page_size: 1, status: "active" });
+    const active = data.data?.items?.[0];
+    if (active?.id) {
+      activeBatch.value = active;
+      return;
+    }
+  } catch {
+    // 继续兜底
+  }
+  try {
+    const { data } = await fetchSurveyBatches({ page: 1, page_size: 1 });
+    const latest = data.data?.items?.[0];
+    if (latest?.id) {
+      activeBatch.value = latest;
+      return;
+    }
+  } catch {
+    // 没有批次信息时按全量加载
   }
   load();
 });

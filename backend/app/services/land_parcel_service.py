@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.models.survey import (
     SurveyCbdkxxBase,
     SurveyCbdkxxResult,
+    SurveyCbfBase,
     SurveyCbfResult,
     SurveyChangeRecord,
     SurveyDkBase,
@@ -444,6 +445,22 @@ class LandParcelService:
 
         cbfbm_list = [contractor.cbfbm for contractor in contractors]
 
+        # 批次任务态：双击地块打开调查录入时，前端据此判断这户是否已有调查成果，
+        # 避免把库里的调查员/调查日期改写成“当前用户/今天”。
+        task_by_uid: dict[str, SurveyCbfBase] = {}
+        if batch_id is not None:
+            uid_list = [contractor.contractor_uid for contractor in contractors if contractor.contractor_uid]
+            if uid_list:
+                for task_row in db.scalars(
+                    select(SurveyCbfBase)
+                    .where(
+                        SurveyCbfBase.batch_id == batch_id,
+                        SurveyCbfBase.contractor_uid.in_(uid_list),
+                    )
+                    .execution_options(skip_tenant_scope=True)
+                ).all():
+                    task_by_uid[task_row.contractor_uid] = task_row
+
         relation_rows = db.scalars(
             select(SurveyCbdkxxResult)
             .where(
@@ -522,11 +539,15 @@ class LandParcelService:
                         "changeReason": relation.change_reason,
                     }
                 )
+            task = task_by_uid.get(contractor.contractor_uid)
             items.append(
                 {
                     "cbfbm": contractor.cbfbm,
                     "cbfmc": contractor.cbfmc,
                     "contractorUid": contractor.contractor_uid,
+                    "taskStatus": task.task_status if task else None,
+                    "investigatedAt": task.investigated_at if task else None,
+                    "assignedToName": task.assigned_to_name if task else None,
                     "householdNo": f"{index:04d}",
                     "parcelCount": len(parcels),
                     "parcels": parcels,
