@@ -1059,8 +1059,21 @@ async function handleSaveResult() {
     const createdContractors = savedResponse?.data?.createdContractors || [];
     ElMessage.success(isCreatingContractorResult.value ? "承包方调查数据已新增" : "调查结果已保存");
     pendingOperations.value = [];
-    close();
+    if (isCreatingContractorResult.value) {
+      // 新增保存后不再关闭弹窗：切换成该新户的编辑态并重新加载，用户可继续核对/补充。
+      isCreatingContractorResult.value = false;
+      activeTask.value = {
+        batchId: props.activeBatch.id,
+        contractorUid,
+        cbfbm: contractorPayload.code,
+        cbfmc: contractorPayload.name,
+        taskStatus: "surveyed",
+        canWrite: true,
+      };
+    }
     emit("saved");
+    // 重新拉取库内最新结果（任务状态、变化标记、地块等），保持当前弹窗打开。
+    await reloadSurveyResult();
     if (mergeOperation) await offerOpenCreatedContractor(mergeOperation, createdContractors);
   } catch (error) { ElMessage.error(error.response?.data?.detail || (isCreatingContractorResult.value ? "新增承包方失败" : "保存调查结果失败")); } finally { savingResult.value = false; creatingContractor.value = false; }
 }

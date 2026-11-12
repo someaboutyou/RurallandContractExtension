@@ -13,8 +13,8 @@
         <div class="toolbar">
           <div class="panel-title">承包合同管理</div>
           <div class="toolbar-actions toolbar-uniform">
-            <el-input v-model="taskKeyword" :disabled="!activeBatch" clearable placeholder="搜索承包方" style="width: 220px" @keyup.enter="loadRows" />
-            <el-button :disabled="!activeBatch" :icon="Search" plain @click="loadRows">查询</el-button>
+            <el-input v-model="taskKeyword" :disabled="!activeBatch" clearable placeholder="搜索发包方/承包方名称或编码" style="width: 280px" @keyup.enter="handleSearch" @clear="handleSearch" />
+            <el-button :disabled="!activeBatch" :icon="Search" plain @click="handleSearch">查询</el-button>
             <el-button
               v-if="canManage"
               type="primary"
@@ -129,6 +129,19 @@
             </template>
           </el-table-column>
         </el-table>
+
+        <div class="pagination-wrap">
+          <el-pagination
+            :current-page="page"
+            :page-size="pageSize"
+            :page-sizes="[20, 50, 100, 200]"
+            :total="rowTotal"
+            background
+            layout="total, sizes, prev, pager, next, jumper"
+            @current-change="handlePageChange"
+            @size-change="handlePageSizeChange"
+          />
+        </div>
       </div>
     </div>
 
@@ -194,6 +207,7 @@ import {
   fetchCollectiveApplication,
   fetchCurrentSurveyBatch,
   fetchHouseholdApplication,
+  fetchSurveyBatches,
 } from "../api/survey";
 import { useAuthStore } from "../stores/auth";
 
@@ -207,6 +221,8 @@ const rowLoading = ref(false);
 const collecting = ref(false);
 const rows = ref([]);
 const rowTotal = ref(0);
+const page = ref(1);
+const pageSize = ref(50);
 const taskKeyword = ref("");
 const selectedRows = ref([]);
 const rowTableRef = ref(null);
@@ -234,20 +250,36 @@ function buildRegionParams() {
   return regionCode ? { regionCode } : {};
 }
 
-// 批次切换（左侧面板点选）：重新加载该批次的合同关键信息列表。
+// 批次切换（左侧面板点选）：回到第 1 页并重新加载该批次的合同关键信息列表。
 watch(activeBatch, () => {
+  page.value = 1;
   loadRows();
 });
 
-// 用户在 /surveys「进入任务」记住的批次作为默认选中。
+// 进入页面默认带出一个批次：优先「进入任务」记住的进行中批次，
+// 其次最新进行中批次，再次最新批次；否则等用户手动选择。
 onMounted(async () => {
   try {
     const { data } = await fetchCurrentSurveyBatch();
-    if (data.data?.id) {
-      activeBatch.value = data.data;
+    const remembered = data.data;
+    if (remembered?.id && remembered.status === "active") {
+      activeBatch.value = remembered;
       return; // watch(activeBatch) 会触发首次加载
     }
-  } catch { /* 拿不到当前批次就等用户手动选择 */ }
+  } catch { /* 继续兜底 */ }
+  try {
+    const { data } = await fetchSurveyBatches({ page: 1, page_size: 1, status: "active" });
+    const active = data.data?.items?.[0];
+    if (active?.id) {
+      activeBatch.value = active;
+      return;
+    }
+  } catch { /* 继续兜底 */ }
+  try {
+    const { data } = await fetchSurveyBatches({ page: 1, page_size: 1 });
+    const latest = data.data?.items?.[0];
+    if (latest?.id) activeBatch.value = latest;
+  } catch { /* 没有批次就等用户手动选择 */ }
 });
 
 async function loadRows() {
@@ -255,8 +287,8 @@ async function loadRows() {
   rowLoading.value = true;
   try {
     const { data } = await fetchBatchContractOverview(activeBatch.value.id, {
-      page: 1,
-      page_size: 100,
+      page: page.value,
+      page_size: pageSize.value,
       keyword: taskKeyword.value || undefined,
       ...buildRegionParams(),
     });
@@ -264,9 +296,30 @@ async function loadRows() {
     rowTotal.value = data.data?.total || 0;
     selectedRows.value = [];
     rowTableRef.value?.clearSelection();
+    // 删除/筛选后当前页可能已空：自动回退一页。
+    if (!rows.value.length && rowTotal.value > 0 && page.value > 1) {
+      page.value -= 1;
+      return loadRows();
+    }
   } finally {
     rowLoading.value = false;
   }
+}
+
+function handleSearch() {
+  page.value = 1;
+  loadRows();
+}
+
+function handlePageChange(value) {
+  page.value = value;
+  loadRows();
+}
+
+function handlePageSizeChange(value) {
+  pageSize.value = value;
+  page.value = 1;
+  loadRows();
 }
 
 function handleSelectionChange(rows_) {

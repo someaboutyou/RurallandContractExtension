@@ -28,7 +28,13 @@ from app.models.cbht import (
     CONTRACT_STATUS_HISTORY,
     Cbht,
 )
-from app.models.survey import SurveyCbdkxxBase, SurveyCbdkxxResult, SurveyCbfResult
+from app.models.survey import (
+    SurveyCbdkxxBase,
+    SurveyCbdkxxResult,
+    SurveyCbfResult,
+    SurveyFbfBase,
+    SurveyFbfResult,
+)
 from app.models.user import User
 from app.services.data_access_service import data_access_service
 
@@ -187,7 +193,60 @@ class SurveyServiceContractMixin:
             filters.append(SurveyCbfBase.cbfbm.like(f"{effective_region_code}%"))
         if keyword:
             pattern = f"%{keyword.strip()}%"
-            filters.append(or_(SurveyCbfBase.cbfbm.ilike(pattern), SurveyCbfBase.cbfmc.ilike(pattern)))
+            # 承包方当前名称/编码（result）也要参与：改名/改码后 base 仍是旧值。
+            matched_uids = db.scalars(
+                select(SurveyCbfResult.contractor_uid)
+                .where(
+                    SurveyCbfResult.tenant_code == batch.tenant_code,
+                    or_(
+                        SurveyCbfResult.cbfbm.ilike(pattern),
+                        SurveyCbfResult.cbfmc.ilike(pattern),
+                        SurveyCbfResult.group_region_name.ilike(pattern),
+                    ),
+                )
+                .execution_options(skip_tenant_scope=True)
+            ).all()
+            # 发包方名称/编码命中 → 该发包方下全部承包户。
+            issuer_codes = set(
+                db.scalars(
+                    select(SurveyFbfBase.fbfbm)
+                    .where(
+                        SurveyFbfBase.batch_id == batch_id,
+                        or_(
+                            SurveyFbfBase.fbfbm.ilike(pattern),
+                            SurveyFbfBase.fbfmc.ilike(pattern),
+                        ),
+                    )
+                    .execution_options(skip_tenant_scope=True)
+                ).all()
+            )
+            issuer_codes.update(
+                db.scalars(
+                    select(SurveyFbfResult.fbfbm)
+                    .where(
+                        SurveyFbfResult.tenant_code == batch.tenant_code,
+                        or_(
+                            SurveyFbfResult.fbfbm.ilike(pattern),
+                            SurveyFbfResult.fbfmc.ilike(pattern),
+                        ),
+                    )
+                    .execution_options(skip_tenant_scope=True)
+                ).all()
+            )
+            conditions = [
+                SurveyCbfBase.cbfbm.ilike(pattern),
+                SurveyCbfBase.cbfmc.ilike(pattern),
+                SurveyCbfBase.group_region_name.ilike(pattern),
+                SurveyCbfBase.contractor_uid.in_(matched_uids or [""]),
+            ]
+            if issuer_codes:
+                conditions.append(
+                    or_(*[
+                        SurveyCbfBase.cbfbm.like(f"{code}%")
+                        for code in sorted(code for code in issuer_codes if code)
+                    ])
+                )
+            filters.append(or_(*conditions))
         filters.append(SurveyCbfBase.task_status != "deregistered")
 
         rows = db.scalars(
