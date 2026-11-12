@@ -173,7 +173,15 @@ class SurveyServiceBatchMixin:
             )
         ) or 0
         contractor_count = db.scalar(
-            select(func.count(SurveyCbfBase.id)).where(SurveyCbfBase.batch_id == batch_id)
+            select(func.count(func.distinct(SurveyCbfBase.contractor_uid)))
+            .select_from(SurveyCbfBase)
+            .join(SurveyCbfResult, SurveyCbfResult.contractor_uid == SurveyCbfBase.contractor_uid)
+            .where(
+                SurveyCbfBase.tenant_code == batch.tenant_code,
+                SurveyCbfBase.batch_id == batch_id,
+                *data_access_service.build_code_scope_filters(SurveyCbfResult.cbfbm, current_user),
+            )
+            .execution_options(skip_tenant_scope=True)
         ) or 0
         member_count = db.scalar(
             select(func.count(SurveyCbfJtcyBase.id)).where(
@@ -541,36 +549,38 @@ class SurveyServiceBatchMixin:
         scope_filters: list | None = None,
         current_user: User | None = None,
     ) -> dict:
-        result_filters = [SurveyCbfBase.tenant_code == item.tenant_code, SurveyCbfBase.batch_id == item.id]
-        if item.region_code:
-            self._append_group_region_filter(result_filters, SurveyCbfBase.group_region_code, item.region_code)
-        task_count = db.scalar(
-            select(func.count(func.distinct(SurveyCbfBase.cbfbm))).where(*result_filters).execution_options(skip_tenant_scope=True)
-        ) or 0
-        task_filters = [SurveyCbfBase.tenant_code == item.tenant_code, SurveyCbfBase.batch_id == item.id]
-        # 任务状态字段已合并到 survey_cbf_base，每户一行，按状态直接统计。
-        # （原写法 task_count - count(*) 在"每户一行"后恒为 0。）
-        not_started_count = db.scalar(
-            select(func.count(SurveyCbfBase.id))
-            .where(*task_filters, SurveyCbfBase.task_status == "not_started")
-            .execution_options(skip_tenant_scope=True)
-        ) or 0
-        surveyed_count = db.scalar(
-            select(func.count(SurveyCbfBase.id)).where(
-                *task_filters,
-                SurveyCbfBase.task_status.in_(["surveyed", "changed", "unchanged", "confirmed"]),
-            ).execution_options(skip_tenant_scope=True)
-        ) or 0
+        # 批次承包方统计统一按「批次基线 × 当前调查结果」计数，且套用与承包方管理
+        # 列表相同的数据权限。原先 task_count 用 base 的 group_region_code 再筛一次
+        # 区域，状态计数却只按 batch_id，两套口径在 group_region_code 缺失或改码后
+        # 会算出不同数字（卡片总数与列表 total 对不上）。
+        base_filters = [
+            SurveyCbfBase.tenant_code == item.tenant_code,
+            SurveyCbfBase.batch_id == item.id,
+        ]
+        if current_user is not None:
+            base_filters.extend(
+                data_access_service.build_code_scope_filters(SurveyCbfResult.cbfbm, current_user)
+            )
+
+        def _batch_contractor_count(statuses: tuple[str, ...] | None = None) -> int:
+            stmt = (
+                select(func.count(func.distinct(SurveyCbfBase.contractor_uid)))
+                .select_from(SurveyCbfBase)
+                .join(SurveyCbfResult, SurveyCbfResult.contractor_uid == SurveyCbfBase.contractor_uid)
+                .where(*base_filters)
+                .execution_options(skip_tenant_scope=True)
+            )
+            if statuses:
+                stmt = stmt.where(SurveyCbfBase.task_status.in_(statuses))
+            return int(db.scalar(stmt) or 0)
+
+        task_count = _batch_contractor_count()
+        not_started_count = _batch_contractor_count(("not_started",))
+        surveyed_count = _batch_contractor_count(("surveyed", "changed", "unchanged", "confirmed"))
+        confirmed_count = _batch_contractor_count(("confirmed",))
+        skipped_count = _batch_contractor_count(("skipped",))
         changed_count = db.scalar(
             select(func.count(SurveyChangeRecord.id)).where(SurveyChangeRecord.tenant_code == item.tenant_code, SurveyChangeRecord.batch_id == item.id)
-            .execution_options(skip_tenant_scope=True)
-        ) or 0
-        confirmed_count = db.scalar(
-            select(func.count(SurveyCbfBase.id)).where(*task_filters, SurveyCbfBase.task_status == "confirmed")
-            .execution_options(skip_tenant_scope=True)
-        ) or 0
-        skipped_count = db.scalar(
-            select(func.count(SurveyCbfBase.id)).where(*task_filters, SurveyCbfBase.task_status == "skipped")
             .execution_options(skip_tenant_scope=True)
         ) or 0
         stats = (assignee_stats or {}).get(item.id)

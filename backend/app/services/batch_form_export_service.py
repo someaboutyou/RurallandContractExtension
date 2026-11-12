@@ -456,7 +456,11 @@ class BatchFormExportService:
                 "surveyor": issuer.fbfdcy or "",
                 "survey_date": issuer.fbfdcrq.date().isoformat() if issuer.fbfdcrq else "",
                 "survey_note": issuer.fbfdcjs or "",
-                "remark": "",
+                "auditor": issuer.shr or "",
+                "audit_date": issuer.shrq.date().isoformat() if issuer.shrq else "",
+                "audit_opinion": issuer.shyj or "",
+                "remark": issuer.bzxx or "",
+                "credit_code": issuer.tyshxydm or "",
             }
             for issuer in issuers
         ]
@@ -467,7 +471,7 @@ class BatchFormExportService:
 
     def _parcel_survey_workbook(self, issuers, results, members_by_uid, parcels_by_fbfbm, dk_by_dkbm) -> bytes:
         wb = self._new_workbook()
-        sh = wb.add_sheet("鱼鳞图")
+        sh = wb.add_sheet("承包地块调查表")
         headers = [
             "承包方编号", "承包方名称", "承包方类型", "家庭成员情况(含承包方名称)",
             "承包方调查审核情况", "承包地块情况",

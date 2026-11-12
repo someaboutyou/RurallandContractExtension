@@ -51,7 +51,7 @@
       <!-- 承包方清单：后台任务 -->
       <div class="export-block">
         <div class="block-title">承包方清单</div>
-        <div class="block-desc">主表承包方成果（Excel，鱼鳞图样式模板；不含已注销户）。</div>
+        <div class="block-desc">主表承包方成果（Excel 格式；不含已注销户）。</div>
         <el-radio-group v-model="exportMode" class="mode-group">
           <el-radio value="single">整体导出（一个 Excel）</el-radio>
           <el-radio value="group">按发包方分组（每村一个 Excel，打包 ZIP）</el-radio>

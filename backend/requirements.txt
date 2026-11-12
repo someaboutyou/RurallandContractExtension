@@ -19,6 +19,6 @@ redis==5.2.1
 httpx==0.28.1
 jinja2==3.1.6
 cryptography>=41.0.0
-# 承包方调查表 Excel 导入/导出（BIFF .xls，鱼鳞图样式模板）
+# 承包方调查表 Excel 导入/导出（BIFF .xls）
 xlrd==2.0.2
 xlwt==1.3.0

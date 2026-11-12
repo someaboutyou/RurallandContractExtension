@@ -192,6 +192,10 @@ async function loadBatches() {
 }
 
 onMounted(loadBatches);
+
+// 父页面在增删承包方后调用，让卡片上的户数/已调查数立即刷新，
+// 避免左侧批次数量与右侧列表 total 出现一旧一新。
+defineExpose({ reload: loadBatches });
 </script>
 
 <style scoped>

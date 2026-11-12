@@ -1160,7 +1160,7 @@ def export_survey_results(
     )
 
 
-# ── 承包方调查表 Excel 导入 / 导出（鱼鳞图样式模板，2026-11-03）──────────────
+# ── 承包方调查表 Excel 导入 / 导出（2026-11-03）──────────────────────────────
 @router.get("/batches/{batch_id}/contractors-xls")
 def export_contractor_survey_xls(
     batch_id: int,
@@ -1222,6 +1222,7 @@ def export_contractor_documents(
         payload.contractorUids,
         payload.documents,
         current_user,
+        group_by_issuer=payload.groupByIssuer,
     )
     return Response(
         content=content,

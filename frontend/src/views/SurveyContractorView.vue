@@ -3,7 +3,7 @@
     <!-- 批次面板必须常驻：activeBatch 为空时它是唯一的批次选择入口，
          放进 v-else 会导致"取消选中 → 面板被卸载 → 死锁空白页"。 -->
     <div class="survey-contractor-body" :class="{ 'is-batch-collapsed': batchPanelCollapsed }">
-      <SurveyBatchPanel v-model="activeBatch" v-model:collapsed="batchPanelCollapsed" />
+      <SurveyBatchPanel ref="batchPanelRef" v-model="activeBatch" v-model:collapsed="batchPanelCollapsed" />
 
       <div v-if="!activeBatch" class="survey-contractor-empty">
         <el-empty description="请先在左侧选择一个调查批次" />
@@ -13,10 +13,10 @@
         <div class="toolbar">
           <div class="panel-title">承包方管理</div>
           <div class="toolbar-actions">
-            <el-input v-model="taskKeyword" :disabled="!activeBatch" clearable placeholder="搜索承包方" style="width: 220px" @keyup.enter="loadTasks" />
-            <el-button :disabled="!activeBatch" :icon="Search" plain @click="loadTasks">查询</el-button>
+            <el-input v-model="taskKeyword" :disabled="!activeBatch" clearable placeholder="搜索发包方/承包方名称或编码" style="width: 280px" @keyup.enter="handleTaskSearch" />
+            <el-button :disabled="!activeBatch" :icon="Search" plain @click="handleTaskSearch">查询</el-button>
             <el-button v-if="canManage" :disabled="!activeBatch || activeBatch?.status === 'finished'" :icon="Plus" type="primary" @click="openCreateContractor">新增</el-button>
-            <el-button :disabled="!activeBatch || !selectedTasks.length" plain @click="exportDialogVisible = true">导出</el-button>
+            <el-button :disabled="!activeBatch" plain @click="exportDialogVisible = true">导出</el-button>
             <el-button v-if="canManage" :disabled="!activeBatch || !selectedTasks.length" plain @click="lockDialogVisible = true">锁定/解锁</el-button>
             <el-button :disabled="!activeBatch" plain @click="xlsExportVisible = true">承包户清单导出</el-button>
             <el-button v-if="canManage" :disabled="!activeBatch || activeBatch?.status === 'finished'" plain @click="xlsImportVisible = true">承包户清单导入</el-button>
@@ -73,6 +73,19 @@
           </template>
         </el-table-column>
       </el-table>
+
+        <div class="pagination-wrap">
+          <el-pagination
+            :current-page="taskPage"
+            :page-size="taskPageSize"
+            :page-sizes="[20, 50, 100, 200]"
+            :total="taskTotal"
+            background
+            layout="total, sizes, prev, pager, next, jumper"
+            @current-change="handleTaskPageChange"
+            @size-change="handleTaskPageSizeChange"
+          />
+        </div>
       </div>
     </div>
 
@@ -89,12 +102,13 @@
       @confirmed="onResultSaved"
       @open-contractor="onOpenCreatedContractor"
     />
-    <ContractorXlsImportDialog v-model="xlsImportVisible" :batch="activeBatch" @imported="loadTasks" />
+    <ContractorXlsImportDialog v-model="xlsImportVisible" :batch="activeBatch" @imported="refreshAfterChange" />
     <ContractorXlsExportDialog v-model="xlsExportVisible" :batch="activeBatch" />
     <ContractorExportDialog
       v-model="exportDialogVisible"
       :batch="activeBatch"
       :contractor-uids="selectedTasks.map((row) => row.contractorUid)"
+      :total-count="taskTotal"
     />
     <ContractorLockDialog
       v-model="lockDialogVisible"
@@ -105,8 +119,8 @@
     <ContractorRelationDialog
       v-model="relationDialogVisible"
       :batch="activeBatch"
-      @replaced="loadTasks"
-      @repaired="loadTasks"
+      @replaced="refreshAfterChange"
+      @repaired="refreshAfterChange"
     />
   </section>
 </template>
@@ -127,6 +141,7 @@ import SurveyBatchPanel from "../components/survey/SurveyBatchPanel.vue";
 import {
   deleteSurveyContractor,
   fetchCurrentSurveyBatch,
+  fetchSurveyBatches,
   fetchSurveyTasks,
 } from "../api/survey";
 import { useAuthStore } from "../stores/auth";
@@ -136,9 +151,13 @@ const canManage = computed(() => authStore.hasPermission("contractors.manage"));
 
 const activeBatch = ref(null);
 const batchPanelCollapsed = ref(false);
+const batchPanelRef = ref(null);
 
 const taskLoading = ref(false);
 const tasks = ref([]);
+const taskTotal = ref(0);
+const taskPage = ref(1);
+const taskPageSize = ref(50);
 const taskKeyword = ref("");
 const selectedTasks = ref([]);
 const taskTableRef = ref(null);
@@ -167,36 +186,81 @@ function buildRegionParams() {
   return regionCode ? { regionCode } : {};
 }
 
-// 批次切换（左侧面板点选）：重新加载该批次的承包户任务。
+// 批次切换（左侧面板点选）：回到第 1 页并重新加载该批次的承包户任务。
 watch(activeBatch, () => {
+  taskPage.value = 1;
   loadTasks();
 });
 
-// 用户在 /surveys「进入任务」记住的批次作为默认选中。
+// 进入页面默认带出一个批次：优先「进入任务」记住的进行中批次，
+// 其次最新进行中的批次，再次最新批次（全部结束时也不至于空白）。
 onMounted(async () => {
   try {
     const { data } = await fetchCurrentSurveyBatch();
-    if (data.data?.id) {
-      activeBatch.value = data.data;
+    const remembered = data.data;
+    if (remembered?.id && remembered.status === "active") {
+      activeBatch.value = remembered;
       return; // watch(activeBatch) 会触发首次加载
     }
-  } catch { /* 拿不到当前批次就等用户手动选择 */ }
+  } catch { /* 没有记忆批次就走下面的兜底 */ }
+  try {
+    const { data } = await fetchSurveyBatches({ page: 1, page_size: 1, status: "active" });
+    const active = data.data?.items?.[0];
+    if (active?.id) {
+      activeBatch.value = active;
+      return;
+    }
+  } catch { /* 继续兜底 */ }
+  try {
+    const { data } = await fetchSurveyBatches({ page: 1, page_size: 1 });
+    const latest = data.data?.items?.[0];
+    if (latest?.id) activeBatch.value = latest;
+  } catch { /* 没有批次就等用户手动选择 */ }
 });
 
 async function loadTasks() {
-  if (!activeBatch.value) { tasks.value = []; return; }
+  if (!activeBatch.value) { tasks.value = []; taskTotal.value = 0; return; }
   taskLoading.value = true;
   try {
     const { data } = await fetchSurveyTasks(activeBatch.value.id, {
-      page: 1,
-      page_size: 100,
+      page: taskPage.value,
+      page_size: taskPageSize.value,
       keyword: taskKeyword.value || undefined,
       ...buildRegionParams(),
     });
     tasks.value = data.data.items || [];
+    taskTotal.value = Number(data.data.total || 0);
     selectedTasks.value = [];
     taskTableRef.value?.clearSelection();
+    // 删除/重分配后当前页可能已空：自动回退一页，避免停在空页看不到数据。
+    if (!tasks.value.length && taskTotal.value > 0 && taskPage.value > 1) {
+      taskPage.value -= 1;
+      return loadTasks();
+    }
   } finally { taskLoading.value = false; }
+}
+
+function handleTaskSearch() {
+  taskPage.value = 1;
+  loadTasks();
+}
+
+function handleTaskPageChange(value) {
+  taskPage.value = value;
+  loadTasks();
+}
+
+function handleTaskPageSizeChange(value) {
+  taskPageSize.value = value;
+  taskPage.value = 1;
+  loadTasks();
+}
+
+// 增删户 / 分合户 / 导入后，任务列表与左侧批次数一起刷新，
+// 避免列表数量变了、批次卡片还停在旧值。
+function refreshAfterChange() {
+  loadTasks();
+  batchPanelRef.value?.reload?.();
 }
 
 function handleSelectionChange(rows) {
@@ -219,7 +283,7 @@ function openResult(row) {
   contractorResultDialog.value.openForResult(activeBatch.value, row);
 }
 function openCreateContractor() { if (!activeBatch.value) return; activeTaskCanWrite.value = true; contractorResultDialog.value.openForCreate(activeBatch.value); }
-function onResultSaved() { loadTasks(); }
+function onResultSaved() { refreshAfterChange(); }
 function onLocked() {
   selectedTasks.value = [];
   taskTableRef.value?.clearSelection();
@@ -229,6 +293,7 @@ function onLocked() {
 async function onOpenCreatedContractor(target) {
   if (!activeBatch.value || !target) return;
   await loadTasks();
+  batchPanelRef.value?.reload?.();
   let row = tasks.value.find((t) => target.contractorUid && t.contractorUid === target.contractorUid)
     || tasks.value.find((t) => target.cbfbm && t.cbfbm === target.cbfbm);
   if (!row) {
@@ -266,6 +331,7 @@ async function handleDeleteTask(row) {
     await deleteSurveyContractor(activeBatch.value.id, row.contractorUid);
     ElMessage.success("承包方已删除");
     await loadTasks();
+    batchPanelRef.value?.reload?.();
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || "删除承包方失败");
   }

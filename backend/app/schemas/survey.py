@@ -960,8 +960,11 @@ class IssuerSurveyDocxExportRequest(BaseModel):
 
 
 class ContractorDocumentExportRequest(BaseModel):
-    contractorUids: list[str] = Field(min_length=1, max_length=500)
+    # 空列表 = 导出该批次全部承包方（未勾选任何户时的默认行为）。
+    contractorUids: list[str] = Field(default_factory=list, max_length=500)
     documents: list[str] = Field(min_length=1, max_length=10)
+    # 勾选后按发包方分组：ZIP 内每个发包方一个文件夹。
+    groupByIssuer: bool = False
 
 
 class ContractorLockItem(BaseModel):

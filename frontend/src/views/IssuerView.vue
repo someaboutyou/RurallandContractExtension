@@ -146,9 +146,14 @@
             <el-form-item label="发包方代码" prop="code">
               <el-input v-model="form.code" placeholder="请输入发包方代码" :disabled="!!editingCode" />
             </el-form-item>
-            <el-form-item label="发包方名称" prop="name">
-              <el-input v-model="form.name" placeholder="请输入发包方名称" />
-            </el-form-item>
+            <div class="issuer-inline-pair">
+              <el-form-item label="发包方名称" prop="name">
+                <el-input v-model="form.name" placeholder="请输入发包方名称" />
+              </el-form-item>
+              <el-form-item label="统一社会信用代码" prop="creditCode">
+                <el-input v-model="form.creditCode" maxlength="18" placeholder="选填，18 位统一社会信用代码" />
+              </el-form-item>
+            </div>
             <el-form-item label="负责人姓名" prop="ownerName">
               <el-input v-model="form.ownerName" placeholder="请输入负责人姓名" />
             </el-form-item>
@@ -176,11 +181,29 @@
                 placeholder="请选择调查日期"
               />
             </el-form-item>
+            <el-form-item label="审核人" prop="auditor">
+              <el-input v-model="form.auditor" placeholder="请输入审核人" />
+            </el-form-item>
+            <el-form-item label="审核日期" prop="auditDate">
+              <el-date-picker
+                v-model="form.auditDate"
+                type="date"
+                format="YYYY-MM-DD"
+                value-format="YYYY-MM-DD"
+                placeholder="请选择审核日期"
+              />
+            </el-form-item>
             <el-form-item class="issuer-span-3" label="发包方地址" prop="address">
               <el-input v-model="form.address" placeholder="请输入发包方地址" />
             </el-form-item>
             <el-form-item class="issuer-span-3" label="调查记事" prop="notes">
               <el-input v-model="form.notes" type="textarea" :rows="2" placeholder="请输入调查记事" />
+            </el-form-item>
+            <el-form-item class="issuer-span-3" label="审核意见" prop="auditOpinion">
+              <el-input v-model="form.auditOpinion" type="textarea" :rows="2" placeholder="请输入审核意见" />
+            </el-form-item>
+            <el-form-item class="issuer-span-3" label="备注" prop="remark">
+              <el-input v-model="form.remark" type="textarea" :rows="2" placeholder="请输入备注" />
             </el-form-item>
           </div>
         </el-form>
@@ -434,6 +457,11 @@ const createEmptyForm = () => ({
   surveyorName: "",
   surveyDate: "",
   notes: "",
+  creditCode: "",
+  auditor: "",
+  auditDate: "",
+  auditOpinion: "",
+  remark: "",
 });
 
 const form = reactive(createEmptyForm());
@@ -643,6 +671,11 @@ function openEditDialog(row) {
     surveyorName: row.surveyorName || "",
     surveyDate: row.surveyDate || "",
     notes: row.notes || "",
+    creditCode: row.creditCode || "",
+    auditor: row.auditor || "",
+    auditDate: row.auditDate || "",
+    auditOpinion: row.auditOpinion || "",
+    remark: row.remark || "",
   });
   activeMainTab.value = "base";
   formRef.value?.clearValidate();
@@ -670,6 +703,11 @@ async function handleSubmit() {
     surveyorName: form.surveyorName.trim(),
     surveyDate: form.surveyDate || null,
     notes: form.notes.trim() || null,
+    creditCode: form.creditCode.trim() || null,
+    auditor: form.auditor.trim() || null,
+    auditDate: form.auditDate || null,
+    auditOpinion: form.auditOpinion.trim() || null,
+    remark: form.remark.trim() || null,
   };
 
   submitting.value = true;
@@ -897,6 +935,19 @@ onMounted(async () => {
   margin-bottom: 0;
 }
 
+/* 发包方名称与统一社会信用代码固定同一行（占两列，第三列留给发包方代码）。 */
+.issuer-inline-pair {
+  display: flex;
+  gap: 14px;
+  grid-column: span 2;
+  min-width: 0;
+}
+
+.issuer-inline-pair > :deep(.el-form-item) {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 .issuer-form-grid :deep(.el-form-item__label) {
   padding-bottom: 2px;
   font-size: 13px;
@@ -955,6 +1006,12 @@ onMounted(async () => {
   }
 
   .issuer-form-grid .issuer-span-3 {
+    grid-column: span 1;
+  }
+
+  .issuer-inline-pair {
+    flex-direction: column;
+    gap: 8px;
     grid-column: span 1;
   }
 }

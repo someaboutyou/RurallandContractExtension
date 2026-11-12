@@ -31,11 +31,11 @@
 8     调查员                fbfdcy
 9     调查日期              fbfdcrq     ISO YYYY-MM-DD（兼容样例的中文日期）
 10    调查记事              fbfdcjs
-11    审核人                ——          模板占位，不读写
-12    审核日期              ——          模板占位，不读写
-13    审核意见              ——          模板占位，不读写
-14    备注                  remark
-15    社会信用代码          ——          模板占位，不读写
+11    审核人                shr
+12    审核日期              shrq        ISO YYYY-MM-DD
+13    审核意见              shyj
+14    备注                  bzxx
+15    统一社会信用代码      tyshxydm
 ====  =====================  ==========  =====================================
 
 ⛔ 导出时发包方编码按**文本**写入（与承包方编号同一口径），导入读到数值型
@@ -68,13 +68,13 @@ class IssuerXlsTemplate:
         headers = [
             "发包方编码", "发包方名称", "发包方负责人姓名", "发包方负责人联系电话",
             "发包方负责人地址", "邮政编码", "发包方负责人证件类型", "发包方负责人证件号码",
-            "调查员", "调查日期", "调查记事", "审核人", "审核日期", "审核意见", "备注", "社会信用代码",
+            "调查员", "调查日期", "调查记事", "审核人", "审核日期", "审核意见", "备注", "统一社会信用代码",
         ]
-        widths = [16, 26, 12, 14, 32, 8, 14, 20, 14, 12, 32, 10, 12, 12, 18, 20]
+        widths = [16, 26, 12, 14, 32, 8, 14, 20, 14, 12, 32, 10, 12, 18, 18, 22]
         field_keys = [
             "code", "name", "responsible_name", "mobile", "address", "postcode",
             "id_type", "id_no", "surveyor", "survey_date", "survey_note",
-            None, None, None, "remark", None,
+            "auditor", "audit_date", "audit_opinion", "remark", "credit_code",
         ]
 
         style_cache: dict[tuple, xlwt.XFStyle] = {}
@@ -101,7 +101,7 @@ class IssuerXlsTemplate:
             return st
 
         wb = xlwt.Workbook(encoding="utf-8")
-        ws = wb.add_sheet("鱼鳞图")
+        ws = wb.add_sheet("发包方调查表")
         ncols = len(headers)
         for c, w in enumerate(widths):
             ws.col(c).width = 256 * w
@@ -113,7 +113,8 @@ class IssuerXlsTemplate:
         r = 2
         for row in rows:
             for c, key in enumerate(field_keys):
-                value = row.get(key) if key else ""
+                # 兼容调用方未提供的新列：None 直接写进 xlwt 会在 save 时抛异常。
+                value = (row.get(key) if key else "") or ""
                 # ⛔ 编码必须是文本：数值型在 Excel 里显示成科学计数法，
                 #    且用户另存/复制后可能丢精度导致导入匹配不上
                 ws.write(r, c, value, style(wrap=key == "survey_note"))
@@ -173,7 +174,11 @@ class IssuerXlsTemplate:
                 "surveyor": _cell(sh, r, 8),
                 "survey_date": _parse_date_cell(_raw_cell(sh, r, 9), book.datemode),
                 "survey_note": _cell(sh, r, 10),
+                "auditor": _cell(sh, r, 11),
+                "audit_date": _parse_date_cell(_raw_cell(sh, r, 12), book.datemode),
+                "audit_opinion": _cell(sh, r, 13),
                 "remark": _cell(sh, r, 14),
+                "credit_code": _cell(sh, r, 15),
                 # 删除标记：「发包方名称」单元格底色填充或删除线 ⇒ 删除该发包方
                 "delete_marked": _member_delete_marked(sh, r, 1),
             })
@@ -228,7 +233,11 @@ class IssuerXlsTemplate:
             "surveyorName": (row.get("surveyor") or "").strip(),
             "surveyDate": (row.get("survey_date") or "").strip(),
             "surveyNote": (row.get("survey_note") or "").strip(),
+            "auditor": (row.get("auditor") or "").strip(),
+            "auditDate": (row.get("audit_date") or "").strip(),
+            "auditOpinion": (row.get("audit_opinion") or "").strip(),
             "remark": (row.get("remark") or "").strip(),
+            "creditCode": (row.get("credit_code") or "").strip(),
             "delete_marked": bool(row.get("delete_marked")),
             "_missingRequired": missing_required,
         }

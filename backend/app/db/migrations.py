@@ -32,6 +32,25 @@ def _upgrade_gb_import_trace_columns(engine: Engine) -> None:
             )
 
 
+def _upgrade_fbf_review_columns(engine: Engine) -> None:
+    """发包方主表补审核相关列（与 CS 版 JCSJ_FBF 口径一致）。
+
+    - ``tyshxydm`` 统一社会信用代码
+    - ``shr`` 审核人 / ``shrq`` 审核日期 / ``shyj`` 审核意见
+    - ``bzxx`` 备注（区别于调查记事 ``fbfdcjs``）
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("fbf"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("fbf")}
+    with engine.begin() as connection:
+        _add_column_if_missing(connection, columns, "fbf", "tyshxydm", "VARCHAR(18)")
+        _add_column_if_missing(connection, columns, "fbf", "shr", "VARCHAR(50)")
+        _add_column_if_missing(connection, columns, "fbf", "shrq", "TIMESTAMP WITHOUT TIME ZONE")
+        _add_column_if_missing(connection, columns, "fbf", "shyj", "TEXT")
+        _add_column_if_missing(connection, columns, "fbf", "bzxx", "TEXT")
+
+
 def upgrade_schema(engine: Engine) -> None:
     _upgrade_system_config(engine)
     _upgrade_data_import_operations(engine)
@@ -68,6 +87,7 @@ def upgrade_schema(engine: Engine) -> None:
     _upgrade_survey_boundary_uniqueness(engine)
     _upgrade_cbht_contract_columns(engine)
     _upgrade_gb_import_trace_columns(engine)
+    _upgrade_fbf_review_columns(engine)
     _upgrade_data_export_progress(engine)
     _upgrade_member_sheet_places(engine)
     _upgrade_member_sheet_flow_split(engine)

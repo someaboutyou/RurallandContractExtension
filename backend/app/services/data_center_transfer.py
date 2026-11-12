@@ -356,6 +356,20 @@ class DataCenterTransferService:
             return {**base, "status": "deleted", "message": "整户删除（Excel 标记）"}
 
         contractor_service.update_contractor(db, plan["cbfbm"], plan["_payload"], current_user)
+        # 清单导入即视为已调查：把任务从「未开始」推进到「已调查」。
+        # 调查录入页据此判断「这户已有成果」，不再用当前登录用户/今天覆盖导入的
+        # 调查员与调查日期（否则列表读库值、弹窗显示登录人/当天，两处对不上）。
+        from app.repositories.contractor_repository import contractor_repository
+
+        updated = contractor_repository.get_contractor(db, plan["cbfbm"])
+        if updated is not None:
+            if (updated.survey_status or "") in {"", "not_surveyed"}:
+                updated.survey_status = "surveyed"
+            task_base = contractor_repository.get_base_for_result(db, updated)
+            if task_base is not None and (task_base.task_status or "not_started") == "not_started":
+                task_base.task_status = "surveyed"
+                task_base.investigated_at = datetime.now(timezone.utc)
+            db.commit()
         detail_parts = []
         if plan.get("contractorChanges"):
             detail_parts.append(f"承包方信息（{'、'.join(plan['contractorChanges'])}）")

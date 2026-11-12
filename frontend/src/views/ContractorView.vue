@@ -39,7 +39,7 @@
         />
         <el-button plain @click="handleSearch">查询</el-button>
         <el-button plain @click="resetFilters">重置</el-button>
-        <el-button plain @click="loadData">刷新</el-button>
+        <el-button plain @click="handleRefresh">刷新</el-button>
         <template v-if="isDataCenter">
           <!-- 数据中心：整库/已选口径，无批次概念；范围跟随右侧区域树（未选=整库） -->
           <el-button plain type="primary" @click="dcListExportVisible = true">
@@ -53,7 +53,7 @@
     </div>
 
     <div class="contractor-workspace" :class="{ 'dc-mode': isDataCenter }">
-      <SurveyBatchPanel v-if="!isDataCenter" v-model="activeBatch" />
+      <SurveyBatchPanel ref="batchPanelRef" v-if="!isDataCenter" v-model="activeBatch" />
 
       <div class="contractor-table-area">
         <div class="table-shell">
@@ -165,7 +165,7 @@ import {
   startCadastralExport,
   startSurveySheetExport,
 } from "../api/contractor";
-import { fetchCurrentSurveyBatch } from "../api/survey";
+import { fetchCurrentSurveyBatch, fetchSurveyBatches } from "../api/survey";
 import { fetchRegionTree } from "../api/region";
 import { useDictionary } from "../composables/useDictionary";
 import { useAuthStore } from "../stores/auth";
@@ -213,6 +213,7 @@ const activeRegionLabel = ref("");
 
 // 右侧调查批次面板：选中批次后列表只显示该批次范围内的承包户。
 const activeBatch = ref(null);
+const batchPanelRef = ref(null);
 
 function normalizeRegionTree(nodes = []) {
   return nodes.map((item) => ({
@@ -261,6 +262,12 @@ watch(activeBatch, () => {
 function handleSearch() {
   page.value = 1;
   loadData();
+}
+
+// 刷新：列表与左侧批次卡片统计一起重取，避免只刷新一边导致数量不一致。
+function handleRefresh() {
+  loadData();
+  batchPanelRef.value?.reload?.();
 }
 
 function resetFilters() {
@@ -659,6 +666,7 @@ async function openEditDialog(row) {
 function handleDialogSaved() {
   editingCode.value = "";
   loadData();
+  batchPanelRef.value?.reload?.();
 }
 
 async function handleDelete(row) {
@@ -674,6 +682,7 @@ async function handleDelete(row) {
       page.value -= 1;
     }
     await loadData();
+    batchPanelRef.value?.reload?.();
   } catch (error) {
     if (error !== "cancel" && error !== "close") {
       ElMessage.error(error.response?.data?.detail || "删除失败");
@@ -683,7 +692,8 @@ async function handleDelete(row) {
 
 loadRegionTree();
 
-// 用户在 /surveys「进入任务」记住的批次作为默认选中（读不写，不改其记忆）。
+// 用户在 /surveys「进入任务」记住的批次优先；没有记忆或记忆批次已结束时，
+// 默认加载「进行中」的批次（最新创建的一个），而不是整库全量承包方。
 // 数据中心入口跳过批次记忆：这里永远整库口径。
 onMounted(async () => {
   if (isDataCenter.value) {
@@ -692,12 +702,34 @@ onMounted(async () => {
   }
   try {
     const { data } = await fetchCurrentSurveyBatch();
-    if (data.data?.id) {
-      activeBatch.value = data.data;
+    const remembered = data.data;
+    if (remembered?.id && remembered.status === "active") {
+      activeBatch.value = remembered;
       return; // watch(activeBatch) 会带着 batchId 触发首次加载
     }
   } catch {
-    // 拿不到当前批次就按全量加载
+    // 拿不到当前批次就继续找进行中的批次
+  }
+  try {
+    const { data } = await fetchSurveyBatches({ page: 1, page_size: 1, status: "active" });
+    const active = data.data?.items?.[0];
+    if (active?.id) {
+      activeBatch.value = active;
+      return;
+    }
+  } catch {
+    // 继续兜底
+  }
+  try {
+    // 全部批次都已结束时，至少带出最新一个批次，避免直接落到整库全量。
+    const { data } = await fetchSurveyBatches({ page: 1, page_size: 1 });
+    const latest = data.data?.items?.[0];
+    if (latest?.id) {
+      activeBatch.value = latest;
+      return;
+    }
+  } catch {
+    // 没有批次信息时按全量加载
   }
   loadData();
 });

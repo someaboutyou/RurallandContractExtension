@@ -438,10 +438,13 @@ function hasSavedSwapOperation() { return savedSwapChanges.value.length > 0; }
 // 调查员 / 调查日期默认取「本次」：口径在 utils/surveyActorDefaults.js（发包方侧共用同一份）。
 // 这里只管把本组件的入参喂给它：快照取 baseContractor，只读判定取 dataReadOnly。
 function applyCurrentSurveyDefaults() {
+  const task = activeTask.value;
   applySurveyActorDefaults(resultForm, {
     base: resultForm.baseContractor,
     readonly: dataReadOnly.value,
     displayName: authStore.displayName,
+    // 已有调查成果的户（导入/保存过）保留库里的调查员与日期，不再改写成当前用户/今天。
+    alreadySurveyed: Boolean(task?.taskStatus && task.taskStatus !== "not_started"),
   });
 }
 
@@ -1139,7 +1142,6 @@ async function reloadSurveyResult() {
   try {
     const { data } = await fetchSurveyResult(props.activeBatch.id, activeTask.value.contractorUid);
     Object.assign(resultForm, createEmptyResult(), data.data, { familyMembers: (data.data.familyMembers || []).map((item) => ({ ...item })) });
-    applyCurrentSurveyDefaults();
     await loadDiffs();
     if (parcelsLoaded.value || isPanelMounted("parcels")) {
       await loadSavedParcelChanges();

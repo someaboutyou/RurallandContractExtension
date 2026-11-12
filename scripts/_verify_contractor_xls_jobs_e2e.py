@@ -270,7 +270,7 @@ def main():
                 return s
 
             wbx = _xlwt.Workbook()
-            wx = wbx.add_sheet("鱼鳞图")
+            wx = wbx.add_sheet("承包方调查表")
             for c, head in enumerate(["承包方编号", "承包方姓名", "承包方类型", "家庭成员数（个）",
                                       "姓名", "性别", "证件类型", "证件号码", "家庭关系", "是否共有人", "备注"]):
                 wx.write(0, c, head, _plain_style())
@@ -321,7 +321,7 @@ def main():
 
             # ── 整户注销标记：「承包方姓名」单元格标红 ⇒ 预览 deregister → 导入整户注销 ──
             wbd = _xlwt.Workbook()
-            wd = wbd.add_sheet("鱼鳞图")
+            wd = wbd.add_sheet("承包方调查表")
             for c, head in enumerate(["承包方编号", "承包方姓名", "承包方类型", "家庭成员数（个）",
                                       "姓名", "性别", "证件类型", "证件号码", "家庭关系", "是否共有人", "备注"]):
                 wd.write(0, c, head, _plain_style())

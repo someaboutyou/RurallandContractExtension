@@ -11,7 +11,8 @@
   >
     <div class="export-head">
       <div class="export-count">
-        已选 <strong>{{ contractorUids.length }}</strong> 个承包方
+        <template v-if="contractorUids.length">已选 <strong>{{ contractorUids.length }}</strong> 个承包方</template>
+        <template v-else>未勾选承包方，将导出本批次<strong>全部 {{ totalCount || "" }}</strong>{{ totalCount ? " 户" : "承包方" }}</template>
       </div>
       <div class="export-tools">
         <span class="export-selected">已选 {{ selectedDocuments.length }}/{{ options.length }} 项</span>
@@ -20,6 +21,11 @@
           :indeterminate="isIndeterminate"
         >全选</el-checkbox>
       </div>
+    </div>
+
+    <div class="export-options">
+      <el-checkbox v-model="groupByIssuer">按发包方分组</el-checkbox>
+      <span class="export-option-tip">压缩包内按文件类型分文件夹；勾选后先按发包方、再按文件类型分层</span>
     </div>
 
     <el-checkbox-group v-model="selectedDocuments" class="doc-grid">
@@ -37,7 +43,7 @@
     </el-checkbox-group>
 
     <div class="export-tip">
-      承包方调查表（Excel）为批量清单；摸底调查核实表按户各生成一份；Word 按户生成。多户或多类型时自动打包为 ZIP。
+      承包方信息表（Excel）为批量清单；摸底调查核实表按户各生成一份；Word 按户生成。多户或多类型时自动打包为 ZIP，ZIP 内按导出文件类型分文件夹。未勾选承包方时默认导出本批次全部承包方。
     </div>
 
     <template #footer>
@@ -45,7 +51,7 @@
       <el-button
         type="primary"
         :loading="exporting"
-        :disabled="!selectedDocuments.length || !contractorUids.length"
+        :disabled="!selectedDocuments.length || !batch"
         @click="handleExport"
       >
         导出
@@ -64,11 +70,12 @@ const props = defineProps({
   modelValue: { type: Boolean, default: false },
   batch: { type: Object, default: null },
   contractorUids: { type: Array, default: () => [] },
+  totalCount: { type: Number, default: 0 },
 });
 const emit = defineEmits(["update:modelValue"]);
 
 const options = [
-  { value: "contractor_excel", label: "承包方调查表", format: "Excel" },
+  { value: "contractor_excel", label: "承包方信息表", format: "Excel" },
   { value: "baseline_verify_excel", label: "摸底调查核实表（单户）", format: "Excel" },
   { value: "contractor_word", label: "承包方调查表", format: "Word" },
   { value: "householder_declaration", label: "户主声明书", format: "Word" },
@@ -78,6 +85,7 @@ const options = [
 ];
 
 const selectedDocuments = ref(options.map((item) => item.value));
+const groupByIssuer = ref(false);
 const exporting = ref(false);
 
 const allSelected = computed({
@@ -95,6 +103,7 @@ watch(
   (visible) => {
     if (visible) {
       selectedDocuments.value = options.map((item) => item.value);
+      groupByIssuer.value = false;
       exporting.value = false;
     }
   },
@@ -117,8 +126,8 @@ function downloadBlob(data, filename) {
 }
 
 async function handleExport() {
-  if (!props.batch?.id || !props.contractorUids.length || !selectedDocuments.value.length) {
-    ElMessage.warning("请先选择承包方和导出内容");
+  if (!props.batch?.id || !selectedDocuments.value.length) {
+    ElMessage.warning("请先选择导出内容");
     return;
   }
   exporting.value = true;
@@ -126,6 +135,7 @@ async function handleExport() {
     const { data, headers } = await exportContractorDocuments(props.batch.id, {
       contractorUids: props.contractorUids,
       documents: selectedDocuments.value,
+      groupByIssuer: groupByIssuer.value,
     });
     const contentType = String(headers?.["content-type"] || data?.type || "");
     let fallback = "承包方资料";
@@ -168,6 +178,19 @@ async function handleExport() {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.export-options {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.export-option-tip {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .export-selected {

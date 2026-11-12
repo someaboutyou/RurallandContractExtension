@@ -42,6 +42,10 @@ _FIELD_MAP = [
     ("fzrzjhm", "responsibleIdNo", "证件号码"),
     ("fbfdcy", "surveyorName", "调查员"),
     ("fbfdcjs", "surveyNote", "调查记事"),
+    ("tyshxydm", "creditCode", "统一社会信用代码"),
+    ("shr", "auditor", "审核人"),
+    ("shyj", "auditOpinion", "审核意见"),
+    ("bzxx", "remark", "备注"),
 ]
 
 _UNSAFE_FILENAME = re.compile(r'[\\/:*?"<>|]')
@@ -122,7 +126,11 @@ class IssuerExcelTransferService:
             "surveyor": item.fbfdcy or "",
             "survey_date": item.fbfdcrq.date().isoformat() if item.fbfdcrq else "",
             "survey_note": item.fbfdcjs or "",
-            "remark": "",
+            "auditor": item.shr or "",
+            "audit_date": item.shrq.date().isoformat() if item.shrq else "",
+            "audit_opinion": item.shyj or "",
+            "remark": item.bzxx or "",
+            "credit_code": item.tyshxydm or "",
         }
 
     # ── 预览 ────────────────────────────────────────────────────────────────
@@ -247,6 +255,12 @@ class IssuerExcelTransferService:
             current_date = existing.fbfdcrq.date().isoformat() if existing.fbfdcrq else ""
             if imported_date != current_date:
                 changes.append(f"调查日期：{current_date or '空'} → {imported_date}")
+
+        imported_audit_date = (data.get("auditDate") or "").strip()
+        if imported_audit_date:
+            current_audit_date = existing.shrq.date().isoformat() if existing.shrq else ""
+            if imported_audit_date != current_audit_date:
+                changes.append(f"审核日期：{current_audit_date or '空'} → {imported_audit_date}")
         return changes
 
     @staticmethod
@@ -263,6 +277,11 @@ class IssuerExcelTransferService:
             "surveyorName": data.get("surveyorName") or "",
             "surveyDate": data.get("surveyDate") or None,
             "notes": data.get("surveyNote") or None,
+            "creditCode": data.get("creditCode") or None,
+            "auditor": data.get("auditor") or None,
+            "auditDate": data.get("auditDate") or None,
+            "auditOpinion": data.get("auditOpinion") or None,
+            "remark": data.get("remark") or None,
         }
 
     @staticmethod
@@ -280,6 +299,12 @@ class IssuerExcelTransferService:
             "surveyDate": data.get("surveyDate")
             or (existing.fbfdcrq.date().isoformat() if existing.fbfdcrq else None),
             "notes": data.get("surveyNote") or existing.fbfdcjs,
+            "creditCode": data.get("creditCode") or existing.tyshxydm,
+            "auditor": data.get("auditor") or existing.shr,
+            "auditDate": data.get("auditDate")
+            or (existing.shrq.date().isoformat() if existing.shrq else None),
+            "auditOpinion": data.get("auditOpinion") or existing.shyj,
+            "remark": data.get("remark") or existing.bzxx,
         }
 
     # ── 导入 ────────────────────────────────────────────────────────────────

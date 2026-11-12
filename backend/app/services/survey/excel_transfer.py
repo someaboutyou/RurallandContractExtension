@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""承包方调查表 Excel 导入 / 导出（鱼鳞图样式模板）。
+"""承包方调查表 Excel 导入 / 导出（.xls 模板）。
 
 模板列布局（与样例 ``青阳镇宏伟居一组农村土地承包经营权承包方调查表.xls`` 一致，0 基）：
 
@@ -325,7 +325,7 @@ class SurveyServiceExcelTransferMixin:
             return st
 
         wb = xlwt.Workbook(encoding="utf-8")
-        ws = wb.add_sheet("鱼鳞图")
+        ws = wb.add_sheet("承包方调查表")
         ncols = 21
         widths = [16, 10, 8, 8, 10, 6, 12, 22, 10, 10, 14, 14, 30, 8, 14, 10, 12, 24, 10, 12, 14]
         for c, w in enumerate(widths):
@@ -718,14 +718,18 @@ class SurveyServiceExcelTransferMixin:
     # ── 匹配与差异 ──────────────────────────────────────────────────────────
 
     # (payload key, 规范化数据 key, 标签)
+    # ⛔ 表格里有的字段必须全部参与差异对比：只更新“已比对”的字段，否则当某户
+    # 只有调查日期/审核日期变化时会被判定为 no_change 而整户跳过，库值永远不更新。
     _CONTRACTOR_FIELD_MAP = [
         ("name", "cbfmc", "承包方名称"),
         ("address", "address", "承包方地址"),
         ("postcode", "postcode", "邮政编码"),
         ("mobile", "mobile", "联系电话"),
         ("surveyorName", "surveyor", "调查员"),
+        ("surveyDate", "survey_date", "调查日期"),
         ("surveyNote", "survey_note", "调查记事"),
         ("publicNoticeReviewer", "reviewer", "审核人"),
+        ("publicNoticeReviewDate", "review_date", "审核日期"),
         ("publicNoticeNote", "review_note", "审核意见"),
     ]
 

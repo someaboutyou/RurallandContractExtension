@@ -36,7 +36,7 @@ export function exportSurveyResults(batchId, params) {
   return http.get(`/surveys/batches/${batchId}/export-results.zip`, { params, responseType: "blob" });
 }
 
-/** 承包方调查表 Excel 导出（鱼鳞图样式模板，xls）。 */
+/** 承包方调查表 Excel 导出（.xls）。 */
 export function exportContractorSurveyXls(batchId) {
   return http.get(`/surveys/batches/${batchId}/contractors-xls`, { responseType: "blob" });
 }

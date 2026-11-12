@@ -18,10 +18,12 @@ from sqlalchemy.orm import Session
 
 from app.models.survey import (
     SurveyBatch,
+    SurveyCbfBase,
     SurveyCbfResult,
     SurveyCbfJtcyResult,
     SurveyCbdkxxResult,
     SurveyDkResult,
+    SurveyFbfBase,
     SurveyFbfResult,
 )
 from app.models.user import User
@@ -45,9 +47,20 @@ DOC_NO_OBJECTION = "no_objection_declaration"
 DOC_SURVEY_APPLICATION = "survey_application"
 
 DOC_LABELS = {
-    DOC_CONTRACTOR_EXCEL: "承包方调查表（Excel）",
+    DOC_CONTRACTOR_EXCEL: "承包方信息表（Excel）",
     DOC_BASELINE_VERIFY: "摸底调查核实表（单户）",
     DOC_CONTRACTOR_WORD: "承包方调查表（Word）",
+    DOC_HOUSEHOLDER: "户主声明书",
+    DOC_AUTHORIZATION: "委托声明书",
+    DOC_NO_OBJECTION: "无异议声明书",
+    DOC_SURVEY_APPLICATION: "测绘申请书",
+}
+
+#: ZIP 内按导出文件类型建的子文件夹。
+DOC_FOLDERS = {
+    DOC_CONTRACTOR_EXCEL: "承包方信息表",
+    DOC_BASELINE_VERIFY: "摸底调查核实表",
+    DOC_CONTRACTOR_WORD: "承包方调查表",
     DOC_HOUSEHOLDER: "户主声明书",
     DOC_AUTHORIZATION: "委托声明书",
     DOC_NO_OBJECTION: "无异议声明书",
@@ -129,10 +142,9 @@ class ContractorDocumentExportService:
         contractor_uids: list[str],
         documents: list[str],
         current_user: User,
+        group_by_issuer: bool = False,
     ) -> tuple[str, bytes, str]:
         uids = list(dict.fromkeys(str(uid).strip() for uid in contractor_uids if str(uid or "").strip()))
-        if not uids:
-            raise HTTPException(status_code=400, detail="请先选择承包方")
         requested = {doc for doc in documents if doc}
         unknown = requested - set(DOC_LABELS)
         if unknown:
@@ -142,52 +154,182 @@ class ContractorDocumentExportService:
         if batch is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="调查批次不存在")
 
-        files: list[tuple[str, bytes, str]] = []
+        # 未勾选任何承包方 = 导出该批次全部承包方（与调查录入列表同口径：
+        # 当前用户数据权限内、排除已注销户，按承包方编码排序）。
+        if not uids:
+            uids = self._all_batch_contractor_uids(db, batch, current_user)
+            if not uids:
+                raise HTTPException(status_code=400, detail="该批次暂无承包方可供导出")
 
-        if DOC_CONTRACTOR_EXCEL in requested:
-            filename, content = survey_service.export_contractors_xls(
-                db, batch_id, current_user, contractor_uids=uids
-            )
-            files.append((filename, content, XLS_MEDIA_TYPE))
+        # 按发包方分组：每个发包方一个文件夹，文件夹内放该发包方下承包方的全部导出文件。
+        if group_by_issuer:
+            groups = self._group_uids_by_issuer(db, batch, uids)
+            folder_names = self._issuer_folder_names(db, batch, list(groups))
+        else:
+            groups = {"": uids}
+            folder_names = {}
 
-        if DOC_BASELINE_VERIFY in requested:
-            files.extend(self._export_baseline_verify(db, batch, uids, current_user))
-
-        word_docs = [
-            doc for doc in _DOC_ORDER
-            if doc in requested and doc not in (DOC_CONTRACTOR_EXCEL, *_PER_HOUSEHOLD_DOCS)
-        ]
-        if word_docs:
-            for uid in uids:
-                result = survey_service.get_result(db, batch_id, uid, current_user)
-                context = self._build_context(batch, result)
-                base_name = _UNSAFE_FILENAME.sub(
-                    "_", f"{context['code']}{context['name']}"
+        files: list[tuple[str, str, str, bytes, str]] = []  # (issuer_folder, type_folder, filename, content, media_type)
+        for issuer_code, group_uids in groups.items():
+            folder = folder_names.get(issuer_code, "") if issuer_code else ""
+            if DOC_CONTRACTOR_EXCEL in requested:
+                filename, content = survey_service.export_contractors_xls(
+                    db, batch_id, current_user, contractor_uids=group_uids
                 )
-                for doc in word_docs:
-                    if doc == DOC_CONTRACTOR_WORD:
-                        content, filename = contractor_survey_docx_service.render(
-                            db, cbfbm=context["code"], batch_id=batch_id
-                        )
-                    else:
-                        content = html_docx.build_docx(self._render_document(doc, context))
-                        filename = f"{base_name}-{DOC_LABELS[doc]}.docx"
-                    files.append((filename, content, DOCX_MEDIA_TYPE))
+                # 本对话框里 Excel 项叫「承包方信息表」，下载文件名保持同名。
+                if filename.startswith("承包方调查表"):
+                    filename = filename.replace("承包方调查表", "承包方信息表", 1)
+                files.append((folder, DOC_FOLDERS[DOC_CONTRACTOR_EXCEL], filename, content, XLS_MEDIA_TYPE))
+
+            if DOC_BASELINE_VERIFY in requested:
+                for filename, content, media_type in self._export_baseline_verify(
+                    db, batch, group_uids, current_user
+                ):
+                    files.append((folder, DOC_FOLDERS[DOC_BASELINE_VERIFY], filename, content, media_type))
+
+            word_docs = [
+                doc for doc in _DOC_ORDER
+                if doc in requested and doc not in (DOC_CONTRACTOR_EXCEL, *_PER_HOUSEHOLD_DOCS)
+            ]
+            if word_docs:
+                for uid in group_uids:
+                    result = survey_service.get_result(db, batch_id, uid, current_user)
+                    context = self._build_context(batch, result)
+                    base_name = _UNSAFE_FILENAME.sub(
+                        "_", f"{context['code']}{context['name']}"
+                    )
+                    for doc in word_docs:
+                        if doc == DOC_CONTRACTOR_WORD:
+                            content, filename = contractor_survey_docx_service.render(
+                                db, cbfbm=context["code"], batch_id=batch_id
+                            )
+                        else:
+                            content = html_docx.build_docx(self._render_document(doc, context))
+                            filename = f"{base_name}-{DOC_LABELS[doc]}.docx"
+                        files.append((folder, DOC_FOLDERS[doc], filename, content, DOCX_MEDIA_TYPE))
 
         if not files:
             raise HTTPException(status_code=400, detail="请至少选择一种导出内容")
 
-        if len(files) == 1:
-            return files[0]
+        # 只有「单个文件且不按发包方分组」才直接返回文件；其余都打包 ZIP，
+        # ZIP 内先按发包方（可选）再按导出文件类型分文件夹。
+        if not group_by_issuer and len(files) == 1:
+            return files[0][2], files[0][3], files[0][4]
 
         buffer = io.BytesIO()
         seen: set[str] = set()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-            for filename, content, _media in files:
-                name = self._unique_name(filename, seen)
-                archive.writestr(name, content)
-        zip_name = f"承包方资料_{(batch.region_name or batch.batch_no or batch_id)}.zip"
-        return _UNSAFE_FILENAME.sub("_", zip_name), buffer.getvalue(), ZIP_MEDIA_TYPE
+            for folder, type_folder, filename, content, _media in files:
+                parts = [part for part in (folder, type_folder) if part]
+                name = "/".join([*parts, filename]) if parts else filename
+                archive.writestr(self._unique_name(name, seen), content)
+        scope = _UNSAFE_FILENAME.sub("_", batch.region_name or batch.batch_no or str(batch_id))
+        prefix = "承包方资料_按发包方分组" if group_by_issuer else "承包方资料"
+        return f"{prefix}_{scope}.zip", buffer.getvalue(), ZIP_MEDIA_TYPE
+
+    def _group_uids_by_issuer(
+        self, db: Session, batch: SurveyBatch, uids: list[str]
+    ) -> dict[str, list[str]]:
+        """按发包方（承包方编码前 14 位）把 uid 分组，保持编码顺序稳定。"""
+        rows = db.scalars(
+            select(SurveyCbfResult)
+            .where(
+                SurveyCbfResult.tenant_code == batch.tenant_code,
+                SurveyCbfResult.contractor_uid.in_(uids),
+            )
+            .order_by(SurveyCbfResult.id.asc())
+            .execution_options(skip_tenant_scope=True)
+        ).all()
+        code_by_uid = {row.contractor_uid: row.cbfbm for row in rows}
+        groups: dict[str, list[str]] = {}
+        for uid in uids:
+            code = str(code_by_uid.get(uid) or "")
+            issuer_code = code[:14] if len(code) >= 14 else (code or "未知发包方")
+            groups.setdefault(issuer_code, []).append(uid)
+        return dict(sorted(groups.items()))
+
+    def _issuer_folder_names(
+        self, db: Session, batch: SurveyBatch, issuer_codes: list[str]
+    ) -> dict[str, str]:
+        """发包方编码 → 文件夹名（名称_编码）。"""
+        codes = [code for code in issuer_codes if code and code != "未知发包方"]
+        names: dict[str, str] = {}
+        if codes:
+            rows = db.scalars(
+                select(SurveyFbfBase)
+                .where(
+                    SurveyFbfBase.batch_id == batch.id,
+                    SurveyFbfBase.fbfbm.in_(codes),
+                )
+                .execution_options(skip_tenant_scope=True)
+            ).all()
+            for row in rows:
+                names.setdefault(row.fbfbm, row.fbfmc or row.fbfbm)
+            missing = [code for code in codes if code not in names]
+            if missing:
+                result_rows = db.scalars(
+                    select(SurveyFbfResult)
+                    .where(
+                        SurveyFbfResult.tenant_code == batch.tenant_code,
+                        SurveyFbfResult.fbfbm.in_(missing),
+                    )
+                    .order_by(SurveyFbfResult.id.desc())
+                    .execution_options(skip_tenant_scope=True)
+                ).all()
+                for row in result_rows:
+                    names.setdefault(row.fbfbm, row.fbfmc or row.fbfbm)
+            # 发包方快照/结果都缺失时（只导入了承包方），退回承包方所属组名称，
+            # 避免文件夹只剩一串编码。
+            for code in codes:
+                if code in names:
+                    continue
+                row = db.scalars(
+                    select(SurveyCbfResult)
+                    .where(
+                        SurveyCbfResult.tenant_code == batch.tenant_code,
+                        SurveyCbfResult.cbfbm.like(f"{code}%"),
+                    )
+                    .order_by(SurveyCbfResult.id.desc())
+                    .limit(1)
+                    .execution_options(skip_tenant_scope=True)
+                ).first()
+                if row is not None:
+                    short = (row.group_region_name or "").split("/")[-1].strip()
+                    if short:
+                        names[code] = short
+        folders: dict[str, str] = {}
+        for code in issuer_codes:
+            name = names.get(code) or ""
+            label = f"{name}_{code}" if name and name != code else (code or "未知发包方")
+            folders[code] = _UNSAFE_FILENAME.sub("_", label)
+        return folders
+
+    def _all_batch_contractor_uids(
+        self, db: Session, batch: SurveyBatch, current_user: User
+    ) -> list[str]:
+        """批次全部承包方 uid（与调查录入列表同口径：数据权限内、排除已注销）。"""
+        from app.services.data_access_service import data_access_service
+
+        filters = [
+            SurveyCbfBase.tenant_code == batch.tenant_code,
+            SurveyCbfBase.batch_id == batch.id,
+            SurveyCbfBase.task_status != "deregistered",
+        ]
+        filters.extend(
+            data_access_service.build_code_scope_filters(SurveyCbfResult.cbfbm, current_user)
+        )
+        rows = db.scalars(
+            select(SurveyCbfBase.contractor_uid)
+            .select_from(SurveyCbfBase)
+            .join(
+                SurveyCbfResult,
+                SurveyCbfResult.contractor_uid == SurveyCbfBase.contractor_uid,
+            )
+            .where(*filters)
+            .order_by(SurveyCbfBase.cbfbm.asc())
+            .execution_options(skip_tenant_scope=True)
+        ).all()
+        return list(dict.fromkeys(uid for uid in rows if uid))
 
     def _export_baseline_verify(
         self,

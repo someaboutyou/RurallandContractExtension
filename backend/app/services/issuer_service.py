@@ -85,6 +85,11 @@ class IssuerService:
             fbfdcy=payload["surveyorName"] or current_user.real_name,
             fbfdcrq=self._parse_datetime(payload.get("surveyDate")) or datetime.now(),
             fbfdcjs=payload.get("notes"),
+            tyshxydm=payload.get("creditCode") or None,
+            shr=payload.get("auditor") or None,
+            shrq=self._parse_datetime(payload.get("auditDate")),
+            shyj=payload.get("auditOpinion") or None,
+            bzxx=payload.get("remark") or None,
         )
         issuer = issuer_repository.create_issuer(db, issuer)
         return self._serialize(issuer)
@@ -108,6 +113,11 @@ class IssuerService:
         issuer.fbfdcy = payload["surveyorName"]
         issuer.fbfdcrq = self._parse_datetime(payload.get("surveyDate")) or issuer.fbfdcrq
         issuer.fbfdcjs = payload.get("notes")
+        issuer.tyshxydm = payload.get("creditCode") or None
+        issuer.shr = payload.get("auditor") or None
+        issuer.shrq = self._parse_datetime(payload.get("auditDate"))
+        issuer.shyj = payload.get("auditOpinion") or None
+        issuer.bzxx = payload.get("remark") or None
         issuer = issuer_repository.update_issuer(db, issuer)
         return self._serialize(issuer)
 
@@ -326,6 +336,11 @@ class IssuerService:
             "surveyorName": item.fbfdcy,
             "surveyDate": item.fbfdcrq.date().isoformat() if item.fbfdcrq else None,
             "notes": item.fbfdcjs,
+            "creditCode": item.tyshxydm,
+            "auditor": item.shr,
+            "auditDate": item.shrq.date().isoformat() if item.shrq else None,
+            "auditOpinion": item.shyj,
+            "remark": item.bzxx,
             "regionId": None,
             "region": None,
             "status": None,

@@ -11,6 +11,8 @@ from app.models.survey import (
     SurveyCbfResult,
     SurveyChangeDiff,
     SurveyChangeRecord,
+    SurveyFbfBase,
+    SurveyFbfResult,
 )
 from app.models.user import User
 from app.services.data_access_service import data_access_service
@@ -54,17 +56,53 @@ class SurveyServiceTaskMixin:
                     or_(
                         SurveyCbfResult.cbfbm.ilike(pattern),
                         SurveyCbfResult.cbfmc.ilike(pattern),
+                        SurveyCbfResult.group_region_name.ilike(pattern),
                     ),
                 )
                 .execution_options(skip_tenant_scope=True)
             ).all()
-            filters.append(
-                or_(
-                    SurveyCbfBase.cbfbm.ilike(pattern),
-                    SurveyCbfBase.cbfmc.ilike(pattern),
-                    SurveyCbfBase.contractor_uid.in_(matched_uids or [""]),
-                )
+            # 发包方名称/编码命中 → 该发包方下所有承包方都算命中。
+            # 先取批次内快照；快照缺失时用主表结果兜底（只导入过承包方的批次）。
+            issuer_codes = set(
+                db.scalars(
+                    select(SurveyFbfBase.fbfbm)
+                    .where(
+                        SurveyFbfBase.batch_id == batch_id,
+                        or_(
+                            SurveyFbfBase.fbfbm.ilike(pattern),
+                            SurveyFbfBase.fbfmc.ilike(pattern),
+                        ),
+                    )
+                    .execution_options(skip_tenant_scope=True)
+                ).all()
             )
+            issuer_codes.update(
+                db.scalars(
+                    select(SurveyFbfResult.fbfbm)
+                    .where(
+                        SurveyFbfResult.tenant_code == batch.tenant_code,
+                        or_(
+                            SurveyFbfResult.fbfbm.ilike(pattern),
+                            SurveyFbfResult.fbfmc.ilike(pattern),
+                        ),
+                    )
+                    .execution_options(skip_tenant_scope=True)
+                ).all()
+            )
+            conditions = [
+                SurveyCbfBase.cbfbm.ilike(pattern),
+                SurveyCbfBase.cbfmc.ilike(pattern),
+                SurveyCbfBase.group_region_name.ilike(pattern),
+                SurveyCbfBase.contractor_uid.in_(matched_uids or [""]),
+            ]
+            if issuer_codes:
+                conditions.append(
+                    or_(*[
+                        SurveyCbfBase.cbfbm.like(f"{code}%")
+                        for code in sorted(code for code in issuer_codes if code)
+                    ])
+                )
+            filters.append(or_(*conditions))
         if task_status:
             filters.append(SurveyCbfBase.task_status == task_status)
         else:
@@ -536,18 +574,19 @@ class SurveyServiceTaskMixin:
             result = session.scalar(
                 select(SurveyCbfResult).where(SurveyCbfResult.contractor_uid == item.contractor_uid).order_by(SurveyCbfResult.id.desc())
             )
+        # 当前值以 result 为准、base 仅作兜底：base 是批次基线快照，录入改名/改码/
+        # 改地址后它保持原值。列表若继续读 base，就会和调查录入详情（读 result）
+        # 显示成两个不同的地址。
+        current = result if result is not None else item
         return {
             "id": item.id,
             "batchId": item.batch_id,
             "contractorUid": item.contractor_uid,
-            # base 是批次**基线**快照，保存时不再随改名/改码推进（见 result.py
-            # update_result 的任务态同步）。当前值在 result 上，列表显示取它，
-            # base 仅作 result 缺失时的兜底。
-            "cbfbm": (result.cbfbm if result is not None else None) or item.cbfbm,
-            "cbfmc": (result.cbfmc if result is not None else None) or item.cbfmc,
-            "cbfdz": item.cbfdz,
-            "cbfcysl": item.cbfcysl,
-            "lxdh": item.lxdh,
+            "cbfbm": current.cbfbm or item.cbfbm,
+            "cbfmc": current.cbfmc or item.cbfmc,
+            "cbfdz": current.cbfdz,
+            "cbfcysl": current.cbfcysl,
+            "lxdh": current.lxdh,
             "regionCode": item.region_code,
             "groupRegionCode": (result.group_region_code if result else None) or item.cbfbm[:14],
             "groupRegionName": result.group_region_name if result else None,
@@ -615,15 +654,16 @@ class SurveyServiceTaskMixin:
         result_task_status = "not_started"
         if result is not None and result.survey_status:
             result_task_status = "not_started" if result.survey_status == "not_surveyed" else result.survey_status
+        current = result if result is not None else (task if task is not None else base)
         return {
             "id": task.id if task else base.id,
             "batchId": survey_batch_id,
             "contractorUid": task.contractor_uid if task else base.contractor_uid,
-            "cbfbm": task.cbfbm if task else base.cbfbm,
-            "cbfmc": task.cbfmc if task else base.cbfmc,
-            "cbfdz": task.cbfdz if task else base.cbfdz,
-            "cbfcysl": task.cbfcysl if task else base.cbfcysl,
-            "lxdh": task.lxdh if task else base.lxdh,
+            "cbfbm": current.cbfbm,
+            "cbfmc": current.cbfmc,
+            "cbfdz": current.cbfdz,
+            "cbfcysl": current.cbfcysl,
+            "lxdh": current.lxdh,
             "regionCode": task.region_code if task else base.region_code,
             "groupRegionCode": (result.group_region_code if result else None) or base.cbfbm[:14],
             "groupRegionName": result.group_region_name if result else None,
@@ -659,15 +699,16 @@ class SurveyServiceTaskMixin:
         ``changeNo`` 为空即表示"按钮挂不上台账"，历史上（只认 deregister 时）正是这种情况
         渲染出了一个**必然 400** 的按钮。
         """
+        current = result if result is not None else task
         return {
             "id": task.id,
             "batchId": survey_batch_id,
             "contractorUid": task.contractor_uid,
-            "cbfbm": task.cbfbm,
-            "cbfmc": task.cbfmc,
-            "cbfdz": task.cbfdz,
-            "cbfcysl": task.cbfcysl,
-            "lxdh": task.lxdh,
+            "cbfbm": current.cbfbm,
+            "cbfmc": current.cbfmc,
+            "cbfdz": current.cbfdz,
+            "cbfcysl": current.cbfcysl,
+            "lxdh": current.lxdh,
             "groupRegionCode": (result.group_region_code if result else None) or task.cbfbm[:14],
             "groupRegionName": result.group_region_name if result else None,
             "deregisterReason": (change.change_reason if change else None) or (result.change_reason if result else None) or task.remark,

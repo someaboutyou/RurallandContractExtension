@@ -13,7 +13,10 @@
  *      或压根没有快照行（分户 / 合户新生成的户就是这种）；
  *      已被改过（≠ 快照值）的一律不动，避免覆盖别人已经录进去的成果；
  *   3. **只读时什么都不填**（不可写 / 批次已结束 / 已确认）：默认值是给录入用的，
- *      凭空写进只读视图会多出假的"已变化"高亮。
+ *      凭空写进只读视图会多出假的"已变化"高亮；
+ *   4. **已经调查过（任务状态不是「未开始」）的户不填**：清单导入/页面保存过的
+ *      调查员与日期是库内成果，不能被"本次登录用户 + 今天"覆盖 —— 否则承包方
+ *      管理列表（读库值）与调查录入弹窗会显示成两个不同的调查员/日期。
  *
  * ⛔ 注意：`cbfdcy/cbfdcrq`、`fbfdcy/fbfdcrq` 属于**权属变化**判定字段
  * （`result.py::_contractor_changed` / `_issuer_changed` 与 `changes.py` 的
@@ -49,8 +52,8 @@ export function isStillBaseline(value, baseValue) {
  *        `base` 传批次快照对象（`baseContractor` / `baseIssuer`），无快照传 null
  * @returns {boolean} 是否写入过（仅用于调用处按需判断，无副作用）
  */
-export function applySurveyActorDefaults(form, { base = null, readonly = false, displayName = "" } = {}) {
-  if (!form || readonly) return false;
+export function applySurveyActorDefaults(form, { base = null, readonly = false, displayName = "", alreadySurveyed = false } = {}) {
+  if (!form || readonly || alreadySurveyed) return false;
   let touched = false;
   const name = currentSurveyorName(displayName);
   if ((!base || isStillBaseline(form.surveyorName, base.surveyorName)) && name) {

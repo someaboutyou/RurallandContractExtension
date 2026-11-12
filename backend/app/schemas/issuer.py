@@ -16,6 +16,11 @@ class IssuerBase(BaseModel):
     surveyorName: str = Field(min_length=1, max_length=254)
     surveyDate: str | None = None
     notes: str | None = None
+    creditCode: str | None = Field(default=None, max_length=18)
+    auditor: str | None = Field(default=None, max_length=50)
+    auditDate: str | None = None
+    auditOpinion: str | None = None
+    remark: str | None = None
     status: str | None = None
     regionId: int | None = None
 
@@ -40,6 +45,11 @@ class IssuerRead(BaseModel):
     surveyorName: str | None = None
     surveyDate: str | None = None
     notes: str | None = None
+    creditCode: str | None = None
+    auditor: str | None = None
+    auditDate: str | None = None
+    auditOpinion: str | None = None
+    remark: str | None = None
     regionId: int | None = None
     region: str | None = None
     status: str | None = None
