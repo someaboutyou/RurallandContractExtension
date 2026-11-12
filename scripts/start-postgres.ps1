@@ -153,6 +153,19 @@ Require-File $psql "psql not found: $psql"
 Require-File $createdb "createdb not found: $createdb"
 Require-File $pgIsReady "pg_isready not found: $pgIsReady"
 
+# 预检：postgres.exe 必须能独立运行。initdb 自己不依赖 MSVCP140.dll（能跑起来），
+# 但它 popen 调 postgres.exe -V 做版本校验；目标机缺 VC++ 2015-2022 运行库时
+# postgres 加载 icuuc67.dll -> MSVCP140.dll 失败、进程无输出，initdb 报
+# "no data was returned by command" + "program postgres is needed"，
+# 真实原因（缺运行库）被完全掩盖（2026-11-11 部署机实踩）。这里单独预检。
+$pgVersionStatus = Invoke-NativeStatus { & $postgresExe "-V" }
+if ($pgVersionStatus -ne 0) {
+    throw ("postgres.exe cannot run (no version output, exit code $pgVersionStatus). " +
+        "Most likely the machine is missing the VC++ 2015-2022 runtime (MSVCP140.dll/VCRUNTIME140.dll). " +
+        "Fix: install vc_redist.x64, or copy msvcp140*.dll / vcruntime140*.dll " +
+        "from runtime\windows\python\ into runtime\windows\postgresql\bin\ and retry.")
+}
+
 New-Item -ItemType Directory -Force -Path $pgData, $logDir | Out-Null
 
 $pgStatus = Invoke-NativeStatus { & $pgCtl "status" "-D" $pgData }

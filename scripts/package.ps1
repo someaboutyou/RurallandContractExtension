@@ -228,6 +228,33 @@ if (Test-Path (Join-Path $stylesSource "survey_dk_result.sld")) {
     throw "datas/geoserver-styles/survey_dk_result.sld not found. Packaging would ship GeoServer layers without styles (StyleNotDefined at request time). Restore the styles directory before packaging."
 }
 
+# ── PostgreSQL bin 补 VC++ 运行库 DLL ────────────────────────────────
+# postgres.exe -> icuuc67.dll -> MSVCP140.dll：部署机没装 VC++ 2015-2022
+# 运行库时 postgres.exe 加载失败且无输出，initdb 报
+# "no data was returned by command postgres.exe -V" / "program postgres is
+# needed"（2026-11-11 部署机实踩）。initdb 不依赖 MSVCP140 能跑，症状掩盖真因。
+# 从随包的 python 运行时把这组 DLL 拷进 postgresql\bin（exe 目录是 DLL
+# 搜索第一顺位，整条依赖链都能解析，不依赖目标机 PATH/注册表）。
+$vcDllNames = @(
+    "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll",
+    "msvcp140_atomic_wait.dll", "msvcp140_codecvt_ids.dll",
+    "vcruntime140.dll", "vcruntime140_1.dll", "vcruntime140_threads.dll"
+)
+$pgBinTarget = Join-Path $tempDir "runtime\windows\postgresql\bin"
+$pythonRoot = Join-Path $tempDir "runtime\windows\python"
+foreach ($dllName in $vcDllNames) {
+    $src = Join-Path $pythonRoot $dllName
+    $dst = Join-Path $pgBinTarget $dllName
+    if ((Test-Path $dst) -or -not (Test-Path $src)) { continue }
+    Copy-Item -LiteralPath $src -Destination $dst -Force
+}
+$missingVc = @($vcDllNames | Where-Object { -not (Test-Path (Join-Path $pgBinTarget $_)) })
+if ($missingVc.Count -gt 0) {
+    throw ("VC runtime DLLs missing from postgresql\bin after packaging: " + ($missingVc -join ", ") +
+        ". Copy them from runtime\windows\python\ on the build machine before packaging.")
+}
+Write-Host "VC runtime DLLs ensured in postgresql\bin (msvcp140*/vcruntime140*)."
+
 # ── Python 运行时去源码：.py → .pyc（sourceless），只对 temp 副本执行 ──
 # ⛔ 绝不指向开发机的 runtime\windows\python（开发期需要源码）。
 # 副本里 compileall + 把 __pycache__/*.pyc 移回原 .py 位置后删除 .py；
