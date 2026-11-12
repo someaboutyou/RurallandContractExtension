@@ -95,11 +95,21 @@ function today() {
   return `${now.getFullYear()}-${month}-${day}`;
 }
 
+/** 公告日期 + 1 个月（月末溢出自动收敛，如 1 月 31 日 → 2 月 28 日） */
+function nextMonth(value) {
+  const d = new Date(`${value}T00:00:00`);
+  const target = new Date(d.getFullYear(), d.getMonth() + 1, d.getDate());
+  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  const day = String(Math.min(d.getDate(), lastDay)).padStart(2, "0");
+  const month = String(target.getMonth() + 1).padStart(2, "0");
+  return `${target.getFullYear()}-${month}-${day}`;
+}
+
 async function loadDefaults() {
   const code = props.rows[0]?.code;
   const current = today();
   announcement.announceDate = current;
-  announcement.endDate = current;
+  announcement.endDate = nextMonth(current);
   announcement.stampUnit = "";
   announcement.address = "";
   if (!code) return;
@@ -108,7 +118,7 @@ async function loadDefaults() {
     const { data } = await fetchAnnouncementDefaults(code);
     const payload = data?.data || {};
     announcement.announceDate = payload.announceDate || current;
-    announcement.endDate = payload.endDate || current;
+    announcement.endDate = payload.endDate || nextMonth(current);
     announcement.stampUnit = payload.stampUnit || "";
     announcement.address = payload.requestAddress || "";
   } catch (error) {

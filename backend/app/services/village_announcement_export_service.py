@@ -6,17 +6,22 @@
 - 公告日期 / 截止日期 / 盖章单位 / 地址由导出对话框传入（CS 版
   「公示公告信息设置」同款字段）；
 - 标题固定为「{单位全称}农村土地承包经营权确权登记颁证第一轮公示公告」，
-  正文字号、行距、首行缩进按 CS 样张（宋体小四、两倍行距、两端对齐）。
+  版式复刻甲方样张（标题方正小标宋 22pt、正文仿宋 16pt、首行缩进两字符、
+  1.5 倍 / 固定 33pt 行距），全部样式在打印模板里维护。
 
-Word 仍走 ``html_docx``（HTML 母版 → .docx），不依赖 Office。
+Word 仍走 ``html_docx``（HTML 母版 ``app/templates/village_announcement.html``
+→ .docx），不依赖 Office。
 """
 
 from __future__ import annotations
 
 import re
+import calendar
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
+from jinja2 import Environment, FileSystemLoader
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -31,16 +36,12 @@ DOCX_MEDIA_TYPE = (
 
 _UNSAFE_FILENAME = re.compile(r'[\\/:*?"<>|]')
 
-#: 与 CS 版样张一致的页面与正文样式。
-_PAGE_CSS = """
-@page { size: A4; margin: 32mm 26mm; }
-body { font-family: SimSun, "宋体", serif; font-size: 16pt; line-height: 2; color: #000; }
-h1 { font-family: SimHei, "黑体", sans-serif; font-size: 22pt; font-weight: bold;
-     text-align: center; line-height: 1.5; margin: 0 0 30pt; }
-p.body { text-indent: 2em; text-align: justify; margin: 0 0 12pt; }
-p.gap { margin: 0 0 48pt; }
-p.sign { text-align: right; text-indent: 0; margin: 0 0 4pt; }
-"""
+#: 版式统一收敛到打印模板（2026-11-12：原先内联手搓 HTML 不走母版，
+#: @page/.page 几何、行距、text-indent 全部被 html_docx 丢弃，样式怪异）。
+_TEMPLATE = Environment(
+    loader=FileSystemLoader(str(Path(__file__).resolve().parent.parent / "templates")),
+    autoescape=False,
+).get_template("village_announcement.html")
 
 
 def _text(value) -> str:
@@ -53,6 +54,36 @@ def _region_parts(full_name: str) -> list[str]:
 
 def _chinese_date(value: date) -> str:
     return f"{value.year} 年 {value.month} 月 {value.day} 日"
+
+
+def _compact_date(value: date) -> str:
+    return f"{value.year}年{value.month}月{value.day}日"
+
+
+def _add_months(value: date, months: int) -> date:
+    """加 N 个月，月末溢出自动收敛（1 月 31 日 + 1 月 → 2 月末）。"""
+    index = value.month - 1 + months
+    year = value.year + index // 12
+    month = index % 12 + 1
+    last_day = calendar.monthrange(year, month)[1]
+    return date(year, month, min(value.day, last_day))
+
+
+def _ends_with_committee(text: str) -> bool:
+    """区域名是否已自带「委员会 / 村委会 / 委会」类后缀。"""
+    return text.endswith(("委员会", "村委会", "委会"))
+
+
+def _with_committee(village_name: str) -> str:
+    """盖章单位：区域名已带委员会后缀则原样用，否则补「村委会」。
+
+    区域表村级的 name 存的是「XX村村民委员会」这类全称（相对名口径），
+    直接拼「村委会」会出现「XX村村民委员会村委会」。
+    """
+    name = village_name.strip()
+    if _ends_with_committee(name):
+        return name
+    return f"{name}村委会"
 
 
 class VillageAnnouncementExportService:
@@ -91,7 +122,7 @@ class VillageAnnouncementExportService:
             (part for part in full_parts if part.endswith(("镇", "乡", "街道"))), ""
         )
         village_display = f"{county}{town}{village_name}"
-        stamp_unit = f"{village_name}村委会"
+        stamp_unit = _with_committee(village_name)
         unit_name = (
             group_region.name if group_region is not None else name
         )
@@ -99,6 +130,11 @@ class VillageAnnouncementExportService:
         for prefix in (county, town):
             if prefix and group_short.startswith(prefix):
                 group_short = group_short[len(prefix):]
+        address_display = (
+            village_display
+            if _ends_with_committee(village_display)
+            else f"{village_display}委会"
+        )
         return {
             "code": code,
             "tenantCode": tenant_code or "",
@@ -107,7 +143,7 @@ class VillageAnnouncementExportService:
             "unitName": unit_name,
             "groupName": group_short or name,
             "stampUnit": stamp_unit,
-            "requestAddress": f"{stamp_unit}(地址:{village_display}委会)",
+            "requestAddress": f"{stamp_unit}(地址:{address_display})",
         }
 
     def defaults(self, db: Session, code: str) -> dict:
@@ -117,7 +153,7 @@ class VillageAnnouncementExportService:
         return {
             **meta,
             "announceDate": today.isoformat(),
-            "endDate": today.isoformat(),
+            "endDate": _add_months(today, 1).isoformat(),
         }
 
     def export(
@@ -166,14 +202,17 @@ class VillageAnnouncementExportService:
         unit_name = meta["unitName"]
         group_name = meta["groupName"]
         stamp = stamp_unit.strip()
-        body = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>{_PAGE_CSS}</style></head><body><div class="page">
-<h1>{unit_name}农村土地承包经营权确权登记颁证第一轮公示公告</h1>
-<p class="body">{unit_name}农村土地承包经营权确权登记资料已经我村民小组审核完毕，现予以公示公告。我村民小组共计 {households} 户，共计宗地 {parcels} 块，总面积 {area_text} 亩。详见{group_name}农村土地承包权经营权调查信息公示表和公示图。</p>
-<p class="body">对公示内容有异议的单位或个人，请于 {_chinese_date(end_date)}前，以书面形式向{address.strip()}提出申请，逾期没有提出异议的，将按公示内容予以确认。</p>
-<p class="gap">&nbsp;</p>
-<p class="sign">{stamp}（盖章）</p>
-<p class="sign">{_chinese_date(announce_date)}</p>
-</div></body></html>"""
+        body = _TEMPLATE.render(
+            unit_name=unit_name,
+            group_name=group_name,
+            stamp_unit=stamp,
+            address=address.strip(),
+            households=households,
+            parcels=parcels,
+            area_text=area_text,
+            end_date_cn=_chinese_date(end_date),
+            announce_date_cn=_compact_date(announce_date),
+        )
         content = html_docx.build_docx(body)
         filename = _UNSAFE_FILENAME.sub(
             "_", f"{group_name}农村土地承包经营权村组公示公告.docx"

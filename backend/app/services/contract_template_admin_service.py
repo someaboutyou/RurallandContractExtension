@@ -45,6 +45,13 @@ class ContractTemplateAdminService:
                 "group": "公示签字表",
                 "note": "村组（发包方）基本情况公示表：发包方信息、调查记事、调查员与审核意见。版式取自 CS 版数据导出样张。",
             },
+            "village-announcement": {
+                "name": "村组公告表模板",
+                "filename": "village_announcement.html",
+                "group": "公示签字表",
+                "blank_filename": "村组公示公告.docx",
+                "note": "村组（发包方）第一轮公示公告：户数 / 宗地块数 / 总面积按调查成果自动统计，公告与截止日期由导出对话框传入。版式复刻甲方样张（2026-11-12 收敛到母版）。",
+            },
             "cadastral-survey": {
                 "name": "地籍调查表模板（全册）",
                 "filename": "cadastral_survey.html",
@@ -384,7 +391,24 @@ class ContractTemplateAdminService:
             **_sample_sheet_context(),
             # ── 村组公示签字表预览样例（值一律脱敏，禁止真实个人信息） ──
             **_sample_publicity_context(),
+            # ── 村组公告表预览样例（键与 village_announcement_export_service 同源） ──
+            **_sample_announcement_context(),
         }
+
+
+def _sample_announcement_context() -> dict:
+    """村组公告表预览样例（2026-11-12 与导出上下文同键，值脱敏）。"""
+    return {
+        "unit_name": "示范县样例镇样例村村民委员会",
+        "group_name": "样例村第一村民小组",
+        "stamp_unit": "样例村村民委员会",
+        "address": "样例村村民委员会(地址:示范县样例镇样例村村委会)",
+        "households": 89,
+        "parcels": 594,
+        "area_text": "729.13",
+        "end_date_cn": "2026 年 12 月 12 日",
+        "announce_date_cn": "2026年11月12日",
+    }
 
 
 def _sample_sheet_context() -> dict:

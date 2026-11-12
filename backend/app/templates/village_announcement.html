@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>村组公示公告</title>
+<style>
+  /* 《村组公示公告》母版 —— 版式复刻自甲方样张
+     datas/发包方/泗洪县青阳镇宏伟居一组农村土地承包经营权确权登记颁证第一轮公示公告.docx：
+     A4 纵向，页边距上下 25.4mm、左右 31.75mm（pgMar 1440/1800 twips）；
+     标题方正小标宋 22pt 加粗居中，行距固定 35pt（line 700 exact）；
+     正文仿宋 16pt，首行缩进 640 twips ≈ 11.3mm（2 字符），
+     第一段 1.5 倍行距（line 360 auto）、第二段固定 33pt（line 660 exact）；
+     落款右对齐，盖章单位 16pt、日期 18pt。
+     注：样张里的「方正仿宋_GBK / 华文仿宋」未登记进 html_docx.FONT_ALIASES
+     （整条字体栈会被跳过），统一落到已登记的仿宋_GB2312。
+     标题用华文中宋（Office 标配、字形最接近小标宋）：方正小标宋_GBK / 简体
+     目标机普遍未装，Word 缺字回退会抽到楷体系（2026-11-12 实测怪异），
+     所以标题栈首固定华文中宋，方正小标宋仅作后备登记名。 */
+  @page { size: A4 portrait; margin: 0; }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    color: #000;
+    background: #f2f3f5;
+    font-family: "仿宋_GB2312", "仿宋", "FangSong", "SimSun", serif;
+    font-size: 16pt;
+  }
+
+  .page {
+    width: 210mm;
+    height: 297mm;
+    margin: 0 auto;
+    padding: 25.4mm 31.75mm;
+    background: #fff;
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .page:last-child { page-break-after: auto; break-after: auto; }
+
+  .title {
+    margin: 12mm 0 8mm 0;
+    text-align: center;
+    font-family: "华文中宋", "方正小标宋简体", "SimHei", "黑体", serif;
+    font-size: 22pt;
+    font-weight: bold;
+    line-height: 35pt;
+  }
+
+  .body1 {
+    margin: 0;
+    font-size: 16pt;
+    line-height: 1.5;
+    text-indent: 11.3mm;
+  }
+
+  .body2 {
+    margin: 2.8mm 0 0 0;
+    font-size: 16pt;
+    line-height: 33pt;
+    text-indent: 11.3mm;
+  }
+
+  /* 落款前的空档：样张为两个空行（约 16mm），此处 8mm 段前 + 空行本身 */
+  .gap { margin: 8mm 0 0 0; }
+
+  .sign {
+    margin: 0;
+    text-align: right;
+    font-size: 18pt;
+    line-height: 1.5;
+  }
+
+  .sign-unit { font-size: 16pt; }
+</style>
+</head>
+<body>
+<section class="page">
+  <p class="title">{{ unit_name }}农村土地承包经营权确权登记颁证第一轮公示公告</p>
+  <p class="body1">{{ unit_name }}农村土地承包经营权确权登记资料已经我村民小组审核完毕，现予以公示公告。我村民小组共计 {{ households }} 户，共计宗地 {{ parcels }} 块，总面积 {{ area_text }} 亩。详见{{ group_name }}农村土地承包权经营权调查信息公示表和公示图。</p>
+  <p class="body2">对公示内容有异议的单位或个人，请于 {{ end_date_cn }}前，以书面形式向{{ address }}提出申请，逾期没有提出异议的，将按公示内容予以确认。</p>
+  <p class="gap">&nbsp;</p>
+  <p class="sign sign-unit">{{ stamp_unit }}（盖章）</p>
+  <p class="sign">{{ announce_date_cn }}</p>
+</section>
+</body>
+</html>

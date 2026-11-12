@@ -253,15 +253,16 @@ class VillagePublicityExportService:
         # 行 1：单位 / 公示期（导出日 ~ 次年同日，与 CS 版口径一致）
         issuer_name = _text(fbf.fbfmc) or fbfbm
         ws.write_merge(1, 1, 0, 3, f"单位:  {issuer_name}", st(left=True))
-        ws.write_merge(1, 1, 4, NCOLS - 1, f"日期：{period[0]}-{period[1]}", st(left=True))
-        # 行 2/3：两级表头
+        ws.write_merge(1, 1, 4, NCOLS - 1, f"日期：{period[0]}-{period[1]}", st())
+        # 行 2/3：两级表头。除四至 4 列（27-30 主表头横跨、子表头分列）外，
+        # 其余表头单元格纵向合并 2-3 两行。
         ws.row(2).height_mismatch = True
         ws.row(2).height = 20 * 24
         for c, label in enumerate(HEADERS):
             if c == 27:
                 ws.write_merge(2, 2, 27, 30, "四至", st(bold=True, wrap=True))
             elif label is not None:
-                ws.write(2, c, label, st(bold=True, wrap=True))
+                ws.write_merge(2, 3, c, c, label, st(bold=True, wrap=True))
         for i, label in enumerate(SUB_HEADERS_EWSN):
             ws.write(3, 27 + i, label, st(bold=True))
 
