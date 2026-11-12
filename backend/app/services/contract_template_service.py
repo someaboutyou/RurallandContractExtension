@@ -1040,15 +1040,12 @@ class ContractTemplateService:
             "head_phone": getattr(source, "lxdh", "") or "",
             "address": getattr(source, "fbfdz", "") or "",
             "postcode": getattr(source, "yzbm", "") or "",
-            "survey_note": _cadastral_survey_note(
-                getattr(source, "fbfdcjs", None),
-                getattr(source, "fbfdcy", None),
-                survey_date,
-                include_change=False,
-            ),
-            "audit_note": "合格。",
-            "auditor": getattr(source, "fbfdcy", "") or "",
-            "audit_date_text": _fmt_date_cn(survey_date),
+            "survey_note": getattr(source, "fbfdcjs", None) or "",
+            # 调查记事只放记事正文；调查员/调查日期单独成行（与纸质模板一致）
+            "surveyor": getattr(source, "fbfdcy", "") or "",
+            "survey_date_text": _fmt_date_cn(survey_date),
+            # 审核人/审核日期/审核意见取 Fbf 基表真实数据（shr/shrq/shyj），不造默认值
+            **_issuer_audit_fields(db, fbfbm, source),
         }
         packet = {"issuer": issuer, "contractor": {}, "parcels": []}
         return (
@@ -1177,15 +1174,11 @@ class ContractTemplateService:
                 "head_phone": getattr(issuer, "lxdh", "") or "",
                 "address": getattr(issuer, "fbfdz", "") or "",
                 "postcode": getattr(issuer, "yzbm", "") or "",
-                "survey_note": _cadastral_survey_note(
-                    getattr(issuer, "fbfdcjs", None),
-                    getattr(issuer, "fbfdcy", None),
-                    getattr(issuer, "fbfdcrq", None),
-                    include_change=False,
-                ),
-                "audit_note": "合格。",
-                "auditor": getattr(issuer, "fbfdcy", "") or "",
-                "audit_date_text": _fmt_date_cn(getattr(issuer, "fbfdcrq", None)),
+                "survey_note": getattr(issuer, "fbfdcjs", None) or "",
+                "surveyor": getattr(issuer, "fbfdcy", "") or "",
+                "survey_date_text": _fmt_date_cn(getattr(issuer, "fbfdcrq", None)),
+                # 审核人/审核日期/审核意见取 Fbf 基表真实数据，不造默认值
+                **_issuer_audit_fields(db, issuer_fbfbm, issuer),
             },
             "contractor": {
                 "name": contractor.cbfmc if contractor else "",
@@ -1485,6 +1478,24 @@ def _dictionary_map(db: Session, dict_type: str) -> dict[str, str]:
         .order_by(DictionaryItem.sort_order.asc(), DictionaryItem.item_value.asc())
     ).all()
     return {value: name for value, name in rows if value}
+
+
+def _issuer_audit_fields(db: Session, fbfbm: str | None, source) -> dict:
+    """发包方审核三字段：审核人(shr)/审核日期(shrq)/审核意见(shyj)。
+
+    这三列只存在 Fbf 基表；调查快照 SurveyFbfResult 没有对应列，
+    source 是快照行时回查基表，两边都取不到就留空——
+    导出文档里审核意见为空就空着，不造「合格。」之类的默认值。
+    """
+    fbf = source if isinstance(source, Fbf) else (
+        _one(db, select(Fbf).where(Fbf.fbfbm == fbfbm)) if fbfbm else None
+    )
+    src = fbf or source
+    return {
+        "audit_note": getattr(src, "shyj", None) or "",
+        "auditor": getattr(src, "shr", None) or "",
+        "audit_date_text": _fmt_date_cn(getattr(src, "shrq", None)),
+    }
 
 
 def _cadastral_survey_note(

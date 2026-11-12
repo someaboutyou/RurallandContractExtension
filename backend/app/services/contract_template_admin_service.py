@@ -733,7 +733,9 @@ def _sample_cadastral_packet(parcels: list[dict], family_members: list[dict]) ->
             "head_phone": "137****8699",
             "address": "××省××市××县××镇××村",
             "postcode": "000000",
-            "survey_note": "调查员：刘某（签字并摁手印）\n日期：2026年2月9日",
+            "survey_note": "经调查该发包方基本情况属实，四至界线清晰无争议。",
+            "surveyor": "刘某",
+            "survey_date_text": "2026年02月09日",
             "audit_note": "合格。",
             "auditor": "刘某",
             "audit_date_text": "2026年02月09日",
@@ -859,6 +861,7 @@ def _blank_cadastral_packet() -> dict:
             "name": "", "code": "", "head": "", "head_id_type": "",
             "head_id_no": "", "head_phone": "", "address": "", "postcode": "",
             "survey_note": "", "audit_note": "", "auditor": "", "audit_date_text": "",
+            "surveyor": "", "survey_date_text": "",
         },
         "contractor": {
             "name": "", "code": "", "groupName": "", "short_code": "",
