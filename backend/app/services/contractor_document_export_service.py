@@ -92,15 +92,46 @@ p.plain { text-indent: 0; }
 .date { margin-top: 12pt; text-align: right; }
 """
 
+#: 测绘申请书：版式对齐空白母版 survey_application.html
+#: （A4，25.4/31.75mm；标题黑体 24pt；正文仿宋 14pt，行距 25pt）。
+_APPLICATION_CSS = """
+@page { size: A4 portrait; margin: 0; }
+html, body { margin: 0; padding: 0; color: #000; background: #fff; }
+body { font-family: "仿宋_GB2312", "仿宋", "FangSong", "SimSun", "宋体", serif; font-size: 14pt; line-height: 25pt; }
+.page { width: 210mm; height: 297mm; margin: 0 auto; padding: 25.4mm 31.75mm; background: #fff; }
+.title { margin: 0 0 12.7mm 0; text-align: center; font-family: "SimHei", "黑体", serif; font-size: 24pt; line-height: 36pt; }
+.body { margin: 0; font-size: 14pt; line-height: 25pt; }
+.indent { text-indent: 9.9mm; }
+.addressee { text-indent: 0; font-weight: bold; }
+.sign-name { text-indent: 56.8mm; }
+.sign-date { text-indent: 51.9mm; }
+"""
+#: （A4，上下 25.4mm、左右 31.75mm；标题宋体 24pt 加粗；正文仿宋/宋体 16pt，1.5 倍行距）。
+_DECLARATION_CSS = """
+@page { size: A4 portrait; margin: 0; }
+html, body { margin: 0; padding: 0; color: #000; background: #fff; }
+body { font-family: "仿宋", "FangSong", "仿宋_GB2312", "SimSun", "宋体", serif; font-size: 16pt; line-height: 1.5; }
+.page { width: 210mm; height: 297mm; margin: 0 auto; padding: 25.4mm 31.75mm; background: #fff; }
+.title { margin: 0; text-align: center; font-family: "SimSun", "宋体", serif; font-size: 24pt; font-weight: bold; line-height: 1.5; }
+.body { margin: 0; font-size: 16pt; line-height: 1.5; text-indent: 11.3mm; }
+.body.first { margin-top: 10.6mm; }
+.fill { text-decoration: underline; }
+.box { font-family: "MS Gothic", "Segoe UI Symbol", "SimSun", "宋体", serif; }
+.sign { margin: 0; font-size: 16pt; line-height: 1.5; text-indent: 66mm; }
+.sign.small { font-size: 14pt; }
+.sign-date { margin: 0; font-size: 16pt; line-height: 1.5; text-indent: 74mm; }
+.sign-date.small { font-size: 14pt; text-indent: 66mm; }
+"""
+
 
 def _esc(value) -> str:
     return html.escape(str(value if value is not None else ""))
 
 
-def _wrap_html(body: str) -> str:
+def _wrap_html(body: str, page_css: str = _PAGE_CSS) -> str:
     return (
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
-        f"<style>{_PAGE_CSS}</style></head><body>"
+        f"<style>{page_css}</style></head><body>"
         f"<div class=\"page\">{body}</div>"
         "</body></html>"
     )
@@ -444,6 +475,11 @@ class ContractorDocumentExportService:
         member_count = len(members) or int(result.get("memberCount") or 0)
         region_name = batch.region_name or result.get("groupRegionName") or ""
         parts = _region_parts(region_name)
+        # 承包方所属组全称（省/市/县/镇/村/组）用于声明书「系 XX 村民」；
+        # 批次 region_name 往往只到镇，直接取末段会变成「达康镇村民」。
+        group_region_name = result.get("groupRegionName") or region_name
+        group_parts = _region_parts(group_region_name)
+        declaration_parts = group_parts if len(group_parts) >= 3 else parts
 
         public_date = result.get("publicNoticeReviewDate")
         try:
@@ -461,7 +497,9 @@ class ContractorDocumentExportService:
             "address": result.get("address") or "",
             "phone": result.get("mobile") or "",
             "region_name": region_name,
-            "short_region_name": parts[-1] if parts else region_name,
+            # 声明书正文里的「配合办理 XXX」取省+市+县，不带镇/村/组
+            "declaration_region": "".join(declaration_parts[:3]),
+            "short_region_name": group_parts[-1] if group_parts else region_name,
             "town": _pick_town(region_name),
             "member_names": member_names,
             "member_count": member_count,
@@ -487,57 +525,71 @@ class ContractorDocumentExportService:
     @staticmethod
     def _render_householder(ctx: dict) -> str:
         body = f"""
-<h1>户主声明书</h1>
-<p>声明人：{_esc(ctx['name'])}，性别：{_esc(ctx['gender'])}，系 {_esc(ctx['short_region_name'])} 村民，身份证号码：{_esc(ctx['id_no'])}。</p>
-<p>为配合办理 {_esc(ctx['region_name'])} 第二轮土地承包到期后再延长30年的相关事宜，本人作如下声明：</p>
-<p>1、我户有家庭成员：{_esc(ctx['member_names'])}，共计 {_esc(ctx['member_count'])} 人；</p>
-<p>2、本人有权代表本户所涉及的全部家庭成员在本次第二轮土地承包到期后再延长30年过程中签收相关法律文书；</p>
-<p>3、本人有权委托他人办理前述两条事宜。</p>
-<p>前述声明内容是家庭全体成员自愿、真实的意思表示，本人承诺对此承担法律责任。本声明不可撤销，自签字时生效。</p>
-<p class="plain">特此声明</p>
-<div class="sign">声明人（签字摁印）：<br><br>{ctx['year']} 年 {ctx['month']} 月 {ctx['day']} 日</div>
+<div class="declaration">
+<p class="title">第二轮土地承包到期后再延长三十年</p>
+<p class="title">户主声明书</p>
+<p class="body first">声明人：<span class="fill">{_esc(ctx['name'])}</span>，性别<span class="fill">{_esc(ctx['gender'])}</span>，系<span class="fill">{_esc(ctx['short_region_name'])}</span>村民，身份证号码：<span class="fill">{_esc(ctx['id_no'])}</span>。</p>
+<p class="body">为配合办理<span class="fill">{_esc(ctx['declaration_region'])}</span>第二轮土地承包到期后再延长 30 年的相关事宜，本人作如下声明：</p>
+<p class="body">1、我户有家庭成员：<span class="fill">{_esc(ctx['member_names'])}</span>，共计<span class="fill">{_esc(ctx['member_count'])}</span>人；</p>
+<p class="body">2、本人有权代表本户所涉及的全部家庭成员在本次第二轮土地承包到期后再延长 30 年过程中签收相关法律文书；</p>
+<p class="body">3、本人有权委托他人办理前述两条事宜。</p>
+<p class="body">前述声明内容是家庭全体成员自愿、真实的意思表示，本人承诺对此承担法律责任。本声明不可撤销，自签字时生效。</p>
+<p class="body">特此声明</p>
+<p class="sign" style="margin-top:21.2mm;">声明人（签字摁印）：</p>
+<p class="sign-date">{ctx['year']} 年 {ctx['month']} 月 {ctx['day']} 日</p>
+</div>
 """
-        return _wrap_html(body)
+        return _wrap_html(body, page_css=_DECLARATION_CSS)
 
     @staticmethod
     def _render_authorization(ctx: dict) -> str:
         body = f"""
-<h1>户主委托书</h1>
-<p>委托人：{_esc(ctx['name'])}　性别：{_esc(ctx['gender'])}　年龄：{_esc(ctx['age'])}　身份证号码：{_esc(ctx['id_no'])}　承包地地址：{_esc(ctx['address'])}，联系电话：{_esc(ctx['phone'])}。</p>
-<p>代理人：____________　与委托人关系：____________　性别：______　年龄：______　身份证号码：________________________</p>
-<p>住址：____________________________________　联系电话：________________</p>
-<p>因委托人（□外出/□身体欠佳/□文化水平有限/□其他原因________________），特委托____________作为我在办理第二轮土地承包到期后再延长30年事宜中的代理人，其代理权限如下：</p>
-<p>1、代表委托人在《农村土地（耕地）承包合同（家庭承包方式）》上签字。</p>
-<p>2、代表委托人在本次第二轮土地承包到期后再延长30年过程中签收相关法律文书。</p>
-<div class="sign">委托人（签字按印）：<br><br>{ctx['year']} 年 {ctx['month']} 月 {ctx['day']} 日</div>
+<div class="declaration">
+<p class="title">第二轮土地承包到期后再延长三十年</p>
+<p class="title">户主委托书</p>
+<p class="body first">委托人：<span class="fill">{_esc(ctx['name'])}</span> 性别：<span class="fill">{_esc(ctx['gender'])}</span> 年龄：<span class="fill">{_esc(ctx['age'])}</span> 身份证号码：<span class="fill">{_esc(ctx['id_no'])}</span> 承包地地址：<span class="fill">{_esc(ctx['address'])}</span>，联系电话：<span class="fill">{_esc(ctx['phone'])}</span>。</p>
+<p class="body">代理人：<span class="fill" style="min-width:25mm">　　　　</span> 与委托人关系：<span class="fill" style="min-width:25mm">　　　　</span> 性别：<span class="fill" style="min-width:10mm">　　</span> 年龄：<span class="fill" style="min-width:15mm">　　　</span> 身份证号码：<span class="fill" style="min-width:45mm">　　　　　　　　　　　　</span></p>
+<p class="body">住址：<span class="fill" style="min-width:50mm">　　　　　　　　　　</span> 联系电话：<span class="fill" style="min-width:30mm">　　　　　　　</span>。</p>
+<p class="body">因委托人（<span class="box">□</span>外出/<span class="box">□</span>身体欠佳/<span class="box">□</span>文化水平有限/<span class="box">□</span>其他原因<span class="fill" style="min-width:25mm">　　　　</span>），特委托<span class="fill" style="min-width:25mm">　　　　</span>作为我在办理第二轮土地承包到期后再延长 30 年事宜中的代理人，其代理权限如下：</p>
+<p class="body">1、代表委托人在《农村土地（耕地）承包合同（家庭承包方式）》上签字。</p>
+<p class="body">2、代表委托人在本次第二轮土地承包到期后再延长 30 年过程中签收相关法律文书。</p>
+<p class="sign small" style="margin-top:10.6mm;">委托人（签字按印）：</p>
+<p class="sign-date small">委托日期：　　　年　　月　　日</p>
+</div>
 """
-        return _wrap_html(body)
+        return _wrap_html(body, page_css=_DECLARATION_CSS)
 
     @staticmethod
     def _render_no_objection(ctx: dict) -> str:
         body = f"""
-<h1>公示无异议声明书</h1>
-<p>本人 {_esc(ctx['name'])} 系 {_esc(ctx['short_region_name'])} 村民，性别：{_esc(ctx['gender'])}，身份证号：{_esc(ctx['id_no'])}。</p>
-<p>我已对 {_esc(ctx['region_name'])} 于 {ctx['public_year']} 年 {ctx['public_month']} 月 {ctx['public_day']} 日就农村土地承包经营权确权登记公示结果进行了认真核实，经全体家庭成员确认，特作如下声明：</p>
-<p>户主（权利人）签字无异议；</p>
-<p>本户家庭成员人口数无异议；</p>
-<p>本户承包地田块分布位置和登记面积无异议；</p>
-<p>本户对本组公示的集体经济组织成员名单无异议。</p>
-<p class="plain">特此声明</p>
-<div class="sign">声明人：{_esc(ctx['name'])}<br><br>{ctx['year']} 年 {ctx['month']} 月 {ctx['day']} 日</div>
+<div class="declaration">
+<p class="title" style="margin-top:25.3mm;margin-bottom:2.8mm;">公示无异议声明书</p>
+<p class="body first" style="margin-top:2.8mm;">本人<span class="fill">{_esc(ctx['name'])}</span>系<span class="fill">{_esc(ctx['short_region_name'])}</span>村民，性别：<span class="fill">{_esc(ctx['gender'])}</span>，身份证号：<span class="fill">{_esc(ctx['id_no'])}</span></p>
+<p class="body">我已对<span class="fill">{_esc(ctx['short_region_name'])}</span>于<span class="fill">{ctx['public_year']}</span>年<span class="fill">{ctx['public_month']}</span>月<span class="fill">{ctx['public_day']}</span>日就农村土地承包经营权确权登记公示结果进行了认真核实，经全体家庭成员确认，特作如下声明：</p>
+<p class="body">1、户主（权利人）签字无异议；</p>
+<p class="body">2、本户家庭成员人口数无异议；</p>
+<p class="body">3、本户承包地田块分布位置和登记面积无异议；</p>
+<p class="body">4、本户对本组公示的集体经济组织成员名单无异议。</p>
+<p class="body" style="margin-top:15mm;">特此声明</p>
+<p class="sign" style="margin-top:10.6mm;text-indent:91.2mm;">声明人：<span class="fill">{_esc(ctx['name'])}</span></p>
+<p class="sign-date" style="text-indent:104mm;">　　　年　　月　　日</p>
+</div>
 """
-        return _wrap_html(body)
+        return _wrap_html(body, page_css=_DECLARATION_CSS)
 
     @staticmethod
     def _render_survey_application(ctx: dict) -> str:
         body = f"""
-<h1>测 绘 申 请 书</h1>
-<p class="plain">{_esc(ctx['town'])}人民政府：</p>
-<p>在农村土地承包经营权确权登记工作中，为办理农村土地相关权证，经我户所有家庭成员一致商定同意，自愿申请由农村土地承包经营权确权登记工作的相关测绘作业单位或队伍按照有关规定和程序，对我户相关宗地的权利人、四至、面积进行调查和测绘，并对测绘结果进行认定。</p>
-<p class="plain">特此申请</p>
-<div class="sign">申请人（户主）：{_esc(ctx['name'])}<br><br>{ctx['year']} 年 {ctx['month']} 月 {ctx['day']} 日</div>
+<div class="application">
+<p class="title">测 绘 申 请 书</p>
+<p class="body addressee">{_esc(ctx['town'])}人民政府：</p>
+<p class="body indent" style="margin-top:8.8mm;">在农村土地承包经营权确权登记工作中，为办理农村土地相关权证，经我户所有家庭成员一致商定同意，自愿申请由农村土地承包经营权确权登记工作的相关测绘作业单位或队伍按照有关规定和程序，对我户相关宗地的权利人、四至、面积进行调查和测绘，并对测绘结果进行认定。</p>
+<p class="body indent" style="margin-top:17.6mm;">特此申请</p>
+<p class="body sign-name" style="margin-top:26.4mm;">申请人（户主）： {_esc(ctx['name'])}</p>
+<p class="body sign-date" style="margin-top:8.8mm;">时间： {ctx['year']} 年 {ctx['month']} 月 {ctx['day']} 日</p>
+</div>
 """
-        return _wrap_html(body)
+        return _wrap_html(body, page_css=_APPLICATION_CSS)
 
 
 contractor_document_export_service = ContractorDocumentExportService()

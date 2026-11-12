@@ -226,7 +226,20 @@
   .h-508 { height: 5.08mm; }
   .h-550 { height: 5.50mm; }
   .h-6257 { height: 62.57mm; }
+  .h-5507 { height: 55.07mm; }
   .h-2974 { height: 29.74mm; }
+  .h-2224 { height: 22.24mm; }
+
+  /* 承包方调查表：调查记事/审核意见的签字行（与正文同一单元格，
+     不画中间横线；左调查员/审核人、右日期）。 */
+  .t-contractor .note-sign {
+    padding: 0 3mm;
+    vertical-align: middle;
+    line-height: 1.9;
+  }
+  .t-contractor .note-sign-right {
+    text-align: right;
+  }
 
   /* ── 承包地块调查表（合计 265.62mm，24 列） ────────── */
   .t-parcel {
@@ -592,15 +605,21 @@
       <td colspan="2"></td><td></td><td colspan="2"></td><td colspan="3"></td>
     </tr>
     {% endfor %}
-    <tr class="h-6257">
-      <td class="lbl">调查<br>记事</td>
-      <td class="note" colspan="7">{{ contractor.survey_note }}</td>
+    <tr class="h-5507">
+      <td class="lbl" rowspan="2">调查<br>记事</td>
+      <td class="note" colspan="7" style="border-bottom:none">{{ contractor.survey_note }}</td>
     </tr>
-    <tr class="h-2974">
-      <td class="lbl">审核<br>意见</td>
-      <td class="note" colspan="7">{% if contractor.audit_note %}{{ contractor.audit_note }}
-{% endif %}审核人：{{ contractor.auditor }}
-日期：{{ contractor.audit_date_text or '　　　　年　　月　　日' }}</td>
+    <tr class="h-750">
+      <td class="note-sign" colspan="4" style="border-top:none;border-right:none">调查员：{{ contractor.surveyor }}</td>
+      <td class="note-sign note-sign-right" colspan="3" style="border-top:none;border-left:none">日期：{{ contractor.survey_date_text or '　　　　年　　月　　日' }}</td>
+    </tr>
+    <tr class="h-2224">
+      <td class="lbl" rowspan="2">审核<br>意见</td>
+      <td class="note" colspan="7" style="border-bottom:none">{{ contractor.audit_note }}</td>
+    </tr>
+    <tr class="h-750">
+      <td class="note-sign" colspan="4" style="border-top:none;border-right:none">审核人：{{ contractor.auditor }}</td>
+      <td class="note-sign note-sign-right" colspan="3" style="border-top:none;border-left:none">日期：{{ contractor.audit_date_text or '　　　　年　　月　　日' }}</td>
     </tr>
   </table>
 </div>

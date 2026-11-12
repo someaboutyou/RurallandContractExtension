@@ -1211,13 +1211,10 @@ class ContractTemplateService:
                 "member_count": member_count,
                 "members": family_members,
                 "sheet_ysdm": sheet_ysdm or "",
-                "survey_note": _cadastral_survey_note(
-                    contractor.change_reason if contractor else None,
-                    contractor.cbfdcy if contractor else None,
-                    contractor.cbfdcrq if contractor else None,
-                    include_change=True,
-                ),
-                "audit_note": "合格。",
+                "survey_note": (contractor.cbfdcjs if contractor else "") or "",
+                "surveyor": (contractor.cbfdcy if contractor else "") or "",
+                "survey_date_text": _fmt_date_cn(contractor.cbfdcrq if contractor else None),
+                "audit_note": (contractor.gsjs if contractor else "") or "",
                 "auditor": (contractor.gsshr if contractor else "") or "",
                 "audit_date_text": _fmt_date_cn(contractor.gsshrq if contractor else None),
             },
@@ -1496,23 +1493,6 @@ def _issuer_audit_fields(db: Session, fbfbm: str | None, source) -> dict:
         "auditor": getattr(src, "shr", None) or "",
         "audit_date_text": _fmt_date_cn(getattr(src, "shrq", None)),
     }
-
-
-def _cadastral_survey_note(
-    detail: str | None, surveyor: str | None, survey_date, *, include_change: bool,
-) -> str:
-    """Build the 调查记事 cell text for 承包方/发包方/地块调查表."""
-    lines: list[str] = []
-    if include_change:
-        lines.append(f"承包方代表变更情况：{detail or '无变更'}")
-        lines.append("土地承包经营权权属特殊情况：无。")
-        lines.append("农户内成员分家析产、合户或家庭成员其他情况：无。")
-        lines.append("其他需要说明的情况：无。")
-    elif detail:
-        lines.append(str(detail))
-    lines.append(f"调查员：{surveyor or ''}（签字并摁手印）")
-    lines.append(f"日期：{_fmt_date_cn(survey_date) or '    年    月    日'}")
-    return "\n".join(lines)
 
 
 contract_template_service = ContractTemplateService()
