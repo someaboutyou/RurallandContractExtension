@@ -74,6 +74,7 @@ def upgrade_schema(engine: Engine) -> None:
     _drop_survey_result_batch_ids(engine)
     _migrate_legacy_cbf_tables_to_survey(engine)
     _normalize_region_scope_data(engine)
+    _cleanup_pseudo_group_regions(engine)
     _backfill_contractor_group_region_name(engine)
     _backfill_change_diff_scope(engine)
     _backfill_change_diff_field_label(engine)
@@ -765,6 +766,32 @@ def _upgrade_contractor_group_region(engine: Engine) -> None:
             )
 
 
+def _cleanup_pseudo_group_regions(engine: Engine) -> None:
+    """删除「村级发包方被误建为组」的区域行（幂等）。
+
+    发包方编码 fbfbm 前 14 位以 00 结尾是**村级**发包方（末两位组号 00 保留
+    表示村级集体经济组织），旧版 ``sync_regions_from_business_codes`` 把它建成
+    level=group 的区域行：与村节点（12 位码补零后）在导出权属单位代码表时
+    撞成同一个 14 位码，表现为每个村民委员会出现两行且名称不同
+    （2026-11-11 扎鲁特旗巨日合数据实锤）。写入侧已改为跳过（init_db），这里
+    清理存量：只删无 users/issuers 引用的伪组行；有引用的保留（导出侧
+    ``build_qs_rows_from_regions`` 会按 classify 排除，不再外溢）。
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("regions"):
+        return
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            """
+            DELETE FROM regions g
+            WHERE g.level = 'group'
+              AND g.code ~ '^\\d{12}00$'
+              AND NOT EXISTS (SELECT 1 FROM users u WHERE u.region_id = g.id)
+              AND NOT EXISTS (SELECT 1 FROM issuers i WHERE i.region_id = g.id)
+            """
+        )
+
+
 def _backfill_contractor_group_region_name(engine: Engine) -> None:
     """按 regions.full_name 回填 group_region_name（幂等）。
 
@@ -1222,6 +1249,8 @@ def _upgrade_regions(engine: Engine) -> None:
         statements.append("ALTER TABLE regions ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
     if "remark" not in columns:
         statements.append("ALTER TABLE regions ADD COLUMN remark TEXT")
+    if "qs_full_name" not in columns:
+        statements.append("ALTER TABLE regions ADD COLUMN qs_full_name VARCHAR(255)")
 
     with engine.begin() as connection:
         for statement in statements:
@@ -1237,6 +1266,22 @@ def _upgrade_regions(engine: Engine) -> None:
                 ELSE tenant_code
             END
             WHERE tenant_code IS NULL
+            """
+        )
+        # qs_full_name 回填：本列引入前 regions.name 对县/镇/村存的就是代码表
+        # 全名（qs 导入覆盖过），直接取 name；排除「<码> 县域/镇级区域」等
+        # 占位名。组级行不回填（村级发包方伪组行待清理，真组行 name 是组名
+        # 而非代码表全名）。幂等：后续 qs 导入写入的值非空，不会被覆盖。
+        # ⛔ psycopg exec_driver_sql 里 % 必须写成 %%（占位符转义）。
+        connection.exec_driver_sql(
+            """
+            UPDATE regions
+            SET qs_full_name = name
+            WHERE qs_full_name IS NULL
+              AND level IN ('county', 'town', 'village')
+              AND name NOT LIKE '%%' || code || ' %%'
+              AND name NOT LIKE '%%级区域'
+              AND name NOT LIKE '%%县域'
             """
         )
 

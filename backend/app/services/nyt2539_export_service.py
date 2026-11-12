@@ -67,6 +67,9 @@ from app.models.survey import (
 from app.services.data_access_service import data_access_service
 from app.services.data_import.qs_code_table import (
     build_qs_rows_from_regions,
+    qs_code_table_filename,
+    region_display_path,
+    region_export_code,
     write_qs_code_table,
 )
 from app.services.survey.base import SurveyServiceBase
@@ -492,6 +495,11 @@ def _ensure_valid_jzd_table(scope: _Scope) -> None:
     if scope._valid_jzd_ready:
         return
     db = scope.db
+    # ⛔ 临时表是会话级，但 SQLAlchemy 是连接池：上一次导出留在池化连接上的
+    # temp 表不会"会话结束自动消失"，同连接的下一次导出 CREATE TEMP TABLE 会
+    # 撞表（EXP20261112104650831 实锤：relation "_nyt_valid_jzd" already
+    # exists）。显式限定 pg_temp schema，避免误删同名的实体表。
+    db.execute(text("DROP TABLE IF EXISTS pg_temp._nyt_valid_jzd"))
     db.execute(text(
         "CREATE TEMP TABLE _nyt_valid_jzd "
         "(jzdh VARCHAR(32), tenant_code VARCHAR(32), x NUMERIC(15,3), y NUMERIC(15,3))"
@@ -502,11 +510,32 @@ def _ensure_valid_jzd_table(scope: _Scope) -> None:
             dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
         )
     )
-    # 候选点：租户内全部界址点（18.6 万行，纯索引扫描）
+    # 候选点先按有效地块范围外扩 bbox 预筛（2026-11-12）：原实现按租户取
+    # 全部 18.6 万点逐批判定，镇/村小范围导出也要跑几分钟、进度长期停在
+    # 「准备写入图层」。点必须落在某有效地块边界容差内 ⇒ 必然落在有效地块
+    # 范围外扩容差之内，bbox 外的点可直接剔除（结果集不变）。
+    # 轴序：SurveyJzdResult.y=东坐标(geom X)、x=北坐标(geom Y)。
+    # geom 是表上的 PostGIS 裸列（模型未映射），bbox 用 literal SQL 计算。
+    bbox = db.execute(text(
+        "SELECT ST_XMin(e), ST_XMax(e), ST_YMin(e), ST_YMax(e) FROM ("
+        "SELECT ST_Expand(ST_Extent(geom), :tol) AS e FROM survey_dk_result "
+        f"WHERE dkbm IN ({valid_dkbm_sql}) AND geom IS NOT NULL"
+        ") t"
+    ), {"tol": _BOUNDARY_SNAP_TOLERANCE}).one()
+    candidate_filters = list(scope.jzd_tenant_filters)
+    if bbox[0] is not None:
+        pad = _BOUNDARY_SNAP_TOLERANCE * 10
+        candidate_filters += [
+            SurveyJzdResult.y >= float(bbox[0]) - pad,
+            SurveyJzdResult.y <= float(bbox[1]) + pad,
+            SurveyJzdResult.x >= float(bbox[2]) - pad,
+            SurveyJzdResult.x <= float(bbox[3]) + pad,
+        ]
     candidates = db.execute(
         select(SurveyJzdResult.jzdh, SurveyJzdResult.tenant_code, SurveyJzdResult.y, SurveyJzdResult.x)
-        .where(*scope.jzd_tenant_filters)
+        .where(*candidate_filters)
     ).all()
+    logger.info("nyt2539 导出界址点候选（bbox 预筛后）：%s 点", len(candidates))
     batch: list[tuple] = []
 
     def _flush(rows: list[tuple]) -> None:
@@ -546,6 +575,22 @@ def _ensure_valid_jzd_table(scope: _Scope) -> None:
     _flush(batch)
     db.execute(text("CREATE INDEX _nyt_valid_jzd_tj ON _nyt_valid_jzd (tenant_code, jzdh)"))
     scope._valid_jzd_ready = True
+
+
+def _dispose_valid_jzd_table(scope: _Scope) -> None:
+    """导出结束后清掉会话临时表（连接池里 session 不会结束，得自己收尾）。
+
+    县级导出这张表有十几万行，不清理会一直挂在池化连接上占内存。
+    清理失败不影响导出结果（下一次建表前也有 DROP IF EXISTS 兜底）。
+    """
+    try:
+        scope.db.execute(text("DROP TABLE IF EXISTS pg_temp._nyt_valid_jzd"))
+        scope.db.commit()
+    except Exception:  # noqa: BLE001 — 清理失败不影响导出产物
+        logger.warning("清理界址点临时表失败（下次建表前会再兜底删除）", exc_info=True)
+        scope.db.rollback()
+    finally:
+        scope._valid_jzd_ready = False
 
 
 def _iter_jzd(scope: _Scope, geometry_mode: str = "geojson"):
@@ -769,10 +814,24 @@ def _write_sqlite(scope: _Scope, db_path: Path, reporter=None) -> dict[str, int]
     return counts
 
 
-def _write_mdb_shp(scope: _Scope, out_dir: Path, reporter=None) -> dict[str, int]:
-    """MDB（属性表，ADO 写入）+ shp 子目录（空间层）。"""
+def _write_mdb_shp(scope: _Scope, out_dir: Path, reporter=None, file_code: str | None = None) -> dict[str, int]:
+    """权属数据（<行政区代码>.mdb）+ 矢量数据（<图层><行政区代码>.shp）。
+
+    目录结构与导入包一致（权属数据/、矢量数据/ 两个子目录）；``file_code``
+    为导出范围自身的行政区代码（县级 6 位 / 镇级 9 位 / 村级 12 位），
+    shp/mdb 文件名都带它。file_code 为空时保留旧布局（属性表.mdb +
+    shp/ 子目录），兼容 gdb/db 分支。
+    """
     counts: dict[str, int] = {}
-    mdb_path = out_dir / "属性表.mdb"
+    if file_code:
+        shp_dir = out_dir / "矢量数据"
+        mdb_path = out_dir / "权属数据" / f"{file_code}.mdb"
+    else:
+        shp_dir = out_dir / "shp"
+        mdb_path = out_dir / "属性表.mdb"
+    shp_dir.mkdir(parents=True, exist_ok=True)
+    mdb_path.parent.mkdir(parents=True, exist_ok=True)
+    shp_prefix = file_code or ""
     # 进度步序：shp 3 个空间层 + mdb 5 张属性表，合计正好 len(_ALL_LAYERS) 步
     step = {"idx": 0}
 
@@ -783,14 +842,12 @@ def _write_mdb_shp(scope: _Scope, out_dir: Path, reporter=None) -> dict[str, int
 
     # -- 空间层 → shp（批量 writerecords：逐要素 write 每条一次 GDAL 落盘调用，
     #    22 万界址线实测要分钟级；攒批后一次提交一批）
-    shp_dir = out_dir / "shp"
-    shp_dir.mkdir(parents=True, exist_ok=True)
     _ensure_proj_data()
     iters = _layer_iterators(scope, "geojson")
     for name, (geom_kind, fields) in _SPATIAL_LAYERS.items():
-        _beat(f"写入 shp/{name}")
+        _beat(f"写入矢量数据 {name}")
         schema = {"geometry": geom_kind, "properties": _fiona_props(fields)}
-        shp_path = shp_dir / f"{name}.shp"
+        shp_path = shp_dir / f"{name}{shp_prefix}.shp"
         count = 0
         with fiona.open(
             shp_path, "w", driver="ESRI Shapefile", schema=schema,
@@ -906,7 +963,10 @@ def _write_readme(
         lines.append(f"说明：SQLite 库中空间层（DK/JZD/JZX）的 GEOM 列为 WKT 文本，坐标系 {srid_display_name(_EPSG)}。")
     elif fmt_label == EXPORT_TYPE_LABELS["nyt2539_mdb_shp"]:
         lines.append("")
-        lines.append(f"说明：shp/ 目录为空间要素层（{srid_display_name(_EPSG)}）；属性表在 属性表.mdb（Access）。")
+        lines.append(
+            f"说明：矢量数据/ 目录为空间要素层（{srid_display_name(_EPSG)}）；"
+            "属性表与权属单位代码表在 权属数据/ 目录（属性表为 <行政区代码>.mdb，Access）。"
+        )
     elif fmt_label == EXPORT_TYPE_LABELS["nyt2539_gdb"]:
         lines.append("")
         lines.append(f"说明：GDB 空间要素层坐标系为 {srid_display_name(_EPSG)}。")
@@ -949,27 +1009,42 @@ def build_standard_export(
     scope = _Scope(db, region_code, current_user)
     if reporter:
         reporter.report(10, "准备写入图层…", force=True)
-    if export_type == "nyt2539_gdb":
-        product_dir = work_dir / f"{base_name}.gdb"
-        counts = _write_gdb(scope, product_dir, reporter=reporter)
-    elif export_type == "nyt2539_db":
-        product_dir = work_dir / "db"
-        product_dir.mkdir(parents=True, exist_ok=True)
-        counts = _write_sqlite(scope, product_dir / f"{base_name}.db", reporter=reporter)
-    else:
-        product_dir = work_dir / "mdb_shp"
-        product_dir.mkdir(parents=True, exist_ok=True)
-        counts = _write_mdb_shp(scope, product_dir, reporter=reporter)
+    try:
+        if export_type == "nyt2539_gdb":
+            product_dir = work_dir / f"{base_name}.gdb"
+            counts = _write_gdb(scope, product_dir, reporter=reporter)
+        elif export_type == "nyt2539_db":
+            product_dir = work_dir / "db"
+            product_dir.mkdir(parents=True, exist_ok=True)
+            counts = _write_sqlite(scope, product_dir / f"{base_name}.db", reporter=reporter)
+        else:
+            # 顶层目录 = 行政区名称（村级=县_镇_村、镇级=县_镇、县级=县），
+            # 下级「权属数据/」「矢量数据/」两个子目录与导入包一致；
+            # shp/mdb/代码表文件名统一用导出范围自身的行政区代码
+            # （县级 6 位 / 镇级 9 位 / 村级 12 位，不含权属年份）。
+            product_dir = work_dir / region_display_path(db, region_code)
+            counts = _write_mdb_shp(
+                scope, product_dir, reporter=reporter, file_code=region_export_code(region_code)
+            )
+    finally:
+        # 临时表挂在池化连接上不会自动消失（连接池 session 不结束），必须显式清
+        _dispose_valid_jzd_table(scope)
 
     if reporter:
         reporter.report(92, "打包压缩产物…", force=True)
 
     # 权属单位代码表：从区域管理表按所选区域生成（多次部分导入的区域数据
-    # 在区域表里累积，导出时合并为所选区域的完整代码表），三种格式都附带
+    # 在区域表里累积，导出时合并为所选区域的完整代码表），三种格式都附带。
+    # 文件名对齐源包「<县码><年份>权属单位代码表.xls」（2026-11-11 前
+    # 固定为「权属单位代码表.xls」，与导入包不一致）。
     qs_rows = build_qs_rows_from_regions(db, region_code)
     qs_count = 0
     if qs_rows:
-        qs_count = write_qs_code_table(product_dir / "权属单位代码表.xls", qs_rows)
+        qs_filename = qs_code_table_filename(region_code)
+        # mdb+shp 格式时代码表随 mdb 放「权属数据/」；gdb/db 格式维持根目录
+        qs_target_dir = product_dir / "权属数据" if export_type == "nyt2539_mdb_shp" else product_dir
+        qs_target_dir.mkdir(parents=True, exist_ok=True)
+        qs_count = write_qs_code_table(qs_target_dir / qs_filename, qs_rows)
 
     _write_readme(
         product_dir / "导出说明.txt", export, region_code, counts,

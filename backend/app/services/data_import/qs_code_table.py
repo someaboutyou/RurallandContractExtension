@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import select
@@ -41,6 +42,99 @@ _LEVEL_BY_BARE_LEN = {6: "county", 9: "town", 12: "village", 14: "group"}
 _LEVEL_LABELS = {"county": "县域", "town": "镇级区域", "village": "村级区域", "group": "组级区域"}
 
 _RENAME_DETAIL_CAP = 50
+
+# 父级码：镇挂县（前 6 位）、村挂镇（前 9 位）、组挂村（前 12 位）；县无表内父级
+_PARENT_CODE_OF = {"county": None, "town": lambda c: c[:6], "village": lambda c: c[:9], "group": lambda c: c[:12]}
+
+
+# ---------------------------------------------------------------------------
+# 相对名计算（下一级名称剥掉上一级名称前缀）
+# ---------------------------------------------------------------------------
+
+def _strip_county_admin_prefix(name: str) -> str:
+    """县级行的相对名：剥掉前导省级（省/自治区）与市级（市/自治州/地区/盟）段。
+
+    代码表里县名是「内蒙古省通辽市扎鲁特旗」这类全拼；表内没有省/市行可
+    依前缀剥，只能按行政通名正则逐段剥。每段剥完剩余非空才生效（防止
+    「恩施市」被整段剥空）。
+    """
+    result = name
+    for pattern in (r"^.+?(?:省|自治区)", r"^.+?(?:自治州|地区|盟|市)"):
+        match = re.match(pattern, result)
+        if match and len(match.group(0)) < len(result):
+            result = result[len(match.group(0)):]
+    return result
+
+
+# 兜底正则：表内/库内都拿不到父级全名时按行政通名剥前缀。
+# 组名优先剥「村民委员会」整段，避免「…村民委员会第一村民小组」被第一个"村"截断。
+_REGEX_STRIP_BY_LEVEL = {
+    "town": r"^.*?(?:县|市|区|旗|盟|地区|自治州)",
+    "village": r"^.*?(?:镇|乡|苏木|街道|开发区)",
+    "group": r"^.*?(?:村民委员会|村委会|村委员会|村|居|社区|嘎查|生产队)",
+}
+
+
+def _regex_relative_name(level: str, full: str) -> str:
+    pattern = _REGEX_STRIP_BY_LEVEL.get(level)
+    if not pattern:
+        return full
+    stripped = re.sub(pattern, "", full, count=1)
+    return stripped if stripped else full
+
+
+def _parent_full_name(db: Session | None, code: str, level: str, entries: dict) -> str | None:
+    """父级全名：优先取代码表内父行，取不到再查库（库内名可能是旧全名或相对名）。"""
+    get_parent_code = _PARENT_CODE_OF.get(level)
+    if get_parent_code is None:
+        return None
+    parent_code = get_parent_code(code)
+    if parent_code in entries:
+        return entries[parent_code]["full"]
+    if db is not None:
+        region = db.scalar(select(Region).where(Region.code == parent_code))
+        if region is not None and (region.name or "").strip():
+            return region.name.strip()
+    return None
+
+
+def compute_relative_names(
+    rows: list[dict],
+    db: Session | None = None,
+    scope_prefix: str | None = None,
+) -> dict[str, dict]:
+    """代码表行 → {码: {level, full, relative}}；relative 供区域表 name 用。
+
+    - full：代码表原始全名（导出侧要按它还原，存入 regions.qs_full_name）。
+    - relative：下一级名称剥掉上一级全名前缀（镇「巨日合镇」、村「双山子村
+      村民委员会」）；剥不动（父行缺失且正则不命中）时退回全名。
+    - 同码多行取首现名称（与 sync_regions_from_qs_table 的去重口径一致）。
+    """
+    entries: dict[str, dict] = {}
+    for row in rows:
+        classified = classify_qs_code(str(row.get("code") or ""))
+        if classified is None:
+            continue
+        level, code = classified
+        if scope_prefix and not code.startswith(scope_prefix):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        entries.setdefault(code, {"level": level, "full": name})
+
+    for code in sorted(entries, key=lambda c: (len(c), c)):
+        info = entries[code]
+        level, full = info["level"], info["full"]
+        parent_full = _parent_full_name(db, code, level, entries)
+        if parent_full and full.startswith(parent_full) and len(full) > len(parent_full):
+            relative = full[len(parent_full):]
+        elif level == "county":
+            relative = _strip_county_admin_prefix(full)
+        else:
+            relative = _regex_relative_name(level, full)
+        info["relative"] = relative or full
+    return entries
 
 
 # ---------------------------------------------------------------------------
@@ -155,8 +249,13 @@ def _get_or_create_region(
     level: str,
     name: str | None,
     stats: dict,
+    qs_full_name: str | None = None,
 ) -> Region:
-    """按码取区域，缺则建（父级链递归补齐；建出的占位名后续导入会被代码表覆盖）。"""
+    """按码取区域，缺则建（父级链递归补齐；建出的占位名后续导入会被代码表覆盖）。
+
+    ``name`` 存相对名（如「巨日合镇」「双山子村村民委员会」）；
+    ``qs_full_name`` 存代码表原始全名（导出权属单位代码表时还原用）。
+    """
     region = db.scalar(select(Region).where(Region.code == code))
     if region is not None:
         return region
@@ -174,6 +273,7 @@ def _get_or_create_region(
         full_name=f"{parent.full_name} / {display_name}" if parent else display_name,
         parent_id=parent.id if parent else None,
         tenant_code=code[:6] if len(code) >= 6 else None,
+        qs_full_name=(qs_full_name or "").strip() or None,
     )
     db.add(region)
     db.flush()
@@ -216,6 +316,11 @@ def _ensure_parent_region(db: Session, code: str, level: str, stats: dict) -> Re
 def sync_regions_from_qs_table(db: Session, rows: list[dict], region_code: str | None) -> dict:
     """把权属单位代码表灌进区域表：缺则补、名称以代码表为准覆盖。
 
+    名称口径（2026-11-11）：regions.name 存**相对名**——下一级名称剥掉上一级
+    全名前缀（镇「巨日合镇」、村「双山子村村民委员会」），避免区域树里层层
+    重复「内蒙古省通辽市扎鲁特旗…」；代码表原始全名存 regions.qs_full_name，
+    导出权属单位代码表时按它还原（保证导出/导入回环一致）。
+
     作用范围限定在批次县域前缀（region_code 前 6 位）内；不 commit，
     由调用方在同一事务里提交。返回统计 {total, applied, created, renamed,
     skipped, details}。
@@ -223,25 +328,20 @@ def sync_regions_from_qs_table(db: Session, rows: list[dict], region_code: str |
     scope_prefix = (region_code or "")[:6] or None
     stats: dict = {"total": len(rows), "applied": 0, "created": 0, "renamed": 0, "skipped": 0, "details": []}
 
-    # 表内去重（同名码取首个）+ 作用域过滤
-    seen: dict[str, tuple[str, str]] = {}
-    for row in rows:
-        classified = classify_qs_code(row.get("code", ""))
-        if classified is None:
-            stats["skipped"] += 1
-            continue
-        level, code = classified
-        if scope_prefix and not code.startswith(scope_prefix):
-            stats["skipped"] += 1
-            continue
-        seen.setdefault(code, (level, str(row.get("name") or "").strip()))
+    # 相对名计算（表内父行优先、库内父级兜底）+ 同码取首现
+    computed = compute_relative_names(rows, db=db, scope_prefix=scope_prefix)
+    seen: dict[str, tuple[str, str, str]] = {}
+    for code in sorted(computed, key=lambda c: (len(c), c)):
+        info = computed[code]
+        seen.setdefault(code, (info["level"], info["full"], info["relative"]))
+    stats["skipped"] = stats["total"] - len(seen)
 
     # 按码长升序处理：县 → 镇 → 村 → 组，保证父级先落库
     for code in sorted(seen, key=lambda c: (len(c), c)):
-        level, name = seen[code]
+        level, full_name, relative = seen[code]
         region = db.scalar(select(Region).where(Region.code == code))
         if region is None:
-            _get_or_create_region(db, code, level, name, stats)
+            _get_or_create_region(db, code, level, relative, stats, qs_full_name=full_name)
             stats["applied"] += 1
             continue
 
@@ -250,15 +350,20 @@ def sync_regions_from_qs_table(db: Session, rows: list[dict], region_code: str |
                 "权属单位代码表与区域表层级不一致：code=%s 表内=%s 库内=%s（名称仍以代码表为准）",
                 code, level, region.level,
             )
-        if name and region.name != name:
+        changed = False
+        if relative and region.name != relative:
             old_name = region.name
-            region.name = name
-            if region.tenant_code is None and len(code) >= 6:
-                _ensure_tenant(db, code[:6], None)
-                region.tenant_code = code[:6]
+            region.name = relative
             stats["renamed"] += 1
             if len(stats["details"]) < _RENAME_DETAIL_CAP:
-                stats["details"].append(f"{code} {old_name} → {name}")
+                stats["details"].append(f"{code} {old_name} → {relative}")
+            changed = True
+        if full_name and getattr(region, "qs_full_name", None) != full_name:
+            region.qs_full_name = full_name
+            changed = True
+        if changed and region.tenant_code is None and len(code) >= 6:
+            _ensure_tenant(db, code[:6], None)
+            region.tenant_code = code[:6]
         stats["applied"] += 1
 
     # 名称可能变了：重算镇/村/组（县级以下）的 full_name，保持层级链一致
@@ -279,11 +384,23 @@ def sync_regions_from_qs_table(db: Session, rows: list[dict], region_code: str |
 # 导出（区域表 → 代码表）
 # ---------------------------------------------------------------------------
 
+def _qs_display_name(region: Region) -> str:
+    """导出用名称：优先代码表原始全名（qs_full_name），回退区域名。"""
+    return str(getattr(region, "qs_full_name", None) or region.name or "").strip()
+
+
 def build_qs_rows_from_regions(db: Session, region_code: str | None) -> list[tuple[str, str]]:
     """按所选区域取区域子树（前缀匹配），生成 14 位补零码的 (代码, 名称) 行。
 
     多次部分导入的区域数据在此合并为所选范围的完整代码表；按补零码排序
     （县 → 镇 → 村 → 组）。
+
+    口径（2026-11-11）：
+    - 名称导出**全名**（qs_full_name 优先），与导入包回环一致；
+    - 排除「村级发包方被误建为组」的伪组行（14 位码以 00 结尾，classify 会判为
+      村级）——这类行与村节点补零后撞码，曾导致每个村民委员会导出两行且名称不同；
+    - 按补零码去重兜底（同码只留第一行，排序保证村级行在前）；
+    - 所选范围在县级以下时补上县级行，保持与原包结构一致（表首为县级行）。
     """
     code = str(region_code or "").strip()
     if not code:
@@ -291,7 +408,25 @@ def build_qs_rows_from_regions(db: Session, region_code: str | None) -> list[tup
     regions = db.scalars(
         select(Region).where(Region.code.startswith(code)).order_by(Region.code)
     ).all()
-    rows = [(pad_region_code(r.code), r.name) for r in regions]
+
+    rows: list[tuple[str, str]] = []
+    seen_padded: set[str] = set()
+
+    def _append(region: Region) -> None:
+        padded = pad_region_code(region.code)
+        if padded in seen_padded:
+            return
+        if region.level == "group" and (classify_qs_code(region.code) or "group") != "group":
+            return  # 伪组：14 位码以 00 结尾，实为村级行，避免撞码重复
+        seen_padded.add(padded)
+        rows.append((padded, _qs_display_name(region)))
+
+    if len(code) > 6:
+        county = db.scalar(select(Region).where(Region.code == code[:6], Region.level == "county"))
+        if county is not None:
+            _append(county)
+    for region in regions:
+        _append(region)
     rows.sort(key=lambda item: item[0])
     return rows
 
@@ -312,3 +447,41 @@ def write_qs_code_table(path: str | Path, rows: list[tuple[str, str]]) -> int:
         sheet.write(index, 1, name)
     workbook.save(str(path))
     return len(rows)
+
+
+def region_export_code(region_code: str | None) -> str:
+    """导出文件命名用的行政区代码（2026-11-12 起不含权属年份）。
+
+    直接取导出范围自身的代码：县级=6 位县码、镇级=9 位镇码、
+    村/委员会=12 位村码；14 位组码截断到 12 位村码。文件名形如
+    DK150526103201.shp / 150526103201.mdb / 150526103201权属单位代码表.xls。
+    """
+    code = str(region_code or "").strip()
+    if not code:
+        return "export"
+    return code[:12] if len(code) > 12 else code
+
+
+def qs_code_table_filename(region_code: str | None) -> str:
+    """权属单位代码表导出文件名：<行政区代码>权属单位代码表.xls。"""
+    return f"{region_export_code(region_code)}权属单位代码表.xls"
+
+
+def region_display_path(db: Session, region_code: str | None) -> str:
+    """行政区名称路径（县级起、下划线连接的相对名）。
+
+    村级导出 = 县_镇_村（扎鲁特旗_巨日合镇_双山子村村民委员会）、
+    镇级 = 县_镇、县级 = 县，与导出包顶层目录对齐源包习惯。名称取
+    regions.name（相对名，2026-11-11 起口径）；某级缺行则跳过。
+    """
+    code = str(region_code or "").strip()
+    parts: list[str] = []
+    for n in (6, 9, 12):
+        if len(code) < n:
+            break
+        name = db.scalar(select(Region.name).where(Region.code == code[:n]))
+        if name and name.strip():
+            parts.append(name.strip())
+    if not parts:
+        parts = [code or "export"]
+    return "_".join(parts).replace("/", "_").replace("\\", "_") or "export"

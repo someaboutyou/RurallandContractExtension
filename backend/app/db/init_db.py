@@ -1051,6 +1051,13 @@ def sync_regions_from_business_codes(db: Session) -> None:
         if not raw_group_code:
             continue
         group_code = raw_group_code[:14] if len(raw_group_code) >= 14 else None
+        # ⛔ 村级发包方（村民委员会/村集体经济组织）的 fbfbm 是 14 位且以 00 结尾
+        # （末两位组号 00 保留表示村级），它不是组：村节点已由 village_code 建。
+        # 旧版把它建成 level=group 的区域行，导出权属单位代码表时与村行（12 位码
+        # 补零）撞成同一个 14 位码，表现为每个村民委员会出现两行且名称不同
+        # （2026-11-11 扎鲁特旗巨日合数据实锤）。
+        if group_code and group_code.endswith("00"):
+            group_code = None
         village_code = raw_group_code[:12]
         county_code = village_code[:6]
         town_code = village_code[:9]

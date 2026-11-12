@@ -351,6 +351,12 @@ def resolve_group_region(db: Session, data: dict, current_user) -> tuple[str | N
         return None, None
     data_access_service.ensure_region_in_scope(current_user, code, detail="region out of scope")
     region = db.scalar(select(Region).where(Region.code == code).execution_options(skip_tenant_scope=True))
+    if region is None and len(code) == 14 and code.endswith("00"):
+        # 村级发包方码（末两位 00）：区域表只有村节点（12 位），不再建伪组行，
+        # 名称回退取村节点的 full_name，保证 group_region_name 不落空。
+        region = db.scalar(
+            select(Region).where(Region.code == code[:12]).execution_options(skip_tenant_scope=True)
+        )
     name = region.full_name if region else (data.get("group_region_name") or "")
     return code, name.strip() or None
 
