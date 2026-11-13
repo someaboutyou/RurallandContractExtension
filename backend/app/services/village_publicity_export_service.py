@@ -23,7 +23,7 @@ from decimal import Decimal
 from typing import Callable
 
 import xlwt
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.dictionary import DictionaryItem
@@ -139,15 +139,31 @@ class VillagePublicityExportService:
     def _load_contractors(self, db: Session, fbfbm: str) -> list[SurveyCbfResult]:
         """本组有效承包方（排除注销户），按编码序稳定排列。
 
+        承包方编码取两路并集：
+        - cbdkxx 关系表按 fbfbm 反查——发包方合并后划转进来的户，cbfbm 前缀
+          仍是被并方编码，前缀匹配查不到（与发包方编辑页 list_contractors
+          同源，口径一致）；
+        - cbfbm 前缀匹配——兜底无地块关系的纯户。
         同一 cbfbm 若存在多条结果行（历史/重录），按 id 取最新一条——排序为
         ``cbfbm 升序 + id 降序``，首次出现即为该户最新行。
         """
+        relation_codes = set(
+            db.scalars(
+                select(SurveyCbdkxxResult.cbfbm)
+                .where(
+                    SurveyCbdkxxResult.fbfbm == fbfbm,
+                    SurveyCbdkxxResult.cbfbm.is_not(None),
+                    SurveyCbdkxxResult.result_status != "removed",
+                )
+                .distinct()
+            )
+        )
+        code_filters = [SurveyCbfResult.cbfbm.like(f"{fbfbm}%")]
+        if relation_codes:
+            code_filters.append(SurveyCbfResult.cbfbm.in_(relation_codes))
         rows = db.execute(
             select(SurveyCbfResult)
-            .where(
-                SurveyCbfResult.cbfbm.like(f"{fbfbm}%"),
-                SurveyCbfResult.result_status != "cancelled",
-            )
+            .where(or_(*code_filters), SurveyCbfResult.result_status != "cancelled")
             .order_by(SurveyCbfResult.cbfbm.asc(), SurveyCbfResult.id.desc())
         ).scalars()
         seen: set[str] = set()
