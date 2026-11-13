@@ -1680,6 +1680,19 @@ def _html_to_pdf(html: str) -> bytes:
         return pdf_path.read_bytes()
 
 
+# 示意图只画当前有效地块：removed / split_source 是历史条目（由
+# get_survey_parcels 为列表页与撤回切割补出），画上去会与调查表的地块数/
+# 总面积对不上。口径与 contract_template_service.build_plot_sketch_data 一致。
+_SKETCH_EXCLUDED_RESULT_STATUSES = {"removed", "split_source"}
+
+
+def _sketch_visible_parcels(parcels: list[dict]) -> list[dict]:
+    return [
+        parcel for parcel in parcels
+        if parcel.get("resultStatus") not in _SKETCH_EXCLUDED_RESULT_STATUSES
+    ]
+
+
 def _safe_filename_stem(value: str) -> str:
     return "".join("_" if char in '\\/:*?"<>|' else char for char in value)
 
@@ -1698,9 +1711,9 @@ def _build_selected_sketch_html(
         .order_by(SurveyCbfResult.id.desc())
     ).first()
     data_batch_id = batch_id or 0
-    parcels = land_parcel_service.get_survey_parcels(
+    parcels = _sketch_visible_parcels(land_parcel_service.get_survey_parcels(
         db, data_batch_id, cbfbm, current_user
-    )
+    ))
     if not parcels:
         raise ValueError(f"未找到承包地块：{cbfbm}")
     if dkbms and not any((parcel.get("dkbm") or "") in dkbms for parcel in parcels):
@@ -1897,7 +1910,9 @@ def get_survey_plot_sketch_map(
     result = survey_service.get_result(db, batch_id, contractor_uid, current_user)
     cbfbm = result.get("code", "")
     data_batch_id = result.get("batchId") or batch_id
-    parcels = land_parcel_service.get_survey_parcels(db, data_batch_id, cbfbm, current_user)
+    parcels = _sketch_visible_parcels(land_parcel_service.get_survey_parcels(
+        db, data_batch_id, cbfbm, current_user
+    ))
     nearby_parcels = land_parcel_service.get_nearby_survey_parcels(db, data_batch_id, cbfbm, current_user)
     today_text = _fmt_date_cn(date.today())
     notice_reviewer = result.get("publicNoticeReviewer") or ""
