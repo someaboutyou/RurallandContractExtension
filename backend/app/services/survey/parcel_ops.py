@@ -25,6 +25,11 @@ from app.services.survey.parcel_geometry import SQM_PER_MU
 
 logger = logging.getLogger(__name__)
 
+#: 承包地块要素代码（NYT 标准，与导入数据存量口径一致，2026-11-13 修正新增地块误用县级区划码）。
+CBDK_YSDM = "211011"
+#: 地块标识码（bsm）起始值：存量从 10000000 起连续编号，新增取库内 max+1。
+BSM_START = 10000000
+
 class SurveyServiceParcelOpsMixin:
     _PARCEL_SNAPSHOT_FIELDS = (
         "parcel_uid", "tenant_code", "region_code", "bsm", "ysdm", "dkbm", "dkmc",
@@ -1208,10 +1213,23 @@ class SurveyServiceParcelOpsMixin:
         parcel_info_uid = str(uuid4())
         scmj = payload["scmj"]
 
+        # bsm（标识码）：取库内最大值 +1，空库从 BSM_START 起（2026-11-13 补齐口径）。
+        next_bsm = db.scalar(
+            select(func.max(SurveyDkResult.bsm)).where(SurveyDkResult.bsm.is_not(None))
+        )
+        next_bsm = max(int(next_bsm or 0) + 1, BSM_START)
+
+        # htmjm（合同面积·亩）：由 htmj（㎡）换算，保留 2 位，与存量导入数据口径一致。
+        htmj_value = payload.get("htmj") or scmj
+        htmjm_mu = (Decimal(str(htmj_value)) / Decimal(str(SQM_PER_MU))).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+
         # 閸掓稑缂?SurveyDkResult
         dk_result = SurveyDkResult(
             parcel_uid=parcel_uid,
-            ysdm=result.cbfbm[:6] or "000000",
+            bsm=next_bsm,
+            ysdm=CBDK_YSDM,
             dkbm=payload["dkbm"],
             dkmc=payload["dkmc"],
             syqxz=payload.get("syqxz", "10"),
@@ -1226,6 +1244,7 @@ class SurveyServiceParcelOpsMixin:
             dknz=payload.get("dknz"),
             dkbz=payload.get("dkbz"),
             dkbzxx=payload.get("dkbzxx"),
+            zjrxm=result.cbfmc,
             survey_status="surveyed",
             result_status="added",
             is_changed=True,
@@ -1250,8 +1269,10 @@ class SurveyServiceParcelOpsMixin:
             lzhtbm=payload.get("lzhtbm"),
             cbjyqzbm=payload.get("cbjyqzbm") or "",
             yhtmj=payload.get("yhtmj"),
-            htmjm=payload.get("htmjm"),
-            yhtmjm=payload.get("yhtmjm"),
+            htmjm=htmjm_mu,
+            yhtmjm=(Decimal(str(payload["yhtmj"])) / Decimal(str(SQM_PER_MU))).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            ) if payload.get("yhtmj") else None,
             sfqqqg=payload.get("sfqqqg"),
             survey_status="surveyed",
             result_status="added",
@@ -1976,6 +1997,351 @@ class SurveyServiceParcelOpsMixin:
             batch_id,
             [contractor_uid, target_result.contractor_uid],
             change_ids={contractor_uid: None, target_result.contractor_uid: None},
+        )
+        db.commit()
+        return self.get_result(db, batch_id, contractor_uid, current_user)
+
+    def transfer_parcels(
+        self, db: Session, batch_id: int, contractor_uid: str,
+        payload: dict, current_user: User,
+        commit: bool = True,
+        change_type: str = "transfer_parcels",
+    ) -> dict:
+        """地块划转：把本户的一块/多块地块单方转移给同一村组的另一承包户。
+
+        与 swap_parcels（双向互换）的差别只有两点：
+          1. 只有单方出让地块，对手方只收不出 —— 所以对手方允许名下没有任何地块
+             （互换要求对方至少选一块，划转没有这个前置）；
+          2. 承包合同等字段沿用 swap 的取值口径：优先取对手方现有关联行上的
+             合同字段；对手方一块地都没有时，保底保留原值（同组内 fbfbm 本就相同，
+             cbhtbm 等可事后在属性编辑里修正）。
+
+        落库语义与 swap 完全同构（transfer_relation 同一套字段搬运 + 变更态覆写 +
+        双方各存一份完整快照），撤回 / 差异重建 / 变更记录也走同一套约定。
+        """
+        batch = self._ensure_batch(db, batch_id)
+        if batch.status == "finished":
+            raise HTTPException(400, "invalid operation")
+        result = self._get_result(db, batch_id, contractor_uid)
+        if result.survey_status == "confirmed" or getattr(result, "is_locked", False):
+            raise HTTPException(400, "invalid operation")
+        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
+        # 任务归属：只有名下有这一户的人（或批次创建人 / 管理员）能改。
+        self.ensure_task_write_permission(db, batch, result, current_user)
+        now = datetime.now(timezone.utc)
+
+        target_uid = payload["targetContractorUid"]
+        target_result = self._get_result(db, batch_id, target_uid)
+        if target_result.survey_status == "confirmed" or getattr(target_result, "is_locked", False):
+            raise HTTPException(400, "目标承包方已确认")
+        if target_uid == contractor_uid:
+            raise HTTPException(400, "invalid operation")
+        data_access_service.ensure_code_in_scope(current_user, target_result.cbfbm, detail="out of scope")
+        # 划转是**两户同时被改**：只校验本户会留下「把地塞进别人家」的越权口子。
+        self.ensure_task_write_permission(db, batch, target_result, current_user)
+        source_group = result.group_region_code or (result.cbfbm[:14] if result.cbfbm else "")
+        target_group = target_result.group_region_code or (target_result.cbfbm[:14] if target_result.cbfbm else "")
+        if source_group and target_group and source_group != target_group:
+            raise HTTPException(400, "目标承包方只能选择本组承包方")
+
+        dkbms = payload["dkbms"]
+        reason = payload.get("reason")
+        if len(dkbms) != len(set(dkbms)):
+            raise HTTPException(400, "划转地块不能重复选择")
+
+        relations = db.scalars(
+            select(SurveyCbdkxxResult).where(
+                SurveyCbdkxxResult.dkbm.in_(dkbms),
+                SurveyCbdkxxResult.cbfbm == result.cbfbm,
+                SurveyCbdkxxResult.result_status.notin_(("removed", "split_source")),
+            )
+        ).all()
+        by_code = {row.dkbm: row for row in relations}
+        missing = [dkbm for dkbm in dkbms if dkbm not in by_code]
+        if missing:
+            raise HTTPException(404, f"本方地块 {missing[0]} 不属于当前承包方")
+        ordered_relations = [by_code[dkbm] for dkbm in dkbms]
+
+        relation_fields = (
+            ("cbfbm", "承包方代码",),
+            ("fbfbm", "发包方代码",),
+            ("cbjyqqdfs", "承包经营权取得方式",),
+            ("cbhtbm", "承包合同编码"),
+            ("lzhtbm", "流转合同编码"),
+            ("cbjyqzbm", "承包经营权证编码"),
+            ("sfqqqg", "是否确权确股"),
+        )
+        # 合同字段取值口径：对手方名下有现势关联行 → 沿用其合同字段（与互换一致）；
+        # 一块都没有 → 保底保留原值（fbfbm 同组内必然相同，cbhtbm 等可事后修正）。
+        recipient_relation = db.scalars(
+            select(SurveyCbdkxxResult)
+            .where(
+                SurveyCbdkxxResult.cbfbm == target_result.cbfbm,
+                SurveyCbdkxxResult.result_status.notin_(("removed", "split_source")),
+            )
+            .order_by(SurveyCbdkxxResult.id.desc())
+        ).first()
+        if recipient_relation is not None:
+            recipient_contract = {
+                field_name: getattr(recipient_relation, field_name)
+                for field_name, _ in relation_fields
+            }
+        else:
+            recipient_contract = {
+                field_name: getattr(ordered_relations[0], field_name)
+                for field_name, _ in relation_fields
+            }
+        recipient_contract["cbfbm"] = target_result.cbfbm
+
+        # 划转会**覆盖**地块原有的变更态（is_changed / change_type / change_reason），
+        # 撤回划转时必须按原值还原 —— 与 swap 的 source_relation_states 同一套约定：
+        # 按 dkbm 存成 map，双方各存一份完整快照，撤回可能由任意一侧发起。
+        pre_transfer_states: dict[str, dict] = {}
+
+        def capture_relation_state(rel: SurveyCbdkxxResult) -> None:
+            pre_transfer_states[rel.dkbm] = {
+                "is_changed": bool(rel.is_changed),
+                "change_type": rel.change_type,
+                "change_reason": rel.change_reason,
+            }
+        transferred = []
+        for rel in ordered_relations:
+            capture_relation_state(rel)
+            changes = []
+            for field_name, field_label in relation_fields:
+                before_value = getattr(rel, field_name)
+                after_value = recipient_contract[field_name]
+                if before_value != after_value:
+                    changes.append({
+                        "field_name": field_name,
+                        "field_label": field_label,
+                        "before_value": before_value,
+                        "after_value": after_value,
+                    })
+                    setattr(rel, field_name, after_value)
+            rel.is_changed = True
+            rel.change_type = change_type
+            rel.change_reason = reason
+            transferred.append({"dkbm": rel.dkbm, "changes": changes})
+
+        # 双方各写一条变更记录，摘要**完全对称**（transferred_dkbms / from / to 两份一致）：
+        # 撤回可由任意一侧的记录发起，且 _build_removed_parcel_change_map /
+        # sheet._land_change_map 按户读记录时都能取到同一组 dkbm。
+        record = self._create_change_record(
+            db, batch_id, contractor_uid, result.cbfbm,
+            change_type=change_type,
+            before_summary={
+                "transferred_dkbms": dkbms,
+                "source_relation_states": pre_transfer_states,
+            },
+            after_summary={"from_cbfbm": result.cbfbm, "to_cbfbm": target_result.cbfbm},
+            reason=reason,
+            current_user=current_user, now=now,
+        )
+        db.flush()
+
+        target_record = self._create_change_record(
+            db, batch_id, target_uid, target_result.cbfbm,
+            change_type=change_type,
+            before_summary={
+                "transferred_dkbms": dkbms,
+                "source_relation_states": pre_transfer_states,
+            },
+            after_summary={"from_cbfbm": result.cbfbm, "to_cbfbm": target_result.cbfbm},
+            reason=reason,
+            current_user=current_user, now=now,
+        )
+        db.flush()
+
+        for uid in [contractor_uid, target_uid]:
+            task = self._get_task(db, batch_id, uid)
+            if task:
+                task.has_change = True
+                task.change_count = (task.change_count or 0) + 1
+                task.investigated_at = now
+
+        result.investigated_at = now
+        target_result.investigated_at = now
+        if not commit:
+            db.flush()
+            return {"queued": True}
+        self._rebuild_contractor_diffs(
+            db,
+            batch_id,
+            [contractor_uid, target_uid],
+            change_ids={contractor_uid: None, target_uid: None},
+        )
+        db.commit()
+        return self.get_result(db, batch_id, contractor_uid, current_user)
+
+    def rollback_transfer_parcels(
+        self,
+        db: Session,
+        batch_id: int,
+        contractor_uid: str,
+        change_id: int,
+        payload: dict,
+        current_user: User,
+        commit: bool = True,
+    ) -> dict:
+        """撤回已保存的地块划转：把划走的地块转回原承包户，并还原变更态。"""
+        batch = self._ensure_batch(db, batch_id)
+        result = self._get_result(db, batch_id, contractor_uid)
+        self._ensure_editable_batch_and_result(db, result, current_user)
+        data_access_service.ensure_code_in_scope(current_user, result.cbfbm, detail="out of scope")
+
+        change = db.scalars(
+            select(SurveyChangeRecord)
+            .where(
+                SurveyChangeRecord.tenant_code == batch.tenant_code,
+                SurveyChangeRecord.batch_id == batch_id,
+                SurveyChangeRecord.contractor_uid == contractor_uid,
+                SurveyChangeRecord.id == change_id,
+            )
+            .execution_options(skip_tenant_scope=True)
+        ).first()
+        if change is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="change record not found")
+        if change.change_type != "transfer_parcels":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="only saved parcel transfers can be rolled back")
+        if change.change_status == "rolled_back":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="this parcel transfer has already been rolled back")
+
+        before_summary = change.before_summary or {}
+        after_summary = change.after_summary or {}
+        dkbms = [str(code).strip() for code in (before_summary.get("transferred_dkbms") or []) if str(code).strip()]
+        from_cbfbm = str(after_summary.get("from_cbfbm") or "").strip()
+        to_cbfbm = str(after_summary.get("to_cbfbm") or "").strip()
+        if not dkbms or not from_cbfbm or not to_cbfbm:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="saved parcel transfer data is incomplete and cannot be rolled back")
+
+        # 划走的地块现在应归属收地方（to_cbfbm）；归属已变则拒绝撤回。
+        current_relations = db.scalars(
+            select(SurveyCbdkxxResult).where(
+                SurveyCbdkxxResult.dkbm.in_(dkbms),
+                SurveyCbdkxxResult.result_status.notin_(("removed", "split_source")),
+            )
+        ).all()
+        relation_by_code = {row.dkbm: row for row in current_relations}
+        missing = [dkbm for dkbm in dkbms if dkbm not in relation_by_code]
+        if missing:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="current parcel ownership has changed and this transfer cannot be rolled back")
+        owner_codes = {relation_by_code[dkbm].cbfbm for dkbm in dkbms}
+        if owner_codes != {to_cbfbm}:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="current parcel ownership has changed and this transfer cannot be rolled back")
+        if to_cbfbm == from_cbfbm:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="the parcel transfer has already been restored")
+
+        to_task = db.scalars(
+            select(SurveyCbfBase)
+            .where(
+                SurveyCbfBase.tenant_code == batch.tenant_code,
+                SurveyCbfBase.batch_id == batch_id,
+                SurveyCbfBase.cbfbm == to_cbfbm,
+            )
+            .order_by(SurveyCbfBase.id.desc())
+            .execution_options(skip_tenant_scope=True)
+        ).first()
+        from_task = db.scalars(
+            select(SurveyCbfBase)
+            .where(
+                SurveyCbfBase.tenant_code == batch.tenant_code,
+                SurveyCbfBase.batch_id == batch_id,
+                SurveyCbfBase.cbfbm == from_cbfbm,
+            )
+            .order_by(SurveyCbfBase.id.desc())
+            .execution_options(skip_tenant_scope=True)
+        ).first()
+        if to_task is None or from_task is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="the counterparty of this parcel transfer could not be found")
+        to_result = self._get_result(db, batch_id, to_task.contractor_uid)
+        from_result = self._get_result(db, batch_id, from_task.contractor_uid)
+
+        # 撤回划转要动两户（地转回去），两户都得过归属校验：只查本户会留下
+        # 「把别人家的地块划回来」这个越权口子。
+        self._ensure_editable_batch_and_result(db, to_result, current_user)
+        self._ensure_editable_batch_and_result(db, from_result, current_user)
+        data_access_service.ensure_code_in_scope(current_user, to_result.cbfbm, detail="out of scope")
+        data_access_service.ensure_code_in_scope(current_user, from_result.cbfbm, detail="out of scope")
+
+        rollback_reason = (payload.get("reason") or "").strip() or f"撤回划转 {change.change_no}"
+        self.transfer_parcels(
+            db,
+            batch_id,
+            to_result.contractor_uid,
+            {
+                "targetContractorUid": from_result.contractor_uid,
+                "dkbms": dkbms,
+                "reason": rollback_reason,
+            },
+            current_user,
+            commit=False,
+            change_type="rollback_transfer_parcels",
+        )
+
+        # 划转已经转回去 ⇒ 地块上的变更态要还原成划转前的样子，否则「撤回划转」
+        # 会把净未变的地显示成「变更」。原值取自本条划转记录的快照（写入时双方各存一份）。
+        restore_states = (change.before_summary or {}).get("source_relation_states") or {}
+        # 注意：转回去之后地块已归属原户，只能按 dkbm 定位，不能再用 cbfbm 过滤。
+        touched_relations = db.scalars(
+            select(SurveyCbdkxxResult).where(SurveyCbdkxxResult.dkbm.in_(dkbms))
+        ).all()
+        touched_relation_by_code = {row.dkbm: row for row in touched_relations}
+        for dkbm in dkbms:
+            relation = touched_relation_by_code.get(dkbm)
+            if relation is None:
+                continue
+            state = restore_states.get(dkbm) if isinstance(restore_states, dict) else None
+            if not isinstance(state, dict):
+                # 老数据兼容：没有快照的划转记录，只有当地块现在的变更态**就是划转本身
+                # 留下的**，才敢断定划转前是「未变更」；挂着别的变更类型说明另有动作，
+                # 保持现状不动，避免抹掉别人的变更。
+                if relation.change_type not in {"transfer_parcels", "rollback_transfer_parcels"}:
+                    continue
+                logger.warning(
+                    "撤回划转 %s：地块 %s 缺少划转前快照，按未变更还原（原 change_type=%s）",
+                    change.change_no, dkbm, relation.change_type,
+                )
+                state = {"is_changed": False, "change_type": "none", "change_reason": None}
+            relation.is_changed = bool(state.get("is_changed"))
+            relation.change_type = state.get("change_type") or "none"
+            relation.change_reason = state.get("change_reason")
+
+        change.change_status = "rolled_back"
+        # 找对手方那条划转记录（同组 dkbm + 同 from/to），一并标记已撤回。
+        counterpart_records = db.scalars(
+            select(SurveyChangeRecord)
+            .where(
+                SurveyChangeRecord.tenant_code == batch.tenant_code,
+                SurveyChangeRecord.batch_id == batch_id,
+                SurveyChangeRecord.contractor_uid != contractor_uid,
+                SurveyChangeRecord.change_type == "transfer_parcels",
+                SurveyChangeRecord.change_status != "rolled_back",
+            )
+            .order_by(SurveyChangeRecord.id.desc())
+            .execution_options(skip_tenant_scope=True)
+        ).all()
+        for item in counterpart_records:
+            item_before = item.before_summary or {}
+            item_after = item.after_summary or {}
+            item_dkbms = [str(code).strip() for code in (item_before.get("transferred_dkbms") or []) if str(code).strip()]
+            if (
+                item_dkbms == dkbms
+                and str(item_after.get("from_cbfbm") or "").strip() == from_cbfbm
+                and str(item_after.get("to_cbfbm") or "").strip() == to_cbfbm
+            ):
+                item.change_status = "rolled_back"
+                break
+
+        if not commit:
+            db.flush()
+            return {"queued": True}
+
+        self._rebuild_contractor_diffs(
+            db,
+            batch_id,
+            [contractor_uid, to_result.contractor_uid, from_result.contractor_uid],
+            change_ids={contractor_uid: None, to_result.contractor_uid: None, from_result.contractor_uid: None},
         )
         db.commit()
         return self.get_result(db, batch_id, contractor_uid, current_user)

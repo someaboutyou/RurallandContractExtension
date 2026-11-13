@@ -215,6 +215,11 @@ class SurveyServiceChangesMixin:
                 if target_uid and target_uid not in seen:
                     seen.add(target_uid)
                     affected.append(target_uid)
+            elif op_type == "transfer_parcels":
+                target_uid = payload.get("targetContractorUid")
+                if target_uid and target_uid not in seen:
+                    seen.add(target_uid)
+                    affected.append(target_uid)
             elif op_type == "split_household":
                 new_cbfbm = payload.get("newCbfbm")
                 if new_cbfbm:
@@ -807,6 +812,18 @@ class SurveyServiceChangesMixin:
                 self.swap_parcels(db, batch_id, contractor_uid, payload, current_user, commit=False)
             elif op_type == "rollback_swap_parcels":
                 self.rollback_swap_parcels(
+                    db,
+                    batch_id,
+                    contractor_uid,
+                    int(payload.get("changeId") or 0),
+                    payload,
+                    current_user,
+                    commit=False,
+                )
+            elif op_type == "transfer_parcels":
+                self.transfer_parcels(db, batch_id, contractor_uid, payload, current_user, commit=False)
+            elif op_type == "rollback_transfer_parcels":
+                self.rollback_transfer_parcels(
                     db,
                     batch_id,
                     contractor_uid,

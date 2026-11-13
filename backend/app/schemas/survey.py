@@ -429,6 +429,16 @@ class SurveyRollbackSwapParcelsRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
 
 
+class SurveyTransferParcelsRequest(BaseModel):
+    targetContractorUid: str = Field(min_length=1, max_length=36)
+    dkbms: list[str] = Field(min_length=1)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class SurveyRollbackTransferParcelsRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=500)
+
+
 # ── 界址点 / 界址线维护 ──────────────────────────────────────────────────────
 # 结构（点位、边）由地块图形决定，请求体只提交属性，并按显示序号 seq 对齐。
 

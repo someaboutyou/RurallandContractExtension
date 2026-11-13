@@ -60,6 +60,10 @@ class LandParcelService:
             after_summary = item.after_summary or {}
             if item.change_type == "swap_parcels":
                 dkbms = [str(code).strip() for code in (before_summary.get("swapped_out") or []) if str(code).strip()]
+            elif item.change_type == "transfer_parcels":
+                # 划转：转出户的划出地块从本户名单消失，按变更记录补出 removed 条目。
+                # 收入户同名地块仍在现势关联里（active 排除），不会被误标。
+                dkbms = [str(code).strip() for code in (before_summary.get("transferred_dkbms") or []) if str(code).strip()]
             elif item.change_type == "remove_parcel":
                 dkbm = str(after_summary.get("dkbm") or "").strip()
                 dkbms = [dkbm] if dkbm else []

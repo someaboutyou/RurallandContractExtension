@@ -40,6 +40,14 @@ export function isSwappedInParcel(parcel) {
   return !isRemovedParcel(parcel) && parcel?.changeType === "swap_parcels";
 }
 
+export function isTransferredOutParcel(parcel) {
+  return isRemovedParcel(parcel) && parcel?.changeType === "transfer_parcels";
+}
+
+export function isTransferredInParcel(parcel) {
+  return !isRemovedParcel(parcel) && parcel?.changeType === "transfer_parcels";
+}
+
 export function isSplitSourceParcel(parcel) {
   return parcel?.resultStatus === "split_source";
 }
@@ -63,6 +71,8 @@ export function parcelStatusLabel(parcel) {
   if (isSplitGeneratedParcel(parcel)) return "切割生成";
   if (isSwappedOutParcel(parcel)) return "已换出";
   if (isSwappedInParcel(parcel)) return "已换入";
+  if (isTransferredOutParcel(parcel)) return "已划出";
+  if (isTransferredInParcel(parcel)) return "已划入";
   if (isAddedParcel(parcel)) return "新增";
   if (isRemovedParcel(parcel)) return "已移除";
   if (parcel?.isChanged) return "变更";
@@ -74,6 +84,8 @@ export function parcelStatusType(parcel) {
   if (isSplitGeneratedParcel(parcel)) return "success";
   if (isSwappedOutParcel(parcel)) return "info";
   if (isSwappedInParcel(parcel)) return "warning";
+  if (isTransferredOutParcel(parcel)) return "info";
+  if (isTransferredInParcel(parcel)) return "warning";
   if (isAddedParcel(parcel)) return "success";
   if (isRemovedParcel(parcel)) return "danger";
   if (parcel?.isChanged) return "warning";

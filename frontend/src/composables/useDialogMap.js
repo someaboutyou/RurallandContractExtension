@@ -378,6 +378,7 @@ export function useDialogMap(targetRef) {
     activeBasemap,
     basemapOptions,
     selectedParcelDkbm,
+    parcelSource,
     initMap,
     switchBasemap,
     loadParcels,

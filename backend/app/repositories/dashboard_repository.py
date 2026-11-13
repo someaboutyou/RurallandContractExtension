@@ -51,6 +51,7 @@ CHANGE_TYPE_LABELS = {
     "split_parcel": "切割地块",
     "remove_parcel": "移除地块",
     "swap_parcels": "地块互换",
+    "transfer_parcels": "地块划转",
 }
 _ROLLBACK_LABEL = "回退操作"
 

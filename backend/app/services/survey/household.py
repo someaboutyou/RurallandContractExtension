@@ -83,13 +83,38 @@ class SurveyServiceHouseholdMixin:
         contractor_uid: str,
         tenant_code: str,
     ) -> SurveyChangeRecord | None:
+        return self._find_active_ownership_change(
+            db, batch_id, contractor_uid, tenant_code,
+            change_types=("swap_parcels",),
+        )
+
+    def _find_active_transfer_change(
+        self,
+        db: Session,
+        batch_id: int,
+        contractor_uid: str,
+        tenant_code: str,
+    ) -> SurveyChangeRecord | None:
+        return self._find_active_ownership_change(
+            db, batch_id, contractor_uid, tenant_code,
+            change_types=("transfer_parcels",),
+        )
+
+    def _find_active_ownership_change(
+        self,
+        db: Session,
+        batch_id: int,
+        contractor_uid: str,
+        tenant_code: str,
+        change_types: tuple[str, ...],
+    ) -> SurveyChangeRecord | None:
         return db.scalars(
             select(SurveyChangeRecord)
             .where(
                 SurveyChangeRecord.tenant_code == tenant_code,
                 SurveyChangeRecord.batch_id == batch_id,
                 SurveyChangeRecord.contractor_uid == contractor_uid,
-                SurveyChangeRecord.change_type == "swap_parcels",
+                SurveyChangeRecord.change_type.in_(change_types),
                 SurveyChangeRecord.change_status != "rolled_back",
             )
             .order_by(SurveyChangeRecord.id.desc())
@@ -108,6 +133,14 @@ class SurveyServiceHouseholdMixin:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="该承包方存在未撤回的地块互换，不能注销",
+            )
+        # 划转的对手方（原户/收地方）任一侧被注销，撤回划转都会因「对户不可编辑」卡死，
+        # 所以与互换同口径：存在未撤回的划转记录就不给注销。
+        active_transfer = self._find_active_transfer_change(db, batch_id, contractor_uid, result.tenant_code)
+        if active_transfer is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="该承包方存在未撤回的地块划转，不能注销",
             )
 
     def change_household_head(

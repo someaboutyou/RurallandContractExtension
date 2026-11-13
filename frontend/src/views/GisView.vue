@@ -592,6 +592,7 @@ const changeTypeMap = {
   add_parcel: "新增地块",
   split_parcel: "地块分割",
   swap_parcels: "地块互换",
+  transfer_parcels: "地块划转",
   remove_parcel: "移除地块",
   split_household: "分户",
   merge_household: "并户",

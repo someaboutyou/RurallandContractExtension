@@ -1,6 +1,7 @@
 ﻿import GeoJSON from "ol/format/GeoJSON";
 import VectorLayer from "ol/layer/Vector";
 import VectorSource from "ol/source/Vector";
+import Snap from "ol/interaction/Snap";
 import { Fill, Stroke, Style } from "ol/style";
 
 /**
@@ -16,6 +17,7 @@ export function useParcelDraftMap(mapRoot, dialogMap) {
     mapRef, mapReady, activeBasemap, basemapOptions,
     initMap, switchBasemap, loadParcels, fitToParcels,
     focusParcel, clearSelection, updateMapSize, destroyMap,
+    parcelSource,
   } = dialogMap;
 
   const geoJsonFormat = new GeoJSON();
@@ -30,6 +32,31 @@ export function useParcelDraftMap(mapRoot, dialogMap) {
   });
   let drawInteraction = null;
   let draftLayerMounted = false;
+  // 捕捉交互：绘制时吸附到已有地块图形的顶点/边线（新增地块、切割绘制共用）
+  let snapInteraction = null;
+  let snapInteractionMap = null;
+
+  function ensureSnap() {
+    const map = mapRef.value;
+    if (!map || !parcelSource) return;
+    // 地图销毁重建后 Snap 必须挂到新地图实例上
+    if (!snapInteraction || snapInteractionMap !== map) {
+      if (snapInteractionMap) {
+        snapInteractionMap.removeInteraction(snapInteraction);
+      }
+      snapInteraction = new Snap({ source: parcelSource });
+      snapInteractionMap = map;
+    }
+    if (!map.getInteractions().getArray().includes(snapInteraction)) {
+      map.addInteraction(snapInteraction);
+    }
+  }
+
+  function stopSnap() {
+    if (snapInteraction && mapRef.value) {
+      mapRef.value.removeInteraction(snapInteraction);
+    }
+  }
 
   function ensureDraftLayer() {
     if (!mapRef.value || draftLayerMounted) return;
@@ -48,6 +75,7 @@ export function useParcelDraftMap(mapRoot, dialogMap) {
       mapRef.value.removeInteraction(drawInteraction);
     }
     drawInteraction = null;
+    stopSnap();
   }
 
   function fitToDraftGeometry() {
@@ -93,6 +121,8 @@ export function useParcelDraftMap(mapRoot, dialogMap) {
     ensureDraftLayer,
     removeDraftLayer,
     stopDraw,
+    ensureSnap,
+    stopSnap,
     fitToDraftGeometry,
     writeDraftGeometry,
     writeCurrentDraftGeometry,

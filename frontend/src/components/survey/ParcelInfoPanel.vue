@@ -20,6 +20,15 @@
           地块互换
         </el-button>
         <el-button
+          type="warning"
+          plain
+          size="small"
+          :disabled="actionDisabled || !exchangeableParcelCount"
+          @click="emit('transfer-parcels')"
+        >
+          地块划转
+        </el-button>
+        <el-button
           type="success"
           plain
           size="small"
@@ -672,6 +681,8 @@ import {
   isSplitGeneratedParcel,
   isSwappedInParcel,
   isSwappedOutParcel,
+  isTransferredInParcel,
+  isTransferredOutParcel,
   isAddedParcel,
   parcelStatusLabel,
   parcelStatusType,
@@ -699,6 +710,7 @@ const props = defineProps({
   savedSwapRecords: { type: Array, default: () => [] },
   savedSplitRecords: { type: Array, default: () => [] },
   savedRemoveRecords: { type: Array, default: () => [] },
+  savedTransferRecords: { type: Array, default: () => [] },
   canRollbackSavedParcelChange: { type: Boolean, default: false },
   rollbackChangeLoadingId: { type: [Number, String], default: null },
   // 正在被单独落库的地块编码（操作列「保存」按钮的 loading 用）。
@@ -706,7 +718,7 @@ const props = defineProps({
   persistingDkbm: { type: String, default: "" },
 });
 
-const emit = defineEmits(["swap-parcels", "add-parcel", "split-parcel", "remove-parcel", "rollback-saved-swap", "rollback-saved-split", "undo-pending-remove", "rollback-saved-remove", "persist-parcel", "boundary-saved"]);
+const emit = defineEmits(["swap-parcels", "transfer-parcels", "add-parcel", "split-parcel", "remove-parcel", "rollback-saved-swap", "rollback-saved-transfer", "rollback-saved-split", "undo-pending-remove", "rollback-saved-remove", "persist-parcel", "boundary-saved"]);
 
 const addParcelDialog = ref(null);
 const boundaryDialog = ref(null);
@@ -732,6 +744,10 @@ const { activeBasemap, basemapOptions } = draftMap;
 // --- Shared computed (defined before composables to avoid circular refs) ---
 const toolModeActive = computed(() => addModeActive.value || splitModeActive.value);
 const actionDisabled = computed(() => !props.canManage || props.isResultLocked || toolModeActive.value);
+// 现势地块数：没有可划转的地块时「地块划转」置灰（与互换按钮同一可用口径 + 本户有地）。
+const exchangeableParcelCount = computed(() =>
+  (props.parcels || []).filter((item) => !["removed", "split_source"].includes(item.resultStatus)).length,
+);
 const parcelTableMaxHeight = computed(() => (
   splitModeActive.value
     ? "340px"
@@ -812,6 +828,10 @@ function findSavedSwapRecord(parcel) {
   return (props.savedSwapRecords || []).find((item) => (item.swappedIn || []).includes(parcel?.dkbm)) || null;
 }
 
+function findSavedTransferRecord(parcel) {
+  return (props.savedTransferRecords || []).find((item) => (item.transferredIn || []).includes(parcel?.dkbm)) || null;
+}
+
 function findSavedSplitRecord(parcel) {
   return (props.savedSplitRecords || []).find((item) => item.originalDkbm === parcel?.dkbm) || null;
 }
@@ -836,12 +856,13 @@ function isUnsavedAddedParcel(parcel) {
 
 function parcelRollbackChangeId(parcel) {
   if (isRemovedParcel(parcel) && parcel._pending) return undefined;
-  return findSavedSplitRecord(parcel)?.id || findSavedSwapRecord(parcel)?.id || findSavedRemoveRecord(parcel)?.id || null;
+  return findSavedSplitRecord(parcel)?.id || findSavedSwapRecord(parcel)?.id || findSavedTransferRecord(parcel)?.id || findSavedRemoveRecord(parcel)?.id || null;
 }
 
 function parcelActionLabel(parcel) {
   if (findSavedSplitRecord(parcel)) return "撤回切割";
   if (findSavedSwapRecord(parcel)) return "撤回互换";
+  if (findSavedTransferRecord(parcel)) return "撤回划转";
   if (findSavedRemoveRecord(parcel)) return "撤回移除";
   if (isRemovedParcel(parcel) && parcel._pending && parcel.changeType === "remove_parcel") return "撤回移除";
   return "";
@@ -866,6 +887,11 @@ function handleParcelAction(parcel) {
     emit("rollback-saved-swap", swapRecord);
     return;
   }
+  const transferRecord = findSavedTransferRecord(parcel);
+  if (transferRecord) {
+    emit("rollback-saved-transfer", transferRecord);
+    return;
+  }
   const removeRecord = findSavedRemoveRecord(parcel);
   if (removeRecord) {
     emit("rollback-saved-remove", removeRecord);
@@ -877,7 +903,7 @@ function handleParcelAction(parcel) {
 }
 
 function parcelChangeTip(parcel) {
-  if (!parcel?.isChanged && !isSplitSourceParcel(parcel) && !isSplitGeneratedParcel(parcel) && !isSwappedInParcel(parcel) && !isSwappedOutParcel(parcel)) {
+  if (!parcel?.isChanged && !isSplitSourceParcel(parcel) && !isSplitGeneratedParcel(parcel) && !isSwappedInParcel(parcel) && !isSwappedOutParcel(parcel) && !isTransferredInParcel(parcel) && !isTransferredOutParcel(parcel)) {
     return "";
   }
   const messages = [];
@@ -891,6 +917,11 @@ function parcelChangeTip(parcel) {
     messages.push(swapRecord ? `该地块为互换换入，对方承包方：${swapRecord.counterpartyLabel || "-"}` : "该地块为互换换入");
   } else if (isSwappedOutParcel(parcel)) {
     messages.push("该地块已互换换出");
+  } else if (isTransferredInParcel(parcel)) {
+    const transferRecord = findSavedTransferRecord(parcel);
+    messages.push(transferRecord ? `该地块为划转转入，原承包方：${transferRecord.fromLabel || "-"}` : "该地块为划转转入");
+  } else if (isTransferredOutParcel(parcel)) {
+    messages.push("该地块已划转转出");
   } else if (isRemovedParcel(parcel)) {
     messages.push("该地块已移除");
   } else if (isAddedParcel(parcel)) {
@@ -998,6 +1029,10 @@ function handleRemoveParcel() {
   }
   if (isSwappedOutParcel(parcel) || isSwappedInParcel(parcel)) {
     ElMessage.warning("互换的地块不能直接移除，请先撤回互换操作");
+    return;
+  }
+  if (isTransferredOutParcel(parcel) || isTransferredInParcel(parcel)) {
+    ElMessage.warning("划转的地块不能直接移除，请先撤回划转操作");
     return;
   }
   if (isSplitSourceParcel(parcel) || isSplitGeneratedParcel(parcel)) {

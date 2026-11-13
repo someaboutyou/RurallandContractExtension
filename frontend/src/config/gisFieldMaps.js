@@ -12,7 +12,7 @@ export const resultStatusMap = {
 export const changeTypeMap = {
   none: "无变化", info_change: "信息变更", change_head: "户主变更",
   member_maintain: "成员维护", deregister: "注销承包方", add_parcel: "新增地块",
-  split_parcel: "地块分割", swap_parcels: "地块互换", remove_parcel: "移除地块",
+  split_parcel: "地块分割", swap_parcels: "地块互换", transfer_parcels: "地块划转", remove_parcel: "移除地块",
   split_household: "分户", merge_household: "并户", household_extinct: "整户消亡户",
   household_urbanized: "整户转为城镇居民", little_or_no_land: "少地或无地户",
 };

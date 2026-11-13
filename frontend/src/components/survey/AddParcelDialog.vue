@@ -2,7 +2,8 @@
   <el-dialog
     v-model="visible"
     title="新增地块属性信息"
-    width="720px"
+    width="920px"
+    top="5vh"
     destroy-on-close
     append-to-body
     @closed="handleClosed"
@@ -32,11 +33,17 @@
       </div>
 
       <div class="form-row">
-        <el-form-item label="实测面积（亩）" required class="form-half">
+        <el-form-item label="实测面积（亩）" required class="form-third">
           <el-input-number v-model="form.scmj" :min="0.01" :precision="2" style="width: 100%" />
         </el-form-item>
-        <el-form-item label="合同面积（亩）" class="form-half">
+        <el-form-item label="合同面积（亩）" class="form-third">
           <el-input-number v-model="form.htmj" :min="0" :precision="2" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="取得方式" class="form-third">
+          <el-select v-model="form.cbjyqqdfs" style="width: 100%">
+            <el-option label="家庭承包" value="001" />
+            <el-option label="其他方式" value="002" />
+          </el-select>
         </el-form-item>
       </div>
 
@@ -93,50 +100,40 @@
       </div>
 
       <div class="form-row">
-        <el-form-item label="取得方式" class="form-half">
-          <el-select v-model="form.cbjyqqdfs" style="width: 100%">
-            <el-option label="家庭承包" value="001" />
-            <el-option label="其他方式" value="002" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="是否确权确股" class="form-half">
+        <el-form-item label="是否确权确股" class="form-third">
           <el-select v-model="form.sfqqqg" clearable style="width: 100%">
             <el-option label="是" value="1" />
             <el-option label="否" value="0" />
           </el-select>
         </el-form-item>
-      </div>
-
-      <div class="form-row">
-        <el-form-item label="合同编码" class="form-half">
+        <el-form-item label="合同编码" class="form-third">
           <el-input v-model="form.cbhtbm" placeholder="关联承包合同编码" maxlength="19" />
         </el-form-item>
-        <el-form-item label="权证编码" class="form-half">
+        <el-form-item label="权证编码" class="form-third">
           <el-input v-model="form.cbjyqzbm" placeholder="经营权证编码" maxlength="19" />
         </el-form-item>
       </div>
 
       <div class="form-row">
-        <el-form-item label="地块东至" class="form-half">
+        <el-form-item label="地块东至" class="form-third">
           <el-input v-model="form.dkdz" maxlength="50" />
         </el-form-item>
-        <el-form-item label="地块西至" class="form-half">
+        <el-form-item label="地块西至" class="form-third">
           <el-input v-model="form.dkxz" maxlength="50" />
+        </el-form-item>
+        <el-form-item label="地块南至" class="form-third">
+          <el-input v-model="form.dknz" maxlength="50" />
         </el-form-item>
       </div>
 
       <div class="form-row">
-        <el-form-item label="地块南至" class="form-half">
-          <el-input v-model="form.dknz" maxlength="50" />
-        </el-form-item>
         <el-form-item label="地块北至" class="form-half">
           <el-input v-model="form.dkbz" maxlength="50" />
         </el-form-item>
+        <el-form-item label="备注" class="form-half">
+          <el-input v-model="form.dkbzxx" maxlength="300" />
+        </el-form-item>
       </div>
-
-      <el-form-item label="备注">
-        <el-input v-model="form.dkbzxx" maxlength="300" />
-      </el-form-item>
 
       <el-form-item label="变更原因">
         <el-input
@@ -345,11 +342,16 @@ defineExpose({ open });
 
 <style scoped>
 .dialog-alert {
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .parcel-form {
-  margin-top: 8px;
+  margin-top: 4px;
+}
+
+/* 压缩纵向间距，避免整框超高出现滚动条 */
+.parcel-form :deep(.el-form-item) {
+  margin-bottom: 14px;
 }
 
 .form-row {

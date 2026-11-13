@@ -23,7 +23,7 @@ export function useAddParcelGeometry(ctx) {
   const {
     mapRef, mapReady, initMap, clearSelection,
     draftSource, geoJsonFormat,
-    stopDraw, ensureDraftLayer,
+    stopDraw, ensureDraftLayer, ensureSnap,
     writeDraftGeometry, writeCurrentDraftGeometry, fitToDraftGeometry,
   } = draftMap;
 
@@ -128,6 +128,8 @@ export function useAddParcelGeometry(ctx) {
     });
     mapRef.value.addInteraction(interaction);
     draftMap.drawInteraction = interaction;
+    // 开启捕捉：绘制时吸附到已有地块图形的顶点/边线
+    ensureSnap();
   }
 
   // --- Mode lifecycle ---

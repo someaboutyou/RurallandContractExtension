@@ -68,12 +68,12 @@
       <div class="swap-panel">
         <div class="swap-panel-header">
           <span class="swap-panel-title">对方地块</span>
-          <span class="swap-panel-sub">{{ targetParcels.length }} 个地块</span>
+          <span class="swap-panel-sub">{{ activeTargetParcels.length }} 个地块</span>
         </div>
         <el-table
           ref="targetTable"
           v-loading="targetLoading"
-          :data="targetParcels"
+          :data="activeTargetParcels"
           border
           size="small"
           max-height="260"
@@ -155,6 +155,13 @@ const form = reactive({
 
 const exchangeableSourceParcels = computed(() =>
   (sourceParcels.value || []).filter((item) => !["removed", "split_source"].includes(item.resultStatus)),
+);
+
+// 「对方地块」只展示现行有效的关联行：接口返回包含基线有、现势无的已换出/
+// 已划出/已移除地块（resultStatus=removed 的遗留行），不过滤会把对方地块数虚增，
+// 甚至允许选中一块已不在对方名下的地块去互换。
+const activeTargetParcels = computed(() =>
+  (targetParcels.value || []).filter((item) => !["removed", "split_source"].includes(item.resultStatus)),
 );
 const selectedSource = computed(() => selectedSourceDkbms.value);
 const selectedTarget = computed(() => selectedTargetDkbms.value);

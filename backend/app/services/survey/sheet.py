@@ -76,6 +76,7 @@ LEGACY_EVENT_MAP: dict[str, str] = {
 #: → 摸底表"变化原因"七分类码。户级变更（信息变更/户主变更/成员维护/注销）不落地块，不参与映射。
 CHANGE_TYPE_TO_SHEET_REASON: dict[str, str] = {
     "swap_parcels": "swap",        # 地块互换 → 互换
+    "transfer_parcels": "transfer",  # 地块划转 → 转让（摸底表"转让"列此前无系统数据源）
     "split_parcel": "adjustment",  # 切割地块 → 调整土地
     "split_household": "adjustment",  # 分户（地块划出）→ 调整土地
     "merge_household": "adjustment",  # 合户 → 调整土地
@@ -340,6 +341,10 @@ class SurveySheetService:
             after = record.after_summary or {}
             if record.change_type == "swap_parcels":
                 dkbms = [str(c).strip() for c in (before.get("swapped_out") or []) if str(c).strip()]
+            elif record.change_type == "transfer_parcels":
+                # 划转双方各存一条对称记录（transferred_dkbms 相同）：
+                # 转出户标记"划出"、收入户标记"划入"，摸底表"转让"列两边都勾。
+                dkbms = [str(c).strip() for c in (before.get("transferred_dkbms") or []) if str(c).strip()]
             elif record.change_type == "remove_parcel":
                 dkbm = str(after.get("dkbm") or "").strip()
                 dkbms = [dkbm] if dkbm else []

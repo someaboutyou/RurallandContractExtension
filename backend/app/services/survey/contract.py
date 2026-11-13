@@ -2,9 +2,12 @@
 
 业务要点：
 
-- **「上册」合同不变**：导入的地块关联表（``survey_cbdkxx_result.cbhtbm``）
-  保留上次承包合同的编码，本模块**不改写导入数据**；
-  查看上次合同就按该编码渲染。
+- **地块关联表挂现行合同**（2026-11-13 口径变更，作废 2026-09-20 的
+  「上册合同不变、不改写导入数据」决策）：生成延包合同时把该户
+  ``survey_cbdkxx_result.cbhtbm`` 全部刷成新合同编码，与 cbht 现行行、
+  NY/T 2539 导出的 cbdkxx.CBHTBM 引用闭合。
+  旧合同的编码由新合同的 ``ycbhtbm`` 与 history 行承载；历史合同的
+  地块明细按旧码在 result 表查不到时，回落导入快照 ``survey_cbdkxx_base``。
 - **生成延包合同**：按新的调查信息新发一个合同编码（沿用原合同前 14 位地区码 +
   新的 4 位流水 + ``J``），把上次合同置为 **history**（仍可查看/打印），
   新合同为 **active**。新合同与上次合同用 ``ycbhtbm`` 串起来。
@@ -18,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models.cbht import (
@@ -145,6 +148,21 @@ class SurveyServiceContractMixin:
             region_code=result.region_code,
         )
         db.add(contract)
+
+        # 3) 地块关联表刷成新合同编码（2026-11-13 口径变更，作废 2026-09-20
+        #    「不改写导入数据」的旧决策）：地块挂现行延包合同，cbht / 地块关联 /
+        #    NY-T 2539 导出的 cbdkxx.CBHTBM 三者引用闭合；旧编码由新合同的
+        #    ycbhtbm 与 history 行承载，不再依赖地块关联表保留旧码。
+        db.execute(
+            update(SurveyCbdkxxResult)
+            .where(
+                SurveyCbdkxxResult.tenant_code == result.tenant_code,
+                SurveyCbdkxxResult.cbfbm == result.cbfbm,
+                SurveyCbdkxxResult.result_status != "removed",
+                SurveyCbdkxxResult.cbhtbm != new_code,
+            )
+            .values(cbhtbm=new_code)
+        )
         db.commit()
         db.refresh(contract)
 
@@ -299,7 +317,8 @@ class SurveyServiceContractMixin:
                 ):
                     generated[row.contractor_uid] = row
 
-        # 2) 上次承包合同编码：地块关联（未被改写的导入值）→ 导入的合同表
+        # 2) 上次承包合同编码（仅未生成过合同的户回落用）：地块关联（导入旧码）→ 导入的合同表。
+        #    已生成合同的户在下方循环里从现行合同的 ycbhtbm 反查（地块关联已被刷成新码）。
         original_by_cbfbm: dict[str, str] = {}
         if cbfbms:
             for cbfbm, code in db.execute(
@@ -326,7 +345,11 @@ class SurveyServiceContractMixin:
         overview: dict[str, dict] = {}
         for uid, base in base_by_uid.items():
             current = generated.get(uid)
-            original_code = original_by_cbfbm.get(base.cbfbm)
+            if current is not None:
+                # 2026-11-13 起地块关联表挂现行合同码，原合同只能从 ycbhtbm 反查
+                original_code = (current.ycbhtbm or "").strip() or None
+            else:
+                original_code = original_by_cbfbm.get(base.cbfbm)
             signed = bool(current and current.contract_status == CONTRACT_STATUS_ACTIVE)
             row = current if current is not None else None
             overview[uid] = {
@@ -379,7 +402,7 @@ class SurveyServiceContractMixin:
             for row in rows
         ]
 
-        original_code = self._resolve_original_contract_code(db, result.cbfbm)
+        original_code = self._resolve_original_contract_code(db, result.cbfbm, batch_id)
         if original_code and original_code not in seen:
             # 上次承包合同尚未落地为库内记录：补一条虚拟条目（面积取导入快照），页面上照样能看
             entries.append(
@@ -460,8 +483,29 @@ class SurveyServiceContractMixin:
             reverse=True,
         )
 
-    def _resolve_original_contract_code(self, db: Session, cbfbm: str) -> str | None:
-        """上次承包合同编码：取该承包方地块关联里的合同编码（导入值，未被本模块改写）。"""
+    def _resolve_original_contract_code(self, db: Session, cbfbm: str, batch_id: int | None = None) -> str | None:
+        """上次承包合同编码。
+
+        2026-11-13 起生成延包合同会把地块关联表刷成新合同编码，旧编码的
+        可靠落点是 generated 合同行的 ``ycbhtbm``（生成时写入）；地块关联表
+        只在「从未生成过合同」的户上仍是导入旧码，作最后回落。
+        """
+        generated_stmt = (
+            select(Cbht)
+            .where(
+                Cbht.cbfbm == cbfbm,
+                Cbht.contract_source == CONTRACT_SOURCE_GENERATED,
+            )
+            .order_by(Cbht.generated_at.desc().nullslast(), Cbht.cbhtbm.desc())
+        )
+        if batch_id is not None:
+            generated_stmt = generated_stmt.where(Cbht.survey_batch_id == batch_id)
+        latest_generated = db.scalars(
+            generated_stmt.execution_options(skip_tenant_scope=True)
+        ).first()
+        if latest_generated is not None:
+            return (latest_generated.ycbhtbm or "").strip() or None
+        # 该户从未生成过延包合同：地块关联表仍保留导入旧码
         code = db.scalar(
             select(SurveyCbdkxxResult.cbhtbm)
             .where(
@@ -480,8 +524,8 @@ class SurveyServiceContractMixin:
             )
         return (code or "").strip() or None
 
-    def _resolve_original_contract(self, db: Session, cbfbm: str, batch_id: int) -> tuple[str | None, Cbht | None]:
-        code = self._resolve_original_contract_code(db, cbfbm)
+    def _resolve_original_contract(self, db: Session, cbfbm: str, batch_id: int | None = None) -> tuple[str | None, Cbht | None]:
+        code = self._resolve_original_contract_code(db, cbfbm, batch_id)
         row = db.get(Cbht, code) if code else None
         if row is not None and row.cbfbm and row.cbfbm != cbfbm:
             row = None

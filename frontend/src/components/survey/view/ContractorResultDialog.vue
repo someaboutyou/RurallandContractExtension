@@ -41,7 +41,7 @@
       </section>
 
       <section v-show="activePanel === 'parcels'" class="survey-panel-section">
-        <ParcelInfoPanel v-if="isPanelMounted('parcels')" :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :parcels="parcelsForPanel" :highlight-dkbm="focusParcelDkbm" :persisted-dkbms="persistedParcelDkbms" :parcels-loading="parcelsLoading" :can-manage="canManage && canWrite" :is-result-locked="dataReadOnly" :saved-swap-records="savedSwapRecords" :saved-split-records="savedSplitRecords" :saved-remove-records="savedRemoveRecords" :can-rollback-saved-parcel-change="canRollbackSavedParcelChange" :rollback-change-loading-id="rollbackingSavedChangeId" :persisting-dkbm="persistingParcelDkbm" @swap-parcels="handleOpSwapParcels" @add-parcel="handlePendingOperation" @split-parcel="handlePendingOperation" @remove-parcel="handleOpRemoveParcel" @rollback-saved-swap="handleRollbackSavedSwap" @rollback-saved-split="handleRollbackSavedSplit" @rollback-saved-remove="handleRollbackSavedRemove" @undo-pending-remove="handleUndoPendingRemoveFromPanel" @persist-parcel="handlePersistPendingParcel" />
+        <ParcelInfoPanel v-if="isPanelMounted('parcels')" :batch-id="activeBatch?.id" :contractor-uid="resultForm.contractorUid" :parcels="parcelsForPanel" :highlight-dkbm="focusParcelDkbm" :persisted-dkbms="persistedParcelDkbms" :parcels-loading="parcelsLoading" :can-manage="canManage && canWrite" :is-result-locked="dataReadOnly" :saved-swap-records="savedSwapRecords" :saved-transfer-records="savedTransferRecords" :saved-split-records="savedSplitRecords" :saved-remove-records="savedRemoveRecords" :can-rollback-saved-parcel-change="canRollbackSavedParcelChange" :rollback-change-loading-id="rollbackingSavedChangeId" :persisting-dkbm="persistingParcelDkbm" @swap-parcels="handleOpSwapParcels" @transfer-parcels="handleOpTransferParcels" @add-parcel="handlePendingOperation" @split-parcel="handlePendingOperation" @remove-parcel="handleOpRemoveParcel" @rollback-saved-swap="handleRollbackSavedSwap" @rollback-saved-transfer="handleRollbackSavedTransfer" @rollback-saved-split="handleRollbackSavedSplit" @rollback-saved-remove="handleRollbackSavedRemove" @undo-pending-remove="handleUndoPendingRemoveFromPanel" @persist-parcel="handlePersistPendingParcel" />
       </section>
 
       <section v-show="activePanel === 'plotSketchMap'" class="survey-panel-section">
@@ -112,6 +112,7 @@
   </el-dialog>
   <DeregisterDialog ref="deregisterDialog" @done="handlePendingOperation" />
   <SwapParcelsDialog ref="swapParcelsDialog" @done="handlePendingOperation" />
+  <TransferParcelsDialog ref="transferParcelsDialog" @done="handlePendingOperation" />
   <SplitHouseholdDialog ref="splitHouseholdDialog" @done="handlePendingOperation" />
   <MergeHouseholdDialog ref="mergeHouseholdDialog" @done="handlePendingOperation" />
   <RemoveParcelDialog ref="removeParcelDialog" @done="handlePendingOperation" />
@@ -137,6 +138,7 @@ import PlotSketchMapPanel from "../PlotSketchMapPanel.vue";
 import ContractInfoPanel from "../ContractInfoPanel.vue";
 import DeregisterDialog from "../DeregisterDialog.vue";
 import SwapParcelsDialog from "../SwapParcelsDialog.vue";
+import TransferParcelsDialog from "../TransferParcelsDialog.vue";
 import SplitHouseholdDialog from "../SplitHouseholdDialog.vue";
 import MergeHouseholdDialog from "../MergeHouseholdDialog.vue";
 import RemoveParcelDialog from "../RemoveParcelDialog.vue";
@@ -221,6 +223,7 @@ const plotSketchRefreshKey = ref(0);
 const contractorMemberPanel = ref(null);
 const deregisterDialog = ref(null);
 const swapParcelsDialog = ref(null);
+const transferParcelsDialog = ref(null);
 const splitHouseholdDialog = ref(null);
 const mergeHouseholdDialog = ref(null);
 const removeParcelDialog = ref(null);
@@ -237,6 +240,7 @@ let flashTimer = null;
 const diffRows = ref([]);
 const diffLoading = ref(false);
 const savedSwapChanges = ref([]);
+const savedTransferChanges = ref([]);
 const savedSplitChanges = ref([]);
 const savedRemoveChanges = ref([]);
 const savedParcelChangeLoading = ref(false);
@@ -350,6 +354,20 @@ const savedSwapRecords = computed(() =>
   }),
 );
 
+const savedTransferRecords = computed(() =>
+  savedTransferChanges.value.map((item) => {
+    const bs = item.beforeSummary || {};
+    const as = item.afterSummary || {};
+    const transferredDkbms = Array.isArray(bs.transferred_dkbms) ? bs.transferred_dkbms.filter(Boolean) : [];
+    // 划转双方各存一条对称记录（transferred_dkbms 相同）。撤回入口只挂收地方的
+    // 「已划入」行（划转后地块在收地方名下，行按钮才能点到）；转出方的记录不生成入口。
+    const isRecipient = String(as.to_cbfbm || "") === String(resultForm.code || "");
+    const transferredIn = isRecipient ? transferredDkbms : [];
+    const transferredOut = isRecipient ? [] : transferredDkbms;
+    return { ...item, transferredDkbms, transferredIn, transferredOut, transferredText: transferredDkbms.length ? transferredDkbms.join("、") : "-", fromLabel: as.from_cbfbm || "-", toLabel: as.to_cbfbm || "-" };
+  }),
+);
+
 const savedSplitRecords = computed(() =>
   savedSplitChanges.value.map((item) => {
     const bs = item.beforeSummary || {};
@@ -433,6 +451,8 @@ function tagNameByCode(code) { return { whole_family_urbanized: "全家进城落
 function downloadBlob(data, filename) { const url = URL.createObjectURL(data); const link = document.createElement("a"); link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url); }
 function hasPendingSwapOperation() { return pendingOperations.value.some((op) => ["swap_parcels", "rollback_swap_parcels"].includes(op?.type)); }
 function hasSavedSwapOperation() { return savedSwapChanges.value.length > 0; }
+function hasPendingTransferOperation() { return pendingOperations.value.some((op) => ["transfer_parcels", "rollback_transfer_parcels"].includes(op?.type)); }
+function hasSavedTransferOperation() { return savedTransferChanges.value.some((i) => i.changeStatus !== "rolled_back"); }
 
 // ---- 「本次调查」的默认调查员 / 调查日期 ----
 // 调查员 / 调查日期默认取「本次」：口径在 utils/surveyActorDefaults.js（发包方侧共用同一份）。
@@ -482,6 +502,7 @@ async function generateResultContractorCode() {
 // ---- Operation handlers ----
 function handleOpDeregister() {
   if (hasPendingSwapOperation() || hasSavedSwapOperation()) { ElMessage.warning("该承包方存在未撤回的地块互换，不能注销"); return; }
+  if (hasPendingTransferOperation() || hasSavedTransferOperation()) { ElMessage.warning("该承包方存在未撤回的地块划转，不能注销"); return; }
   const validCount = (resultForm.familyMembers || []).filter((m) => !m._deleted).length;
   deregisterDialog.value.open(props.activeBatch.id, activeTask.value.contractorUid, resultForm.name, resultForm.code, validCount);
 }
@@ -498,6 +519,9 @@ function handleOpMergeHousehold() {
 }
 function handleOpSwapParcels() {
   swapParcelsDialog.value.open(props.activeBatch.id, activeTask.value.contractorUid, props.tasks, parcels.value, resultForm);
+}
+function handleOpTransferParcels() {
+  transferParcelsDialog.value.open(props.activeBatch.id, activeTask.value.contractorUid, props.tasks, parcels.value, resultForm);
 }
 function handleOpRemoveParcel(dkbm) {
   removeParcelDialog.value.open(props.activeBatch.id, activeTask.value.contractorUid, parcels.value, dkbm);
@@ -534,6 +558,21 @@ function applyPendingParcelPreview(operation) {
     for (const dkbm of payload.sourceDkbms || []) markParcelRemoved(dkbm, "swap_parcels", payload.reason);
     const incoming = (payload.targetParcels || []).map((item) => ({ ...cloneParcel(item), cbfbm: resultForm.code, cbfmc: resultForm.name, isChanged: true, changeType: "swap_parcels", changeReason: payload.reason, _pending: true }));
     if (incoming.length) { const existing = new Set(parcels.value.map((item) => item.dkbm)); parcels.value = [...parcels.value, ...incoming.filter((item) => !existing.has(item.dkbm))]; }
+    return;
+  }
+  if (operation.type === "transfer_parcels") {
+    // 划转：本户只划出（收地方那边的预览在对方自己的录入页里，保存后重拉即可）。
+    for (const dkbm of payload.dkbms || []) markParcelRemoved(dkbm, "transfer_parcels", payload.reason);
+    return;
+  }
+  if (operation.type === "rollback_transfer_parcels") {
+    // 撤回划转：收地方的录入页里把「已划入」行标记回 removed（地块转回原户）。
+    // 原户侧发起时本地没有这些行，无预览可打，保存后重拉即见。
+    for (const dkbm of payload.dkbms || []) {
+      if (parcels.value.some((item) => item.dkbm === dkbm && !["removed", "split_source"].includes(item.resultStatus))) {
+        markParcelRemoved(dkbm, "rollback_transfer_parcels", payload.reason);
+      }
+    }
     return;
   }
   if (operation.type === "rollback_swap_parcels") {
@@ -697,13 +736,15 @@ function handlePendingOperation(operation) {
   if (operation.type === "split_household") { resultForm.resultStatus = "cancelled"; resultForm.changeType = "split_household"; resultForm.changeReason = operation.payload?.reason || resultForm.changeReason; }
 }
 
-const undoableOperationTypes = new Set(["add_parcel", "remove_parcel", "split_parcel", "rollback_split_parcel", "swap_parcels", "rollback_swap_parcels", "rollback_remove_parcel", "deregister", "split_household", "merge_household"]);
+const undoableOperationTypes = new Set(["add_parcel", "remove_parcel", "split_parcel", "rollback_split_parcel", "swap_parcels", "rollback_swap_parcels", "transfer_parcels", "rollback_transfer_parcels", "rollback_remove_parcel", "deregister", "split_household", "merge_household"]);
 function canUndoPendingOperation(operation) { return undoableOperationTypes.has(operation?.type); }
 
 function pendingOperationLabelPreview(operation) {
   const p = operation?.payload || {};
   if (operation?.type === "deregister") return `注销承包方：${resultForm.name || resultForm.code || "-"}`;
   if (operation?.type === "swap_parcels") return `地块互换：本方 ${(p.sourceDkbms || []).length} 块，对方 ${(p.targetDkbms || []).length} 块`;
+  if (operation?.type === "transfer_parcels") return `地块划转：划出 ${(p.dkbms || []).length} 块 → ${p.targetCbfmc || p.targetCbfbm || "-"}`;
+  if (operation?.type === "rollback_transfer_parcels") return `撤回划转：还原 ${((p.dkbms) || []).length} 块`;
   if (operation?.type === "add_parcel") return `新增地块：${p.dkbm || p.dkmc || "未命名地块"}`;
   if (operation?.type === "remove_parcel") return `移除地块：${p.dkbm || "-"}`;
   if (operation?.type === "split_parcel") { const cnt = Array.isArray(p.generatedParcels) && p.generatedParcels.length ? p.generatedParcels.length : 1; return `切割地块：${p.dkbm || "-"} -> ${cnt} 块`; }
@@ -773,7 +814,7 @@ async function handleUndoPendingOperation(index) {
   if (!canUndoPendingOperation(op)) return;
   pendingOperations.value.splice(index, 1);
   await reloadParcelPreviewFromPendingOperations();
-  if (["rollback_swap_parcels", "rollback_split_parcel", "rollback_remove_parcel"].includes(op?.type)) await loadSavedParcelChanges();
+  if (["rollback_swap_parcels", "rollback_transfer_parcels", "rollback_split_parcel", "rollback_remove_parcel"].includes(op?.type)) await loadSavedParcelChanges();
   ElMessage.success("待保存地块操作已撤销");
 }
 async function handleUndoPendingRemoveFromPanel(dkbm) {
@@ -808,15 +849,16 @@ async function loadDiffs() {
 }
 
 async function loadSavedParcelChanges() {
-  if (!props.activeBatch || !activeTask.value) { savedSwapChanges.value = []; savedSplitChanges.value = []; return; }
+  if (!props.activeBatch || !activeTask.value) { savedSwapChanges.value = []; savedTransferChanges.value = []; savedSplitChanges.value = []; return; }
   savedParcelChangeLoading.value = true;
   try {
     const { data } = await fetchSurveyChanges(props.activeBatch.id, { contractorUid: activeTask.value.contractorUid, page: 1, page_size: 200 });
     const items = data.data.items || [];
     savedSwapChanges.value = items.filter((i) => i.changeType === "swap_parcels" && i.changeStatus !== "rolled_back");
+    savedTransferChanges.value = items.filter((i) => i.changeType === "transfer_parcels" && i.changeStatus !== "rolled_back");
     savedSplitChanges.value = items.filter((i) => i.changeType === "split_parcel" && i.changeStatus !== "rolled_back");
     savedRemoveChanges.value = items.filter((i) => i.changeType === "remove_parcel" && i.changeStatus !== "rolled_back");
-  } catch { savedSwapChanges.value = []; savedSplitChanges.value = []; savedRemoveChanges.value = []; } finally { savedParcelChangeLoading.value = false; }
+  } catch { savedSwapChanges.value = []; savedTransferChanges.value = []; savedSplitChanges.value = []; savedRemoveChanges.value = []; } finally { savedParcelChangeLoading.value = false; }
 }
 
 async function handleRollbackSavedSwap(change) {
@@ -836,6 +878,18 @@ async function handleRollbackSavedSwap(change) {
     savedSwapChanges.value = savedSwapChanges.value.filter((i) => i.id !== change.id);
     ElMessage.success("已加入待保存，保存调查结果后才会正式落库");
   } catch (error) { if (error !== "cancel" && error !== "close") ElMessage.error(error.response?.data?.detail || "撤回已保存互换失败"); } finally { rollbackingSavedChangeId.value = null; }
+}
+
+async function handleRollbackSavedTransfer(change) {
+  if (!props.activeBatch || !activeTask.value || !change?.id) return;
+  if (hasPendingOperations.value) { ElMessage.warning("请先处理顶部未保存操作，再撤回已保存划转"); return; }
+  try {
+    await ElMessageBox.confirm(`确定撤回这次已保存的地块划转吗？\n划转地块：${change.transferredText}\n将转回原承包方：${change.fromLabel}`, "撤回已保存划转", { type: "warning", confirmButtonText: "加入待保存", cancelButtonText: "取消" });
+    rollbackingSavedChangeId.value = change.id;
+    handlePendingOperation({ type: "rollback_transfer_parcels", payload: { changeId: change.id, changeNo: change.changeNo, dkbms: [...(change.transferredDkbms || [])], reason: `撤回划转 ${change.changeNo}` } });
+    savedTransferChanges.value = savedTransferChanges.value.filter((i) => i.id !== change.id);
+    ElMessage.success("已加入待保存，保存调查结果后才会正式落库");
+  } catch (error) { if (error !== "cancel" && error !== "close") ElMessage.error(error.response?.data?.detail || "撤回已保存划转失败"); } finally { rollbackingSavedChangeId.value = null; }
 }
 
 async function handleRollbackSavedSplit(change) {
@@ -1168,7 +1222,7 @@ async function reloadSurveyResult() {
 async function openForResult(batch, row, options = {}) {
   isCreatingContractorResult.value = false; activeTask.value = row; selectedParcel.value = null; focusParcelDkbm.value = options.dkbm || ""; parcels.value = []; persistedParcelDkbms.value = []; parcelsLoaded.value = false;
   previewAttachmentVisible.value = false; previewAttachment.value = null; attachmentPreviewIndex.value = -1;
-  pendingOperations.value = []; savedSwapChanges.value = []; savedSplitChanges.value = []; savedRemoveChanges.value = []; savedParcelChangeLoading.value = false; rollbackingSavedChangeId.value = null;
+  pendingOperations.value = []; savedSwapChanges.value = []; savedTransferChanges.value = []; savedSplitChanges.value = []; savedRemoveChanges.value = []; savedParcelChangeLoading.value = false; rollbackingSavedChangeId.value = null;
   const { data } = await fetchSurveyResult(row.batchId, row.contractorUid);
   Object.assign(resultForm, createEmptyResult(), data.data, { familyMembers: (data.data.familyMembers || []).map((item) => ({ ...item })) });
   // 调查员 / 调查日期取「本次」的默认值（当前登录用户 + 当天），不再沿用库里的历史痕迹。
@@ -1183,7 +1237,7 @@ async function openForResult(batch, row, options = {}) {
 
 function openForCreate(batch) {
   isCreatingContractorResult.value = true; activeTask.value = null; selectedParcel.value = null; focusParcelDkbm.value = ""; parcels.value = []; persistedParcelDkbms.value = [];
-  diffRows.value = []; savedSwapChanges.value = []; savedSplitChanges.value = []; savedRemoveChanges.value = []; savedParcelChangeLoading.value = false;
+  diffRows.value = []; savedSwapChanges.value = []; savedTransferChanges.value = []; savedSplitChanges.value = []; savedRemoveChanges.value = []; savedParcelChangeLoading.value = false;
   pendingOperations.value = []; rollbackingSavedChangeId.value = null;
   Object.assign(resultForm, createEmptyResult(), { code: batch?.regionCode || props.activeRegionCode || "", groupRegionCode: batch?.regionCode || props.activeRegionCode || "", groupRegionName: batch?.regionName || props.activeRegionLabel || "", resultStatus: "added", changeType: "add_contractor", isChanged: false });
   // 新增承包方：调查员 / 调查日期直接落「本次」的默认值（当前登录用户 + 当天）。
@@ -1195,7 +1249,7 @@ function close() {
   emit("update:modelValue", false); isCreatingContractorResult.value = false;
   focusParcelDkbm.value = "";
   previewAttachmentVisible.value = false; previewAttachment.value = null; attachmentPreviewIndex.value = -1;
-  pendingOperations.value = []; savedSwapChanges.value = []; savedSplitChanges.value = []; savedRemoveChanges.value = []; savedParcelChangeLoading.value = false; rollbackingSavedChangeId.value = null;
+  pendingOperations.value = []; savedSwapChanges.value = []; savedTransferChanges.value = []; savedSplitChanges.value = []; savedRemoveChanges.value = []; savedParcelChangeLoading.value = false; rollbackingSavedChangeId.value = null;
 }
 
 // ---- Watchers ----

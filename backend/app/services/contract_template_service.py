@@ -17,6 +17,7 @@ from app.models.cbht import Cbht
 from app.models.dictionary import DictionaryItem
 from app.models.fbf import Fbf
 from app.models.survey import (
+    SurveyCbdkxxBase,
     SurveyCbdkxxResult,
     SurveyCbfJtcyResult,
     SurveyCbfResult,
@@ -303,6 +304,12 @@ class ContractTemplateService:
         if not parcels_by_contractor:
             relation_filters.append(SurveyCbdkxxResult.cbhtbm == cbhtbm)
         relations = db.scalars(select(SurveyCbdkxxResult).where(*relation_filters)).all()
+        if not relations and not parcels_by_contractor:
+            # 2026-11-13 起生成延包合同会把地块关联表刷成现行合同码，历史合同
+            # 按旧码在 result 表查不到关联 → 回落导入快照（base 表旧码完好）。
+            relations = db.scalars(
+                select(SurveyCbdkxxBase).where(SurveyCbdkxxBase.cbhtbm == cbhtbm)
+            ).all()
         first_relation = relations[0] if relations else None
 
         issuer_fbfbm = (
@@ -1370,6 +1377,23 @@ class ContractTemplateService:
             .where(*filters)
         )
         rows = db.execute(q).all()
+        if not rows and contractor_code is None:
+            # 历史合同回落导入快照：2026-11-13 起地块关联表挂现行合同码后，
+            # 旧合同的「合同↔地块」关联只剩 base 快照里还有（旧码完好）。
+            # base 按批次存快照，同地块可能多批重复，按 dkbm 去重取第一条。
+            qb = (
+                select(SurveyCbdkxxBase, d)
+                .join(d, and_(SurveyCbdkxxBase.dkbm == d.dkbm))
+                .where(SurveyCbdkxxBase.cbhtbm == cbhtbm)
+                .order_by(SurveyCbdkxxBase.id.asc())
+            )
+            seen_dkbm: set[str] = set()
+            rows = []
+            for base_row, dk in db.execute(qb).all():
+                if dk.dkbm in seen_dkbm:
+                    continue
+                seen_dkbm.add(dk.dkbm)
+                rows.append((base_row, dk))
 
         result: list[dict] = []
         for cbdkxx, dk in rows:

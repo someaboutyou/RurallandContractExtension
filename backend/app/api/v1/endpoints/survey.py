@@ -47,9 +47,11 @@ from app.schemas.survey import (
     SurveyAddParcelRequest,
     SurveyRemoveParcelRequest,
     SurveyRollbackSwapParcelsRequest,
+    SurveyRollbackTransferParcelsRequest,
     SurveySplitParcelRequest,
     SurveySplitParcelPreviewRead,
     SurveySwapParcelsRequest,
+    SurveyTransferParcelsRequest,
     SurveySplitHouseholdRequest,
     SurveyMergeHouseholdRequest,
     SurveyCurrentBatchUpdate,
@@ -2390,6 +2392,37 @@ def rollback_survey_swap_parcels(
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail="已禁用即时撤回互换，请在调查录入页面加入待保存后统一保存",
+    )
+
+
+@router.post("/batches/{batch_id}/results/{contractor_uid}/transfer-parcels", response_model=ApiResponse[dict])
+def transfer_survey_parcels(
+    batch_id: int,
+    contractor_uid: str,
+    payload: SurveyTransferParcelsRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    # Transfer parcels from this contractor to another one in the same group.
+    return {
+        "data": survey_service.transfer_parcels(
+            db, batch_id, contractor_uid, payload.model_dump(), current_user,
+        )
+    }
+
+
+@router.post("/batches/{batch_id}/results/{contractor_uid}/transfer-parcels/{change_id}/rollback", response_model=ApiResponse[dict])
+def rollback_survey_transfer_parcels(
+    batch_id: int,
+    contractor_uid: str,
+    change_id: int,
+    payload: SurveyRollbackTransferParcelsRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contractors.manage")),
+):
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="已禁用即时撤回划转，请在调查录入页面加入待保存后统一保存",
     )
 
 
