@@ -1,5 +1,6 @@
-﻿<template>
-  <el-dialog :model-value="modelValue" title="新建调查批次" width="640px" @update:model-value="$emit('update:modelValue', $event)">
+<template>
+  <el-dialog
+    append-to-body :model-value="modelValue" title="新建调查批次" width="640px" @update:model-value="$emit('update:modelValue', $event)">
     <el-alert
       title="创建后会把当前正式承包方和家庭成员数据复制为调查前快照，并同步生成可编辑的调查结果。"
       type="info"

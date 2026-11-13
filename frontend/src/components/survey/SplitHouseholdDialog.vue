@@ -1,5 +1,6 @@
 <template>
-  <el-dialog v-model="visible" title="分户" width="960px" destroy-on-close>
+  <el-dialog
+    append-to-body v-model="visible" title="分户" width="960px" destroy-on-close>
     <el-alert title="原承包户将注销，所有成员和有效地块必须分配到至少两个新承包户。" type="warning" :closable="false" show-icon />
     <div class="actions"><el-button type="primary" plain @click="addHousehold">新增承包户</el-button></div>
     <el-card v-for="(household, index) in households" :key="household.key" class="household-card" shadow="never">

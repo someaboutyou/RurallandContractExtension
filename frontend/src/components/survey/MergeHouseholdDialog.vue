@@ -1,5 +1,6 @@
 <template>
-  <el-dialog v-model="visible" title="合户" width="720px" destroy-on-close>
+  <el-dialog
+    append-to-body v-model="visible" title="合户" width="720px" destroy-on-close>
     <el-alert title="选择两个或多个原承包方，系统将注销全部原户并创建一个全新的承包方。" type="warning" :closable="false" show-icon />
     <el-form label-position="top" class="form">
       <el-form-item label="参与合户的原承包方" required>

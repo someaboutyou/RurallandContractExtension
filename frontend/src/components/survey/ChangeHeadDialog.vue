@@ -1,5 +1,6 @@
 <template>
   <el-dialog
+    append-to-body
     v-model="visible"
     title="更换户主"
     width="480px"

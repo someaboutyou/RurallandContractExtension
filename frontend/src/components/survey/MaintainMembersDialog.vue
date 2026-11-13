@@ -1,5 +1,6 @@
 <template>
   <el-dialog
+    append-to-body
     v-model="visible"
     title="家庭成员维护"
     width="820px"

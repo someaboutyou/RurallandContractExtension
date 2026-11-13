@@ -1,5 +1,6 @@
 <template>
   <el-dialog
+    append-to-body
     v-model="visible"
     title="承包方地块互换"
     width="860px"

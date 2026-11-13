@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div
     v-loading.lock="isValidatingAddGeometry"
     class="parcel-info-panel"
@@ -444,6 +444,7 @@
 
     <!-- Split config dialog -->
     <el-dialog
+    append-to-body
       v-model="splitConfigDialogVisible"
       title="切割设置"
       width="680px"

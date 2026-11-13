@@ -1,5 +1,6 @@
 <template>
   <el-dialog
+    append-to-body
     v-model="visible"
     title="变化详情对比"
     width="860px"

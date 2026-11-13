@@ -1,5 +1,6 @@
 <template>
   <el-dialog
+    append-to-body
     v-model="visible"
     title="注销承包方"
     width="520px"

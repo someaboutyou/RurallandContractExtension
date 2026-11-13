@@ -1,5 +1,6 @@
-﻿<template>
-  <el-dialog :model-value="modelValue" :title="dialogTitle" width="960px" @update:model-value="$emit('update:modelValue', $event)">
+<template>
+  <el-dialog
+    append-to-body :model-value="modelValue" :title="dialogTitle" width="960px" @update:model-value="$emit('update:modelValue', $event)">
     <el-form ref="formRef" :model="form" :rules="rules" label-position="left" label-width="126px" status-icon class="survey-dialog-form">
       <div class="form-grid-2">
         <el-form-item label="发包方名称" prop="name">

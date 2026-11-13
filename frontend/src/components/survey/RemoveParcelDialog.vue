@@ -1,5 +1,6 @@
-﻿<template>
+<template>
   <el-dialog
+    append-to-body
     v-model="visible"
     title="移除地块"
     width="560px"

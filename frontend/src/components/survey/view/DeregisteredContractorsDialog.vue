@@ -1,5 +1,6 @@
 <template>
   <el-dialog
+    append-to-body
     v-model="visible"
     title="已退出待办的承包方（注销 / 合并户 / 分户）"
     width="86vw"

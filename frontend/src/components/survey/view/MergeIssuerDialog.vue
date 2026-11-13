@@ -1,5 +1,6 @@
 <template>
-  <el-dialog :model-value="modelValue" title="合并发包方" width="860px" @update:model-value="$emit('update:modelValue', $event)">
+  <el-dialog
+    append-to-body :model-value="modelValue" title="合并发包方" width="860px" @update:model-value="$emit('update:modelValue', $event)">
     <el-alert
       type="warning"
       :closable="false"

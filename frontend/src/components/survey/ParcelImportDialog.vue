@@ -4,6 +4,7 @@
     title="导入承包地块数据"
     width="820px"
     :close-on-click-modal="false"
+    append-to-body
     @update:model-value="emit('update:modelValue', $event)"
     @closed="resetDialog"
   >

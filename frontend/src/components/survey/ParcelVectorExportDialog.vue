@@ -5,6 +5,7 @@
     width="560px"
     top="12vh"
     :close-on-click-modal="false"
+    append-to-body
     @update:model-value="emit('update:modelValue', $event)"
   >
     <div class="vector-head">

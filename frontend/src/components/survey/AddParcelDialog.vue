@@ -4,6 +4,7 @@
     title="新增地块属性信息"
     width="720px"
     destroy-on-close
+    append-to-body
     @closed="handleClosed"
   >
     <el-alert

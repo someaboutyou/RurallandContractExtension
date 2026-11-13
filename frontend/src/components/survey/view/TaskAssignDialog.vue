@@ -1,5 +1,6 @@
 <template>
-  <el-dialog v-model="visible" title="分配调查任务" width="680px" top="6vh" destroy-on-close>
+  <el-dialog
+    append-to-body v-model="visible" title="分配调查任务" width="680px" top="6vh" destroy-on-close>
     <el-alert
       v-if="rows.length"
       :title="`已选择 ${rows.length} 户承包方`"
